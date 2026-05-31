@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#fbf7ff" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="SST个人图像生产台" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./pwa-icon.svg" />
+    <link rel="icon" href="./pwa-icon.svg" type="image/svg+xml" />
+    <title>SST个人图像生产平台</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        background: #fbf7ff;
+      }
+
+      html,
+      body,
+      #root {
+        min-height: 100%;
+      }
+
+      body {
+        margin: 0;
+        background:
+          radial-gradient(48rem 32rem at 8% -4%, rgba(255, 255, 255, 0.96), transparent 62%),
+          radial-gradient(34rem 26rem at 78% 0%, rgba(184, 169, 255, 0.38), transparent 60%),
+          radial-gradient(28rem 23rem at 98% 72%, rgba(125, 211, 252, 0.26), transparent 58%),
+          linear-gradient(180deg, #fbf7ff 0%, #e9f6fb 100%);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          background: #0f0b1c;
+        }
+
+        body {
+          background:
+            radial-gradient(36rem 24rem at 8% -4%, rgba(123, 97, 255, 0.24), transparent 58%),
+            radial-gradient(32rem 26rem at 100% 0%, rgba(125, 211, 252, 0.14), transparent 54%),
+            linear-gradient(180deg, #0f0b1c 0%, #091622 100%);
+        }
+      }
+    </style>
+  </head>
+  <body class="min-h-screen antialiased">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

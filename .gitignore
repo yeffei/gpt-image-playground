@@ -1,0 +1,17 @@
+node_modules/
+dist/
+dev-proxy.config.json
+.wrangler/
+.playwright-mcp/
+.codex-vite-*.log
+thread handoff detail/
+controls-panel.png
+playwright-left-panel-desktop.png
+playwright-left-panel-desktop-after-gap-fix.png
+/*.png
+/AGENTS.md
+/aurora_frosted_glass_ui_spec.md
+docs/paid-creative-workbench-development-plan.md
+docs/phase-1-page-module-checklist.md
+docs/documentation-index.md
+docs/personal-image-studio-roadmap.md

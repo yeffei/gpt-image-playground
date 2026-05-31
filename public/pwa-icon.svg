@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="sstBg" x1="96" y1="72" x2="428" y2="448" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#111827" />
+      <stop offset="1" stop-color="#2b3647" />
+    </linearGradient>
+    <linearGradient id="sstGlass" x1="156" y1="126" x2="356" y2="386" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.96" />
+      <stop offset="1" stop-color="#dfe7f1" stop-opacity="0.9" />
+    </linearGradient>
+  </defs>
+  <rect x="28" y="28" width="456" height="456" rx="132" fill="url(#sstBg)" />
+  <rect x="43" y="43" width="426" height="426" rx="117" fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="2" />
+  <path d="M149 156c0-22.644 18.356-41 41-41h136c9.941 0 18 8.059 18 18s-8.059 18-18 18H198c-10.493 0-19 8.507-19 19s8.507 19 19 19h80c30.376 0 55 24.624 55 55s-24.624 55-55 55H170c-9.941 0-18-8.059-18-18s8.059-18 18-18h108c10.493 0 19-8.507 19-19s-8.507-19-19-19h-80c-30.376 0-55-24.624-55-55Z" fill="url(#sstGlass)" />
+  <path d="M248 153c0-9.941 8.059-18 18-18h121c9.941 0 18 8.059 18 18s-8.059 18-18 18h-42v152c0 9.941-8.059 18-18 18s-18-8.059-18-18V171h-43c-9.941 0-18-8.059-18-18Z" fill="url(#sstGlass)" />
+  <path d="M114 120c46-42 126-69 208-53 42 8 78 27 106 55" fill="none" stroke="rgba(255,255,255,0.18)" stroke-linecap="round" stroke-width="18" />
+</svg>
