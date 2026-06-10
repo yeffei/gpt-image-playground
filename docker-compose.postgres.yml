@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: gpt-image-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: gpt_image
+      POSTGRES_USER: gpt_image
+      POSTGRES_PASSWORD: gpt_image_dev_password
+    ports:
+      - "55432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gpt_image -d gpt_image"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  postgres-data:
