@@ -1,130 +1,319 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
+import { GUEST_VIEW_BALANCE_LABEL } from '../lib/accessCopy'
 
 export default function Header() {
-  const appMode = useStore((s) => s.appMode)
-  const setAppMode = useStore((s) => s.setAppMode)
-  const agentMobileHeaderVisible = useStore((s) => s.agentMobileHeaderVisible)
-  const [themeTone, setThemeTone] = useState<'frost' | 'graphite'>('frost')
-  const [hintVisible, setHintVisible] = useState(false)
-  const [scrollDirection, setScrollDirection] = useState<'up' | 'down'>('up')
+  const account = useStore((s) => s.account)
+  const openLoginDialog = useStore((s) => s.openLoginDialog)
+  const openPlanDialog = useStore((s) => s.openPlanDialog)
+  const logout = useStore((s) => s.logout)
+  const authSessionToken = useStore((s) => s.authSessionToken)
+  const setAccountState = useStore((s) => s.setAccountState)
+  const galleryView = useStore((s) => s.galleryView)
+  const setConfirmDialog = useStore((s) => s.setConfirmDialog)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [canHoverMenu, setCanHoverMenu] = useState(false)
+  const accountMenuRef = useRef<HTMLDivElement>(null)
+  const closeMenuTimerRef = useRef<number | null>(null)
+  const focusOpenedMenuRef = useRef(false)
 
   useEffect(() => {
-    if (appMode === 'agent') {
-      setScrollDirection('up')
-      return
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+
+    const mediaQuery = window.matchMedia('(hover: hover) and (pointer: fine)')
+    const updateHoverCapability = () => setCanHoverMenu(mediaQuery.matches)
+    updateHoverCapability()
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', updateHoverCapability)
+      return () => mediaQuery.removeEventListener('change', updateHoverCapability)
     }
 
-    let lastScrollY = window.scrollY
-    let ticking = false
+    mediaQuery.addListener(updateHoverCapability)
+    return () => mediaQuery.removeListener(updateHoverCapability)
+  }, [])
 
-    const handleScroll = () => {
-      if (!ticking) {
-        window.requestAnimationFrame(() => {
-          const currentScrollY = window.scrollY
-          if (currentScrollY < 20) {
-            setScrollDirection('up')
-          } else if (currentScrollY > lastScrollY + 10) {
-            setScrollDirection('down')
-          } else if (currentScrollY < lastScrollY - 10) {
-            setScrollDirection('up')
-          }
-          lastScrollY = currentScrollY
-          ticking = false
-        })
-        ticking = true
+  useEffect(() => {
+    if (!menuOpen) return
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!accountMenuRef.current?.contains(event.target as Node)) {
+        setMenuOpen(false)
       }
     }
 
-    window.addEventListener('scroll', handleScroll, { passive: true })
-    return () => window.removeEventListener('scroll', handleScroll)
-  }, [appMode])
-
-  useEffect(() => {
-    if (appMode === 'agent' && !agentMobileHeaderVisible) {
-      setHintVisible(true)
-      const timer = setTimeout(() => {
-        setHintVisible(false)
-      }, 1500)
-      return () => clearTimeout(timer)
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMenuOpen(false)
     }
-  }, [appMode, agentMobileHeaderVisible])
+
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('keydown', handleEscape)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('keydown', handleEscape)
+    }
+  }, [menuOpen])
+
+  useEffect(() => () => {
+    if (closeMenuTimerRef.current != null) {
+      window.clearTimeout(closeMenuTimerRef.current)
+    }
+  }, [])
+
+  const clearCloseMenuTimer = () => {
+    if (closeMenuTimerRef.current != null) {
+      window.clearTimeout(closeMenuTimerRef.current)
+      closeMenuTimerRef.current = null
+    }
+  }
+
+  const openMenu = () => {
+    clearCloseMenuTimer()
+    setMenuOpen(true)
+  }
+
+  const scheduleCloseMenu = () => {
+    clearCloseMenuTimer()
+    closeMenuTimerRef.current = window.setTimeout(() => {
+      setMenuOpen(false)
+      closeMenuTimerRef.current = null
+    }, 180)
+  }
+
+  const handleLogout = () => {
+    setMenuOpen(false)
+    setConfirmDialog({
+      title: '退出登录',
+      message: '确定要退出当前账号吗？退出后会回到访客状态。',
+      action: () => {
+        const token = authSessionToken
+        logout()
+        useStore.getState().showToast('已退出登录', 'success')
+        void import('../lib/authApi').then(({ logoutAuthSession }) => logoutAuthSession(token)).catch(() => {
+          useStore.getState().showToast('本地已退出，服务器会话稍后重试失效', 'info')
+        })
+      },
+    })
+  }
+  const accountIdentityLabel = account.email?.trim() || account.displayName
+  const accountSummaryLabel = account.isLoggedIn
+    ? `${accountIdentityLabel} · ${account.balance} 点`
+    : GUEST_VIEW_BALANCE_LABEL
 
   useEffect(() => {
-    document.documentElement.dataset.themeTone = themeTone
-  }, [themeTone])
+    const token = authSessionToken?.trim()
+    if (!account.isLoggedIn || account.inviteCode?.trim() || !token) return
+
+    let cancelled = false
+    import('../lib/authApi')
+      .then(({ getMyReferralInfo }) => getMyReferralInfo(token))
+      .then((payload) => {
+        if (!cancelled) setAccountState({ inviteCode: payload.referral.inviteCode })
+      })
+      .catch(() => {
+        // The plan page still shows a clear empty state if referral loading fails.
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [account.inviteCode, account.isLoggedIn, authSessionToken, setAccountState])
+
+  const inviteLink = useMemo(() => {
+    const inviteCode = account.inviteCode?.trim()
+    if (!inviteCode || typeof window === 'undefined') return ''
+    const url = new URL('/register', window.location.origin)
+    url.searchParams.set('inviteCode', inviteCode)
+    return url.toString()
+  }, [account.inviteCode])
+  const handleCopyInviteLink = async () => {
+    if (!inviteLink) {
+      useStore.getState().showToast('当前账号暂未生成邀请码', 'error')
+      return
+    }
+    const { copyTextToClipboard, getClipboardFailureMessage } = await import('../lib/clipboard')
+    try {
+      await copyTextToClipboard(inviteLink)
+      setMenuOpen(false)
+      useStore.getState().showToast('邀请链接已复制', 'success')
+    } catch (error) {
+      useStore.getState().showToast(getClipboardFailureMessage('邀请链接复制失败', error), 'error')
+    }
+  }
 
   return (
     <>
       <header
         data-no-drag-select
-        className={`safe-area-top fixed top-0 left-0 right-0 z-40 transition-transform duration-300 ease-in-out ${
-          appMode === 'agent' && !agentMobileHeaderVisible ? '-translate-y-full sm:translate-y-0' : 'translate-y-0'
-        }`}
+        className="safe-area-top fixed top-0 left-0 right-0 z-40 transition-transform duration-300 ease-in-out translate-y-0"
       >
         <div className="prototype-topbar">
           <div className="prototype-brand">
             <span className="prototype-logo" aria-hidden="true" />
             <span>
-              <strong>SST Image Workspace</strong>
-              <small>个人版 V1 · 生产与沉淀 · 本地额度不限</small>
+              <strong>SST 创作工作台</strong>
             </span>
           </div>
 
           <div className="prototype-top-actions">
-            <button
-              type="button"
-              onClick={() => setThemeTone((tone) => (tone === 'frost' ? 'graphite' : 'frost'))}
-              className="prototype-top-button prototype-top-button-ghost"
-              aria-label={themeTone === 'frost' ? '切换到深色氛围' : '切换到浅色氛围'}
+            {account.isLoggedIn ? (
+              <button
+                type="button"
+                className="prototype-top-button prototype-top-button-ghost prototype-invite-shortcut"
+                onClick={() => void handleCopyInviteLink()}
+                disabled={!inviteLink}
+                title={inviteLink ? '复制后可发给别人注册' : '邀请码加载中'}
+              >
+                <span aria-hidden="true">↗</span>
+                复制邀请链接
+              </button>
+            ) : null}
+            {!account.isLoggedIn && galleryView === 'auth' ? null : (
+            <div
+              ref={accountMenuRef}
+              className="relative"
+              onMouseEnter={() => {
+                if (account.isLoggedIn && canHoverMenu) openMenu()
+              }}
+              onMouseLeave={() => {
+                if (account.isLoggedIn && canHoverMenu) scheduleCloseMenu()
+              }}
+              onBlur={(event) => {
+                if (!account.isLoggedIn) return
+                if (!accountMenuRef.current?.contains(event.relatedTarget as Node | null)) {
+                  scheduleCloseMenu()
+                }
+              }}
             >
-              <span aria-hidden="true">{themeTone === 'frost' ? '◐' : '◑'}</span>
-              {themeTone === 'frost' ? '深色' : '浅色'}
-            </button>
-            <button
-              type="button"
-              className="prototype-top-button prototype-top-button-primary"
-              onClick={() => setAppMode(appMode === 'agent' ? 'gallery' : 'agent')}
-            >
-              {appMode === 'agent' ? '返回工作台' : '连续创作'}
-            </button>
+              <button
+                type="button"
+                className={`prototype-top-button prototype-top-button-ghost prototype-account-summary gap-2.5 transition-[border-color,box-shadow,background-color,transform] duration-200 ${menuOpen ? 'border-[rgba(99,102,241,0.24)] bg-white/94 shadow-[0_10px_24px_rgba(99,102,241,0.12)] dark:border-indigo-400/20 dark:bg-white/[0.07]' : ''}`}
+                onClick={() => {
+                  if (!account.isLoggedIn) {
+                    openLoginDialog()
+                    return
+                  }
+                  clearCloseMenuTimer()
+                  if (focusOpenedMenuRef.current) {
+                    focusOpenedMenuRef.current = false
+                    setMenuOpen(true)
+                    return
+                  }
+                  setMenuOpen((current) => !current)
+                }}
+                onFocus={() => {
+                  if (!account.isLoggedIn) return
+                  focusOpenedMenuRef.current = !menuOpen
+                  openMenu()
+                }}
+                aria-expanded={account.isLoggedIn ? menuOpen : undefined}
+                aria-haspopup={account.isLoggedIn ? 'menu' : undefined}
+                aria-label={accountSummaryLabel}
+              >
+                <span className="prototype-account-status-dot" aria-hidden="true">{account.isLoggedIn ? '●' : '○'}</span>
+                <span className="prototype-account-summary-label">
+                  {accountSummaryLabel}
+                </span>
+                {account.isLoggedIn ? (
+                  <svg
+                    className={`prototype-account-chevron h-3.5 w-3.5 text-slate-400 transition-transform duration-200 ${menuOpen ? 'rotate-180 text-indigo-500 dark:text-indigo-300' : ''}`}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M6 9l6 6 6-6" />
+                  </svg>
+                ) : null}
+              </button>
+
+              {account.isLoggedIn && menuOpen ? (
+                <div className="absolute right-0 top-[calc(100%+8px)] z-50 w-[220px] sm:w-[228px]">
+                  <div className="absolute inset-x-0 -top-3 h-4" aria-hidden="true" />
+                  <div
+                    className="absolute right-9 top-0 h-3 w-3 -translate-y-1/2 rotate-45 rounded-[3px] border-l border-t border-[rgba(99,102,241,0.12)] bg-white/98 shadow-[-8px_-8px_18px_rgba(99,102,241,0.04)] dark:border-white/[0.07] dark:bg-gray-950/98"
+                    aria-hidden="true"
+                  />
+                  <div
+                    className="relative overflow-hidden rounded-[20px] border border-[rgba(99,102,241,0.11)] bg-[linear-gradient(180deg,rgba(255,255,255,0.99),rgba(249,250,255,0.965))] p-2 shadow-[0_18px_44px_rgba(92,87,146,0.14)] backdrop-blur-xl dark:border-white/[0.07] dark:bg-[linear-gradient(180deg,rgba(17,24,39,0.99),rgba(10,15,28,0.965))]"
+                    role="menu"
+                    aria-label="账号菜单"
+                  >
+                    <div className="rounded-[15px] bg-[linear-gradient(135deg,rgba(99,102,241,0.065),rgba(255,255,255,0.9)_58%,rgba(244,114,182,0.045))] px-3.5 py-2.5 dark:bg-[linear-gradient(135deg,rgba(99,102,241,0.12),rgba(17,24,39,0.82)_58%,rgba(244,114,182,0.06))]">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-[14px] font-semibold text-slate-900 dark:text-white">{account.displayName}</p>
+                          <p className="mt-1 truncate text-[11px] text-slate-500 dark:text-gray-400">{account.email ?? '当前账号已登录'}</p>
+                        </div>
+                        <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-full bg-indigo-500/10 px-2 text-[12px] font-semibold text-indigo-600 dark:bg-indigo-400/12 dark:text-indigo-300">
+                          {account.balance}
+                        </span>
+                      </div>
+                      <div className="mt-2.5 flex items-center gap-2 text-[11px] text-slate-600 dark:text-gray-300">
+                        <span className="rounded-full bg-white/82 px-2.5 py-1 dark:bg-white/[0.06]">{account.planName}</span>
+                        <span className="rounded-full bg-white/82 px-2.5 py-1 dark:bg-white/[0.06]">余额 {account.balance}</span>
+                      </div>
+                    </div>
+                    <div className="mx-2 my-1.5 h-px bg-[linear-gradient(90deg,rgba(99,102,241,0),rgba(99,102,241,0.16),rgba(99,102,241,0))] dark:bg-[linear-gradient(90deg,rgba(99,102,241,0),rgba(129,140,248,0.22),rgba(99,102,241,0))]" />
+                    <div className="flex flex-col gap-0.5">
+                      <button
+                        type="button"
+                        className="group flex items-center justify-between rounded-[14px] px-3 py-2.5 text-left transition hover:bg-white/90 focus:bg-white/90 dark:hover:bg-white/[0.05] dark:focus:bg-white/[0.05]"
+                        role="menuitem"
+                        onClick={() => void handleCopyInviteLink()}
+                      >
+                        <div>
+                          <p className="text-sm font-medium text-slate-800 dark:text-gray-100">复制邀请链接</p>
+                          <p className="mt-1 text-[10px] text-slate-500 dark:text-gray-400">发给别人注册新账号</p>
+                        </div>
+                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] text-slate-500 transition group-hover:bg-indigo-50 group-hover:text-indigo-600 dark:bg-white/[0.06] dark:text-gray-400 dark:group-hover:bg-indigo-400/12 dark:group-hover:text-indigo-300">
+                          复制
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="group flex items-center justify-between rounded-[14px] px-3 py-2.5 text-left transition hover:bg-white/90 focus:bg-white/90 dark:hover:bg-white/[0.05] dark:focus:bg-white/[0.05]"
+                        role="menuitem"
+                        onClick={() => {
+                          setMenuOpen(false)
+                          openPlanDialog()
+                        }}
+                      >
+                        <div>
+                          <p className="text-sm font-medium text-slate-800 dark:text-gray-100">计划与额度</p>
+                          <p className="mt-1 text-[10px] text-slate-500 dark:text-gray-400">查看邀请码、余额和流水</p>
+                        </div>
+                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] text-slate-500 transition group-hover:bg-indigo-50 group-hover:text-indigo-600 dark:bg-white/[0.06] dark:text-gray-400 dark:group-hover:bg-indigo-400/12 dark:group-hover:text-indigo-300">
+                          查看
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="group flex items-center justify-between gap-3 rounded-[14px] px-3 py-2.5 text-left transition hover:bg-rose-50/88 focus:bg-rose-50/88 dark:hover:bg-rose-500/10 dark:focus:bg-rose-500/10"
+                        role="menuitem"
+                        onClick={handleLogout}
+                      >
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-rose-600 dark:text-rose-300">退出登录</p>
+                          <p className="mt-1 text-[10px] leading-4.5 text-rose-400 dark:text-rose-300/70">回到访客状态，保留本地作品记录</p>
+                        </div>
+                        <span className="shrink-0 whitespace-nowrap rounded-full bg-rose-50 px-2.5 py-1 text-[11px] text-rose-500 transition group-hover:bg-rose-100 group-hover:text-rose-600 dark:bg-rose-500/10 dark:text-rose-300 dark:group-hover:bg-rose-500/14">
+                          安全退出
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            )}
           </div>
         </div>
 
-        <div className={`safe-area-x sm:hidden overflow-hidden transition-all duration-300 ease-in-out ${appMode === 'gallery' && scrollDirection === 'down' ? 'max-h-0 opacity-0 pb-0' : 'max-h-20 opacity-100 pb-2'}`}>
-          <div className="studio-mobile-mode-switch mx-2">
-            <button
-              type="button"
-              onClick={() => setAppMode('gallery')}
-              className={`studio-mode-tab ${appMode === 'gallery' ? 'is-active' : ''}`}
-            >
-              作品流
-            </button>
-            <button
-              type="button"
-              onClick={() => setAppMode('agent')}
-              className={`studio-mode-tab ${appMode === 'agent' ? 'is-active' : ''}`}
-            >
-              连续创作
-            </button>
-          </div>
-        </div>
       </header>
-      
-      {/* Hint for sliding down */}
-      <div className={`fixed top-0 left-0 right-0 z-30 flex justify-center pointer-events-none transition-all duration-300 ease-in-out sm:hidden ${appMode === 'agent' && hintVisible && !agentMobileHeaderVisible ? 'translate-y-[env(safe-area-inset-top,0px)] opacity-100' : '-translate-y-full opacity-0'}`}>
-          <div className="bg-black/60 backdrop-blur-sm text-white text-xs px-3 py-1.5 rounded-b-xl shadow-lg">
-            列表顶部下拉展示顶栏
-          </div>
-        </div>
 
-      <div className={`safe-area-top invisible pointer-events-none transition-all duration-300 ease-in-out ${appMode === 'agent' && !agentMobileHeaderVisible ? 'max-h-0 sm:max-h-[500px] opacity-0 sm:opacity-100 overflow-hidden sm:overflow-visible' : 'max-h-[500px] opacity-100'}`} aria-hidden="true">
+      <div className="safe-area-top invisible pointer-events-none transition-all duration-300 ease-in-out max-h-[500px] opacity-100" aria-hidden="true">
         <div className="safe-header-inner" />
-        <div className={`safe-area-x sm:hidden overflow-hidden transition-all duration-300 ease-in-out ${appMode === 'gallery' && scrollDirection === 'down' ? 'max-h-0 pb-0' : 'max-h-20 pb-2'}`}>
-          <div className="p-1">
-            <div className="py-1.5 text-sm">占位</div>
-          </div>
-        </div>
       </div>
     </>
   )

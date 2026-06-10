@@ -1,17 +1,28 @@
 import React, { useEffect, useState, useRef } from 'react'
-import { useStore, addImageFromUrl, ensureImageCached } from '../store'
-import { copyImageSourceToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
-import { downloadImageIds, formatExportFileTime } from '../lib/downloadImages'
+import { useStore, addImageFromUrl, ensureImageCached, isTaskVisibleForAccount } from '../store'
 import { suppressGlobalClicks } from '../lib/clickSuppression'
 import { CopyIcon, DownloadIcon, EditIcon } from './icons'
 
-export default function ImageContextMenu() {
-  const [menuInfo, setMenuInfo] = useState<{ src: string; imageId?: string; outputImageIds: string[]; x: number; y: number } | null>(null)
+export type ImageContextMenuInfo = {
+  src: string
+  imageId?: string
+  outputImageIds: string[]
+  x: number
+  y: number
+}
+
+type ImageContextMenuProps = {
+  initialMenuInfo?: ImageContextMenuInfo | null
+}
+
+export default function ImageContextMenu({ initialMenuInfo = null }: ImageContextMenuProps) {
+  const [menuInfo, setMenuInfo] = useState<ImageContextMenuInfo | null>(initialMenuInfo)
   const showToast = useStore((s) => s.showToast)
   const inputImages = useStore((s) => s.inputImages)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
   const setMaskEditorImageId = useStore((s) => s.setMaskEditorImageId)
+  const account = useStore((s) => s.account)
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -46,6 +57,10 @@ export default function ImageContextMenu() {
       window.removeEventListener('contextmenu', onContextMenu)
     }
   }, [])
+
+  useEffect(() => {
+    if (initialMenuInfo) setMenuInfo(initialMenuInfo)
+  }, [initialMenuInfo])
 
   // 点击其他地方、滚动或缩放时关闭菜单
   useEffect(() => {
@@ -84,6 +99,7 @@ export default function ImageContextMenu() {
   const handleCopy = async (e: React.MouseEvent) => {
     e.stopPropagation()
     setMenuInfo(null)
+    const { copyImageSourceToClipboard, getClipboardFailureMessage } = await import('../lib/clipboard')
     try {
       await copyImageSourceToClipboard(getOriginalImageSrc())
       showToast('图片已复制', 'success')
@@ -100,10 +116,11 @@ export default function ImageContextMenu() {
     setMenuInfo(null)
 
     try {
+      const { downloadImageIds, formatExportFileTime } = await import('../lib/downloadImages')
       let fileNameBase = ''
       if (imageId) {
-        const tasks = useStore.getState().tasks
-        const matchedTask = tasks.find(t => t.outputImages?.includes(imageId))
+        const { tasks, account: currentAccount } = useStore.getState()
+        const matchedTask = tasks.find(t => isTaskVisibleForAccount(t, currentAccount) && t.outputImages?.includes(imageId))
         if (matchedTask) {
           fileNameBase = `task-${matchedTask.id}`
         } else {
@@ -128,15 +145,16 @@ export default function ImageContextMenu() {
 
   const handleDownloadAll = async (e: React.MouseEvent) => {
     e.stopPropagation()
-    const outputImageIds = menuInfo.outputImageIds
+    const outputImageIds = visibleOutputImageIds
     setMenuInfo(null)
     if (outputImageIds.length <= 1) return
 
     try {
+      const { downloadImageIds, formatExportFileTime } = await import('../lib/downloadImages')
       let fileNameBase = ''
       if (outputImageIds[0]) {
-        const tasks = useStore.getState().tasks
-        const matchedTask = tasks.find(t => t.outputImages?.includes(outputImageIds[0]))
+        const { tasks, account: currentAccount } = useStore.getState()
+        const matchedTask = tasks.find(t => isTaskVisibleForAccount(t, currentAccount) && t.outputImages?.includes(outputImageIds[0]))
         if (matchedTask) {
           fileNameBase = `task-${matchedTask.id}`
         }
@@ -185,7 +203,10 @@ export default function ImageContextMenu() {
   let left = menuInfo.x
   let top = menuInfo.y
   const MENU_WIDTH = 120
-  const showDownloadAll = menuInfo.outputImageIds.length > 1
+  const visibleOutputImageIds = menuInfo.outputImageIds.filter((imageId) =>
+    useStore.getState().tasks.some((task) => isTaskVisibleForAccount(task, account) && task.outputImages?.includes(imageId)),
+  )
+  const showDownloadAll = visibleOutputImageIds.length > 1
   const MENU_HEIGHT = showDownloadAll ? 160 : 128
 
   if (left + MENU_WIDTH > window.innerWidth) {

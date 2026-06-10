@@ -1,10 +1,8 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { useStore, getCachedImage, ensureImageCached } from '../store'
+import { useStore, getCachedImage, ensureImageCached, isTaskVisibleForAccount } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
-import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { suppressGlobalClicks } from '../lib/clickSuppression'
-import { downloadImageIds, formatExportFileTime } from '../lib/downloadImages'
 import { CloseIcon, DownloadIcon } from './icons'
 
 const MIN_SCALE = 1
@@ -26,6 +24,7 @@ export default function Lightbox() {
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
   const maskDraft = useStore((s) => s.maskDraft)
   const tasks = useStore((s) => s.tasks)
+  const account = useStore((s) => s.account)
 
   const [src, setSrc] = useState('')
   const [maskImageSrc, setMaskImageSrc] = useState('')
@@ -77,7 +76,7 @@ export default function Lightbox() {
 
     setMaskImageSrc('')
 
-    const taskWithMask = tasks.find((t) => t.maskTargetImageId === lightboxImageId && t.maskImageId)
+    const taskWithMask = tasks.find((t) => isTaskVisibleForAccount(t, account) && t.maskTargetImageId === lightboxImageId && t.maskImageId)
     if (taskWithMask?.maskImageId) {
       const maskImageId = taskWithMask.maskImageId
       const cached = getCachedImage(maskImageId)
@@ -95,7 +94,7 @@ export default function Lightbox() {
     return () => {
       cancelled = true
     }
-  }, [lightboxImageId, maskDraft?.targetImageId, maskDraft?.maskDataUrl, tasks])
+  }, [account, lightboxImageId, maskDraft?.targetImageId, maskDraft?.maskDataUrl, tasks])
 
   // 生成遮罩预览
   useEffect(() => {
@@ -105,7 +104,8 @@ export default function Lightbox() {
       return
     }
 
-    createMaskPreviewDataUrl(src, maskImageSrc)
+    import('../lib/canvasImage')
+      .then(({ createMaskPreviewDataUrl }) => createMaskPreviewDataUrl(src, maskImageSrc))
       .then((url) => {
         if (!cancelled) setMaskPreviewSrc(url)
       })
@@ -389,6 +389,7 @@ function LightboxInner({ src, imageId, maskPreviewSrc, onClose, showNav, current
   const handleDownload = useCallback(async (e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation()
     try {
+      const { downloadImageIds, formatExportFileTime } = await import('../lib/downloadImages')
       const fileNameBase = `lightbox-${formatExportFileTime(new Date())}`
       const result = await downloadImageIds([imageId], fileNameBase)
       if (result.successCount === 0) {

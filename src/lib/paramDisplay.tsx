@@ -4,6 +4,13 @@ import ViewportTooltip from '../components/ViewportTooltip'
 
 type ParamKey = keyof TaskParams
 
+const QUALITY_DISPLAY_LABELS: Record<TaskParams['quality'], string> = {
+  auto: '自动',
+  low: '低',
+  medium: '中',
+  high: '高',
+}
+
 interface ParamValueProps {
   task: TaskRecord
   paramKey: ParamKey
@@ -63,6 +70,14 @@ export function ActualValueBadge({ value, className = '', variant = 'highlight' 
   )
 }
 
+export function formatParamDisplayValue(paramKey: ParamKey, value: unknown) {
+  if (paramKey === 'quality') {
+    return QUALITY_DISPLAY_LABELS[value as TaskParams['quality']] ?? String(value)
+  }
+
+  return String(value)
+}
+
 export function getParamDisplay(task: TaskRecord, paramKey: ParamKey, actualParams = task.actualParams) {
   const requestedValue = task.sourceMode === 'agent' && paramKey === 'n'
     ? 'auto'
@@ -76,9 +91,9 @@ export function getParamDisplay(task: TaskRecord, paramKey: ParamKey, actualPara
     String(actualValue) !== String(requestedValue)
 
   return {
-    displayValue: String(displayValue),
+    displayValue: formatParamDisplayValue(paramKey, displayValue),
     isMismatch,
-    requestedValue: String(requestedValue),
+    requestedValue: formatParamDisplayValue(paramKey, requestedValue),
     isAutoResolved: hasActualValue && requestedValue === 'auto' && String(actualValue) !== String(requestedValue),
   }
 }

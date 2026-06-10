@@ -6,7 +6,7 @@ import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import ViewportTooltip from './ViewportTooltip'
 
 const TIERS: SizeTier[] = ['1K', '2K', '4K']
-const SIZE_LIMIT_TEXT = '由于模型限制，最终输出会自动规整到合法尺寸：\n宽高均为 16 的倍数，最大边长 3840px，宽高比不超过 3:1，总像素限制为 655360-8294400。'
+const SIZE_LIMIT_TEXT = '最终输出会自动规整到可提交尺寸：\n宽高均为 16 的倍数，最大边长 3840px，总像素不超过 8294400。'
 const RATIOS = [
   { label: '1:1', value: '1:1' },
   { label: '3:2', value: '3:2' },
@@ -18,9 +18,9 @@ const RATIOS = [
   { label: '21:9', value: '21:9' },
 ]
 const TIER_HINTS: Record<SizeTier, string> = {
-  '1K': '轻量出图',
-  '2K': '通用细节',
-  '4K': '高精细节',
+  '1K': '轻量预览',
+  '2K': '常规成片',
+  '4K': '高精输出',
 }
 const QUICK_PRESETS = [
   { label: '方图封面', hint: '通用首图', tier: '1K' as const, ratio: '1:1' },
@@ -68,11 +68,9 @@ function getReadableSizeLabel(size: string, allowAuto: boolean) {
 }
 
 export default function SizePickerModal({ currentSize, onSelect, onClose, allowAuto = true }: Props) {
-  usePreventBackgroundScroll(true)
-  const recentSizePresets = useStore((s) => s.recentSizePresets)
+  const scrollAreaRef = useRef<HTMLDivElement>(null)
+  usePreventBackgroundScroll(true, scrollAreaRef)
   const pushRecentSizePreset = useStore((s) => s.pushRecentSizePreset)
-  const pinnedSizePresets = useStore((s) => s.pinnedSizePresets)
-  const togglePinnedSizePreset = useStore((s) => s.togglePinnedSizePreset)
 
   const modalRef = useRef<HTMLDivElement>(null)
   const mouseDownTargetRef = useRef<EventTarget | null>(null)
@@ -125,11 +123,6 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
   const activeRatio = ratio === 'custom' ? customRatio : ratio
   const parsedCustomRatio = parseRatio(customRatio)
   const customRatioValid = ratio !== 'custom' || Boolean(parsedCustomRatio)
-  const customRatioClamped = Boolean(
-    ratio === 'custom' &&
-    parsedCustomRatio &&
-    Math.max(parsedCustomRatio.width, parsedCustomRatio.height) / Math.min(parsedCustomRatio.width, parsedCustomRatio.height) > 3,
-  )
 
   const previewSize = useMemo(() => {
     if (mode === 'auto') return 'auto'
@@ -149,7 +142,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
     }
     
     return ''
-  }, [mode, tier, activeRatio, customW, customH])
+  }, [activeRatio, customH, customW, mode, tier])
 
   const previewSizeLabel = useMemo(() => {
     if (!previewSize) return '尺寸无效'
@@ -165,7 +158,10 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
 
   const isClamped = useMemo(() => {
     if (!previewSize || previewSize === 'auto') return false
-    if (mode === 'ratio' && ratio === 'custom') return customRatioClamped
+    if (mode === 'ratio') {
+      const rawSize = calculateImageSize(tier, activeRatio)
+      return Boolean(rawSize && previewSize && rawSize !== previewSize)
+    }
     if (mode === 'resolution') {
       const w = parseInt(customW, 10)
       const h = parseInt(customH, 10)
@@ -174,7 +170,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
       }
     }
     return false
-  }, [mode, ratio, customRatioClamped, customW, customH, previewSize])
+  }, [activeRatio, customW, customH, mode, previewSize, tier])
 
   const showHint = () => setHintVisible(true)
   const hideHint = () => {
@@ -214,29 +210,6 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
     setRatio(nextRatio)
   }
 
-  const applyRecentSizePreset = (size: string) => {
-    const preset = findPresetForSize(size)
-    const parsed = parseSize(size)
-
-    if (size === 'auto') {
-      if (allowAuto) setMode('auto')
-      return
-    }
-
-    if (preset) {
-      setMode('ratio')
-      setTier(preset.tier)
-      setRatio(preset.ratio)
-      return
-    }
-
-    if (parsed) {
-      setMode('resolution')
-      setCustomW(parsed.width)
-      setCustomH(parsed.height)
-    }
-  }
-
   return createPortal(
     <div
       data-no-drag-select
@@ -247,9 +220,9 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm animate-overlay-in" />
       <div
         ref={modalRef}
-        className="relative z-10 w-full max-w-md rounded-3xl border border-white/50 bg-white/95 p-4 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10"
+        className="relative z-10 flex max-h-[86vh] w-full max-w-md flex-col rounded-3xl border border-white/50 bg-white/95 p-4 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10"
       >
-        <div className="mb-4 flex items-start justify-between gap-4">
+        <div className="mb-3 flex flex-shrink-0 items-start justify-between gap-4">
           <div>
             <h3 className="text-base font-semibold text-gray-800 dark:text-gray-100">设置画幅与分辨率</h3>
             <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">当前：{currentSizeLabel}</p>
@@ -265,8 +238,8 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
           </button>
         </div>
 
-        <div className="space-y-5">
-          <div className="flex rounded-xl bg-gray-100/80 p-1 dark:bg-white/[0.04]">
+        <div className="flex min-h-0 flex-1 flex-col gap-3">
+          <div className="flex flex-shrink-0 rounded-xl bg-gray-100/80 p-1 dark:bg-white/[0.04]">
             {allowAuto && (
               <button
                 onClick={() => setMode('auto')}
@@ -289,7 +262,10 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
             </button>
           </div>
 
-          <div className="h-[360px] max-h-[55vh] overflow-y-auto scrollbar-thin scrollbar-thumb-gray-200 dark:scrollbar-thumb-white/10 pr-1 -mr-1 pb-2">
+          <div
+            ref={scrollAreaRef}
+            className="min-h-0 flex-1 overflow-y-auto pr-1 -mr-1 pb-1 scrollbar-thin scrollbar-thumb-gray-200 dark:scrollbar-thumb-white/10"
+          >
             {mode === 'auto' && (
               <div className="flex h-full animate-fade-in items-center justify-center pt-6 pb-3 text-center">
                 <div>
@@ -309,69 +285,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
             )}
 
             {mode === 'ratio' && (
-              <div className="space-y-4 animate-fade-in">
-                {pinnedSizePresets.length > 0 && (
-                  <section>
-                    <div className="mb-2 text-xs font-medium text-gray-400 dark:text-gray-500">固定尺寸</div>
-                    <div className="flex flex-wrap gap-2">
-                      {pinnedSizePresets.map((size) => (
-                        <div
-                          key={`pinned-size-${size}`}
-                          className="inline-flex items-center gap-1 rounded-xl border border-amber-200/80 bg-amber-50/85 px-1.5 py-1 dark:border-amber-400/25 dark:bg-amber-500/10"
-                        >
-                          <button
-                            type="button"
-                            className="px-1 text-xs text-amber-700 transition-colors hover:text-amber-800 dark:text-amber-200 dark:hover:text-amber-100"
-                            onClick={() => applyRecentSizePreset(size)}
-                          >
-                            {getReadableSizeLabel(size, allowAuto)}
-                          </button>
-                          <button
-                            type="button"
-                            className="px-1 text-[10px] text-amber-500 transition-colors hover:text-rose-500 dark:text-amber-300/80 dark:hover:text-rose-300"
-                            onClick={() => togglePinnedSizePreset(size)}
-                          >
-                            取消固定
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-                )}
-
-                {recentSizePresets.length > 0 && (
-                  <section>
-                    <div className="mb-2 text-xs font-medium text-gray-400 dark:text-gray-500">最近使用</div>
-                    <div className="flex flex-wrap gap-2">
-                      {recentSizePresets.map((size) => (
-                        <div
-                          key={`recent-${size}`}
-                          className="inline-flex items-center gap-1 rounded-xl border border-gray-200/70 bg-white/60 px-1.5 py-1 dark:border-white/[0.08] dark:bg-white/[0.03]"
-                        >
-                          <button
-                            type="button"
-                            className={`px-1 text-xs transition-colors ${
-                              currentSize === size || previewSize === size
-                                ? 'text-blue-600 dark:text-blue-300'
-                                : 'text-gray-600 hover:text-gray-800 dark:text-gray-300 dark:hover:text-gray-100'
-                            }`}
-                            onClick={() => applyRecentSizePreset(size)}
-                          >
-                            {getReadableSizeLabel(size, allowAuto)}
-                          </button>
-                          <button
-                            type="button"
-                            className="px-1 text-[10px] text-gray-400 transition-colors hover:text-amber-500 dark:text-gray-500 dark:hover:text-amber-300"
-                            onClick={() => togglePinnedSizePreset(size)}
-                          >
-                            固定
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-                )}
-
+              <div className="space-y-3 animate-fade-in">
                 <section>
                   <div className="mb-2 text-xs font-medium text-gray-400 dark:text-gray-500">常用预设</div>
                   <div className="grid grid-cols-2 gap-2">
@@ -392,7 +306,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                 </section>
 
                 <section>
-                  <div className="mb-2 text-xs font-medium text-gray-400 dark:text-gray-500">清晰度档位</div>
+                  <div className="mb-2 text-xs font-medium text-gray-400 dark:text-gray-500">分辨率档位</div>
                   <div className="grid grid-cols-3 gap-2">
                     {TIERS.map((item) => (
                       <button key={item} className={`${buttonClass(tier === item)} text-left`} onClick={() => setTier(item)}>
@@ -497,12 +411,19 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
             )}
           </div>
 
-          <div className="rounded-2xl bg-gray-50 px-4 py-2.5 dark:bg-white/[0.03]">
-            <div className="text-xs text-gray-400 dark:text-gray-500">将使用</div>
-            <div className="mt-1 flex items-center gap-2">
+          <div className="flex flex-shrink-0 items-center justify-between gap-3 rounded-2xl bg-gray-50 px-4 py-2.5 dark:bg-white/[0.03]">
+            <div className="min-w-0">
+              <div className="text-xs text-gray-400 dark:text-gray-500">将使用</div>
               <span className="text-sm font-semibold text-gray-800 dark:text-gray-100">
                 {previewSizeLabel}
               </span>
+              {previewSize && previewSize !== 'auto' && (
+                <span className="ml-2 text-xs text-gray-400 dark:text-gray-500">
+                  {previewRatioLabel ? `${previewRatioLabel} 画幅` : '合法尺寸内自动规整'}
+                </span>
+              )}
+            </div>
+            <div className="flex-shrink-0">
               {isClamped && (
                 <div
                   className="relative flex items-center"
@@ -522,15 +443,10 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                 </div>
               )}
             </div>
-            {previewSize && previewSize !== 'auto' && (
-              <div className="mt-1 text-xs text-gray-400 dark:text-gray-500">
-                {previewRatioLabel ? `${previewRatioLabel} 画幅` : '合法尺寸内自动规整'}
-              </div>
-            )}
           </div>
         </div>
 
-        <div className="mt-4 flex gap-2">
+        <div className="mt-3 flex flex-shrink-0 gap-2">
           <button
             onClick={onClose}
             className="flex-1 rounded-xl bg-gray-100 px-4 py-2.5 text-sm text-gray-600 transition hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]"

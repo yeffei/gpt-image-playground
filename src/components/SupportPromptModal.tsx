@@ -59,8 +59,8 @@ export default function SupportPromptModal() {
 
         <p className="mb-8 px-2 text-center text-[15px] leading-relaxed text-gray-500 dark:text-gray-400">
           你已经成功生成了超过 <strong className="font-semibold text-gray-800 dark:text-gray-200">50</strong> 张图片。<br />
-          建议开始整理常用提示词、固定约束与常用尺寸，<br />
-          让后续迭代更快、更稳定。
+          建议开始整理常用提示词、常用尺寸和固定风格，<br />
+          让后续使用更快、更稳定。
         </p>
 
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3">

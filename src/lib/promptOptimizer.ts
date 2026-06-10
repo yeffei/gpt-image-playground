@@ -1,4 +1,8 @@
-interface PromptOptimizerInput {
+/**
+ * Product-layer optimizer input must stay intentionally small.
+ * Do not pass image bytes, moderation/review state, account data, or route/runtime diagnostics here.
+ */
+export interface PromptOptimizerInput {
   prompt: string
   negativePrompt?: string
   hasReferenceImages: boolean
@@ -7,7 +11,7 @@ interface PromptOptimizerInput {
 }
 
 export interface PromptOptimizerResult {
-  mode: 'text-to-image' | 'image-to-image' | 'multi-image'
+  mode: 'text-to-image' | 'image-to-image'
   explanation: string[]
   optimizedPrompt: string
   negativePrompt: string
@@ -70,6 +74,16 @@ function normalizePromptText(value: string) {
     .replace(/\s*，\s*/g, '，')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
+}
+
+function normalizePromptOptimizerInput(input: PromptOptimizerInput): PromptOptimizerInput {
+  return {
+    prompt: normalizePromptText(input.prompt),
+    negativePrompt: typeof input.negativePrompt === 'string' ? normalizePromptText(input.negativePrompt) : '',
+    hasReferenceImages: Boolean(input.hasReferenceImages),
+    hasMask: Boolean(input.hasMask),
+    currentSize: typeof input.currentSize === 'string' ? input.currentSize.trim() : undefined,
+  }
 }
 
 function splitPromptClauses(value: string) {
@@ -190,9 +204,7 @@ function buildPromptBody(prompt: string, mode: PromptOptimizerResult['mode']) {
   const additions = inferCompactAdditions(prompt)
   if (additions.length > 0) compactClauses.push(...additions)
 
-  const prefix = mode === 'multi-image'
-    ? (isChinesePrompt(prompt) ? '综合多张参考图保留共同主体与画面方向' : 'blend shared subject traits and scene direction from the reference images')
-    : mode === 'image-to-image'
+  const prefix = mode === 'image-to-image'
     ? (isChinesePrompt(prompt) ? '保留参考图主体和构图方向' : 'keep reference composition and subject direction')
     : ''
 
@@ -289,22 +301,17 @@ function getRecommendedRatio(prompt: string, currentSize?: string) {
 }
 
 export function optimizePrompt(input: PromptOptimizerInput): PromptOptimizerResult {
-  const mode: PromptOptimizerResult['mode'] = input.hasReferenceImages && !input.hasMask
-    ? 'multi-image'
-    : input.hasReferenceImages || input.hasMask
+  const normalizedInput = normalizePromptOptimizerInput(input)
+
+  const mode: PromptOptimizerResult['mode'] = normalizedInput.hasReferenceImages || normalizedInput.hasMask
     ? 'image-to-image'
     : 'text-to-image'
 
-  const optimizedPrompt = buildPromptBody(input.prompt, mode)
-  const negativePrompt = buildNegativePrompt(input.negativePrompt ?? '', input.prompt)
-  const recommendedRatio = getRecommendedRatio(input.prompt, input.currentSize)
+  const optimizedPrompt = buildPromptBody(normalizedInput.prompt, mode)
+  const negativePrompt = buildNegativePrompt(normalizedInput.negativePrompt ?? '', normalizedInput.prompt)
+  const recommendedRatio = getRecommendedRatio(normalizedInput.prompt, normalizedInput.currentSize)
 
-  const explanation = mode === 'multi-image'
-    ? [
-        '优先保留多张参考图真正重合的主体和画面方向，不主观改题材。',
-        '主要做结构整理、去重和轻量补全，避免把不同参考图的信息越改越乱。',
-      ]
-    : mode === 'image-to-image'
+  const explanation = mode === 'image-to-image'
     ? [
         '优先保留当前提示词和参考图方向，只整理成更适合生图的短句结构。',
         '不会主观判断你在做什么题材，重点是减少冗词、重复和低价值连接语。',
@@ -314,7 +321,7 @@ export function optimizePrompt(input: PromptOptimizerInput): PromptOptimizerResu
         '主要做去重、结构重排和少量通用补全，让画面信息更清晰。',
       ]
 
-  const enhancementTips = isChinesePrompt(input.prompt)
+  const enhancementTips = isChinesePrompt(normalizedInput.prompt)
     ? [
         '可继续补充镜头语言',
         '可继续补充时间段与光线方向',

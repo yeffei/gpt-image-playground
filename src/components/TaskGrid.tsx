@@ -1,9 +1,16 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
-import { useStore, reuseConfig, editOutputs, removeTask } from '../store'
+import { useStore, reuseConfig, removeTask, isTaskVisibleForAccount } from '../store'
 import TaskCard from './TaskCard'
+import {
+  GUEST_RESULTS_RETURN_COPY,
+  GUEST_VIEW_YOUR_RESULTS_TITLE,
+} from '../lib/accessCopy'
 
-export default function TaskGrid() {
+export default function TaskGrid({ limit = 6 }: { limit?: number }) {
+  const account = useStore((s) => s.account)
   const tasks = useStore((s) => s.tasks)
+  const galleryView = useStore((s) => s.galleryView)
+  const libraryViewMode = useStore((s) => s.libraryViewMode)
   const searchQuery = useStore((s) => s.searchQuery)
   const filterStatus = useStore((s) => s.filterStatus)
   const filterFavorite = useStore((s) => s.filterFavorite)
@@ -27,13 +34,16 @@ export default function TaskGrid() {
   const startedWithCtrl = useRef(false)
   const initialSelection = useRef<string[]>([])
   const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
+  const isLibraryView = galleryView === 'library'
+  const isFavoritesView = isLibraryView && libraryViewMode === 'favorites'
+  const effectiveFavoriteFilter = filterFavorite || isFavoritesView
 
   const filteredTasks = useMemo(() => {
-    const sorted = [...tasks].sort((a, b) => b.createdAt - a.createdAt)
     const q = searchQuery.trim().toLowerCase()
     
-    return sorted.filter((t) => {
-      if (filterFavorite && !t.isFavorite) return false
+    return tasks.filter((t) => {
+      if (!isTaskVisibleForAccount(t, account)) return false
+      if (effectiveFavoriteFilter && !t.isFavorite) return false
       const matchStatus = filterStatus === 'all' || t.status === filterStatus
       if (!matchStatus) return false
       
@@ -42,9 +52,10 @@ export default function TaskGrid() {
       const paramStr = JSON.stringify(t.params).toLowerCase()
       return prompt.includes(q) || paramStr.includes(q)
     })
-  }, [tasks, searchQuery, filterStatus, filterFavorite])
-  const maxWorkbenchItems = 6
-  const visibleTasks = filteredTasks.slice(0, maxWorkbenchItems)
+  }, [account, tasks, searchQuery, filterStatus, effectiveFavoriteFilter])
+  const visibleTasks = limit > 0 ? filteredTasks.slice(0, limit) : filteredTasks
+  const canDragSelect = visibleTasks.length > 0
+  const hasActiveFilters = Boolean(searchQuery.trim()) || effectiveFavoriteFilter || filterStatus !== 'all'
 
   const handleDelete = (task: typeof tasks[0]) => {
     setConfirmDialog({
@@ -121,6 +132,8 @@ export default function TaskGrid() {
   }
 
   useEffect(() => {
+    if (!canDragSelect) return
+
     const stopDragScroll = () => {
       if (dragScrollIntervalRef.current) {
         clearInterval(dragScrollIntervalRef.current)
@@ -253,20 +266,52 @@ export default function TaskGrid() {
       document.removeEventListener('wheel', handleDocumentWheel, true)
       window.removeEventListener('scroll', handleDocumentScroll, true)
     }
-  }, [clearSelection, isMac])
+  }, [canDragSelect, clearSelection, isMac])
+
+  const emptyState = (() => {
+    if (hasActiveFilters) {
+      return {
+        title: '没有找到匹配的记录',
+        copy: isFavoritesView
+          ? '先放宽收藏或关键词筛选，看看之前沉淀下来的结果。'
+          : '换一个关键词，或关闭收藏/状态筛选后再看。',
+      }
+    }
+
+    if (isFavoritesView) {
+      return {
+        title: '还没有收藏结果',
+        copy: '先在作品里标记值得保留的内容，后面这里会集中承接你的精选结果。',
+      }
+    }
+
+    if (isLibraryView) {
+      return {
+        title: '还没有个人结果',
+        copy: '先回工作台完成几轮生成，作品库会在这里集中承接你的历史结果和后续整理。',
+      }
+    }
+
+    return {
+      title: account.isLoggedIn ? '这里还没有本轮结果' : GUEST_VIEW_YOUR_RESULTS_TITLE,
+      copy: account.isLoggedIn
+        ? '写下一句明确描述，或加入参考图后开始生成，结果会先出现在这里。'
+        : GUEST_RESULTS_RETURN_COPY,
+    }
+  })()
 
   if (!filteredTasks.length) {
     return (
       <div className="studio-empty-state">
-        {searchQuery || filterFavorite ? (
+        {hasActiveFilters ? (
           <>
             <div className="studio-empty-icon">
               <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M21 21l-4.35-4.35m1.85-5.15a7 7 0 11-14 0 7 7 0 0114 0z" />
               </svg>
             </div>
-            <p className="studio-empty-title">没有找到匹配的记录</p>
-            <p className="studio-empty-copy">换一个关键词，或关闭收藏/状态筛选后再看。</p>
+            <p className="studio-empty-title">{emptyState.title}</p>
+            <p className="studio-empty-copy">{emptyState.copy}</p>
           </>
         ) : (
           <>
@@ -275,8 +320,8 @@ export default function TaskGrid() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
               </svg>
             </div>
-            <p className="studio-empty-title">你的作品流还没有开始。</p>
-            <p className="studio-empty-copy">从底部生成台输入一句明确描述，或拖进 1 到 3 张参考图开启第一轮。</p>
+            <p className="studio-empty-title">{emptyState.title}</p>
+            <p className="studio-empty-copy">{emptyState.copy}</p>
           </>
         )}
       </div>
@@ -289,7 +334,10 @@ export default function TaskGrid() {
       data-task-grid-root
       className="relative min-h-[50vh]"
     >
-      <div ref={gridRef} className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5 pb-16">
+      <div
+        ref={gridRef}
+        className={`grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5 pb-16 ${isLibraryView ? 'task-grid-library' : 'task-grid-workbench'}`}
+      >
         {visibleTasks.map((task) => (
           <div key={task.id} className="task-card-wrapper" data-task-id={task.id}>
             <TaskCard
@@ -309,7 +357,6 @@ export default function TaskGrid() {
                 setDetailTaskId(task.id)
               }}
               onReuse={() => reuseConfig(task)}
-              onEditOutputs={() => editOutputs(task)}
               onDelete={() => handleDelete(task)}
               isSelected={selectedTaskIds.includes(task.id)}
             />

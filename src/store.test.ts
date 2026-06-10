@@ -69,9 +69,9 @@ vi.mock('./lib/db', () => {
 })
 vi.mock('./lib/api', () => ({
   callImageApi: vi.fn(async () => ({
-    images: [],
+    images: ['data:image/png;base64,generated'],
     actualParams: {},
-    actualParamsList: [],
+    actualParamsList: [{}],
     revisedPrompts: [],
   })),
 }))
@@ -95,9 +95,68 @@ vi.mock('./lib/agentApi', () => ({
     }
   }),
 }))
+vi.mock('./lib/serverImageGatewayApi', () => ({
+    callServerImageGateway: vi.fn(async () => ({
+      images: ['data:image/png;base64,server-gateway-generated'],
+      actualParams: {},
+      actualParamsList: [{}],
+      revisedPrompts: [],
+    modelSku: 'gpt-image-2-fast',
+    routeId: 'server-route-1',
+    upstreamModel: 'gpt-image-2',
+    attempts: [],
+      routeHealth: {
+        requestId: 'imggw-success-1',
+        modelSku: 'gpt-image-2-fast',
+        capturedAt: 1,
+        routes: [],
+      },
+      routeSelection: {
+        requestId: 'imggw-success-1',
+        modelSku: 'gpt-image-2-fast',
+        capturedAt: 1,
+        requiresEdit: false,
+        requiresMask: false,
+        routes: [],
+      },
+    })),
+  isServerImageGatewayUnavailableError: vi.fn(() => false),
+}))
+vi.mock('./lib/serverImageGatewayConfig', () => ({
+  isServerImageGatewayEnabled: vi.fn(() => false),
+  isClientImageGatewayFallbackEnabled: vi.fn(() => false),
+}))
+vi.mock('./lib/rechargeCodeApi', () => {
+  class RechargeCodeApiUnavailableError extends Error {
+    constructor(message = '余额码兑换接口暂不可用') {
+      super(message)
+      this.name = 'RechargeCodeApiUnavailableError'
+    }
+  }
+
+  class RechargeCodeApiError extends Error {
+    code?: string
+
+    constructor(message: string, code?: string) {
+      super(message)
+      this.name = 'RechargeCodeApiError'
+      this.code = code
+    }
+  }
+
+  return {
+    RechargeCodeApiUnavailableError,
+    RechargeCodeApiError,
+    canUseLocalRechargeCodeFallback: vi.fn(() => false),
+    redeemRechargeCodeWithApi: vi.fn(),
+  }
+})
 import { clearAgentConversations, clearImages, getAllAgentConversations, getAllTasks, putAgentConversation, putImage, putTask as putDbTask } from './lib/db'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
-import { cleanStaleAgentInputDrafts, deleteAgentRoundFromConversation, editOutputs, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, useStore } from './store'
+import { callServerImageGateway } from './lib/serverImageGatewayApi'
+import { isClientImageGatewayFallbackEnabled, isServerImageGatewayEnabled } from './lib/serverImageGatewayConfig'
+import { RechargeCodeApiError, redeemRechargeCodeWithApi } from './lib/rechargeCodeApi'
+import { cleanStaleAgentInputDrafts, deleteAgentRoundFromConversation, editOutputs, estimateBillingPoints, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, isTaskVisibleForAccount, markInterruptedOpenAIRunningTasks, mergeNegativePromptValue, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, retryTask, reuseConfig, submitAgentMessage, submitTask, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
@@ -109,6 +168,17 @@ describe('error toast messages', () => {
 
   it('uses a generic message for long raw errors without a title', () => {
     expect(getErrorToastMessage(`invalid request ${'x'.repeat(90)}`)).toBe('操作失败，请查看详情')
+  })
+})
+
+describe('negative prompt merging', () => {
+  it('merges optimizer negative prompt output into existing terms with dedupe', () => {
+    expect(
+      mergeNegativePromptValue(
+        '低质量，模糊，畸形手部',
+        '模糊，水印，低质量，背景杂乱',
+      ),
+    ).toBe('低质量，模糊，畸形手部，水印，背景杂乱')
   })
 })
 
@@ -149,10 +219,32 @@ function importFile(data: ExportData): File {
   return { arrayBuffer: async () => buffer } as File
 }
 
+async function waitForFirstTaskStatus(status: TaskRecord['status']) {
+  for (let i = 0; i < 20; i += 1) {
+    if (useStore.getState().tasks[0]?.status === status) return
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+}
+
 describe('mask draft lifecycle in store actions', () => {
   beforeEach(() => {
+    vi.mocked(isServerImageGatewayEnabled).mockReturnValue(false)
+    vi.mocked(isClientImageGatewayFallbackEnabled).mockReturnValue(false)
+    vi.mocked(callServerImageGateway).mockClear()
     useStore.setState({
       settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key' },
+      account: { userId: 'test-user', isLoggedIn: true, displayName: 'Tester', balance: 20, planName: '体验版' },
+      billing: {
+        lastRechargeAmount: null,
+        lastRechargeStatus: 'idle',
+        lastRechargeAt: null,
+        pendingRechargeAmount: 30,
+        selectedPaymentMethod: 'wechat',
+        rechargeFlowStatus: 'idle',
+        rechargeReturnView: 'plan',
+        rechargeHistory: [],
+        usageHistory: [],
+      },
       prompt: 'prompt',
       inputImages: [],
       maskDraft: null,
@@ -207,6 +299,332 @@ describe('mask draft lifecycle in store actions', () => {
     const state = useStore.getState()
     expect(state.tasks).toHaveLength(1)
     expect(state.showToast).toHaveBeenCalledWith('任务已提交', 'success')
+  })
+
+  it('blocks gallery submit on the front end when neither personal api nor server gateway is available', async () => {
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, apiKey: '' },
+      selectedModelSkuId: 'gpt-image-2-fast',
+    })
+
+    await submitTask()
+    await waitForFirstTaskStatus('done')
+
+    const state = useStore.getState()
+    expect(state.tasks).toHaveLength(0)
+    expect(state.showSettings).toBe(false)
+    expect(state.showToast).toHaveBeenCalledWith('当前生成服务暂不可用，请稍后重试。', 'error')
+  })
+
+  it('allows gallery submit through server gateway without a personal api key', async () => {
+    vi.mocked(isServerImageGatewayEnabled).mockReturnValue(true)
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, apiKey: '' },
+      selectedModelSkuId: 'gpt-image-2-fast',
+    })
+
+    await submitTask()
+    await waitForFirstTaskStatus('done')
+
+    const state = useStore.getState()
+    expect(state.tasks).toHaveLength(1)
+    expect(state.showSettings).toBe(false)
+    expect(state.showToast).toHaveBeenCalledWith('任务已提交', 'success')
+    expect(callServerImageGateway).toHaveBeenCalled()
+  })
+
+  it('normalizes gallery gateway params by model sku instead of personal api profile', async () => {
+    vi.mocked(isServerImageGatewayEnabled).mockReturnValue(true)
+    useStore.setState({
+      settings: normalizeSettings({
+        ...DEFAULT_SETTINGS,
+        apiKey: 'fal-key',
+        profiles: [createDefaultFalProfile({ id: 'fal-profile', apiKey: 'fal-key' })],
+        activeProfileId: 'fal-profile',
+      }),
+      selectedModelSkuId: 'gpt-image-2-fast',
+      params: { ...DEFAULT_PARAMS, size: '2560x1440', quality: 'auto', n: 3 },
+    })
+
+    await submitTask()
+
+    const submittedTask = useStore.getState().tasks[0]
+    expect(submittedTask.params).toMatchObject({
+      size: '2560x1440',
+      quality: 'medium',
+      n: 1,
+    })
+  })
+
+  it('prefers the server image gateway when enabled', async () => {
+    vi.mocked(isServerImageGatewayEnabled).mockReturnValue(true)
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, apiKey: '' },
+      selectedModelSkuId: 'gpt-image-2-fast',
+    })
+
+    await submitTask()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(callServerImageGateway).toHaveBeenCalled()
+  })
+
+  it('keeps gateway task in error when server gateway is unavailable', async () => {
+    vi.mocked(isServerImageGatewayEnabled).mockReturnValue(true)
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, apiKey: '' },
+      selectedModelSkuId: 'gpt-image-2-fast',
+    })
+    vi.mocked(callServerImageGateway).mockRejectedValueOnce(Object.assign(new Error('gateway unavailable'), {
+      unavailable: true,
+    }))
+
+    await submitTask()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(callServerImageGateway).toHaveBeenCalled()
+    const failedTask = useStore.getState().tasks[0]
+    expect(failedTask.status).toBe('error')
+  })
+
+  it('keeps server gateway request id in the error without storing route diagnostics', async () => {
+    vi.mocked(isServerImageGatewayEnabled).mockReturnValue(true)
+      const gatewayError = Object.assign(new Error('网关线路繁忙'), {
+        requestId: 'imggw-test-123',
+        failureKind: 'upstream_rate_limited',
+        routeHealth: {
+          requestId: 'imggw-test-123',
+        modelSku: 'gpt-image-2-fast',
+        capturedAt: 1000,
+        routes: [
+          {
+            routeId: 'route-1',
+            upstreamModel: 'gpt-image-2',
+            status: 'degraded',
+            inFlight: 0,
+            successCount: 0,
+            failureCount: 1,
+            consecutiveFailures: 1,
+            lastFailureKind: 'upstream_rate_limited',
+            },
+          ],
+        },
+        routeSelection: {
+          requestId: 'imggw-test-123',
+          modelSku: 'gpt-image-2-fast',
+          capturedAt: 1000,
+          requiresEdit: false,
+          requiresMask: false,
+          routes: [
+            {
+              routeId: 'route-1',
+              upstreamModel: 'gpt-image-2',
+              selectionState: 'attempted',
+              inFlight: 0,
+              maxConcurrency: 2,
+              rank: 1,
+              attemptIndex: 1,
+            },
+          ],
+        },
+        attempts: [
+          {
+            routeId: 'route-1',
+          upstreamModel: 'gpt-image-2',
+          success: false,
+          latencyMs: 1200,
+          errorMessage: 'overloaded 503',
+        },
+      ],
+    })
+    vi.mocked(callServerImageGateway).mockRejectedValueOnce(gatewayError)
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, apiKey: '' },
+      selectedModelSkuId: 'gpt-image-2-fast',
+    })
+
+    await submitTask()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+      const failedTask = useStore.getState().tasks[0]
+      expect(failedTask.status).toBe('error')
+      expect(failedTask.error).toContain('当前生成服务繁忙或限流，请稍后重试。')
+      expect(failedTask.error).toContain('请求编号：imggw-test-123')
+      expect(failedTask.gatewayFailureKind).toBe('upstream_rate_limited')
+      expect(failedTask).not.toHaveProperty('routeId')
+      expect(failedTask).not.toHaveProperty('upstreamModel')
+      expect(failedTask).not.toHaveProperty('routeAttempts')
+      expect(failedTask).not.toHaveProperty('routeHealthSnapshot')
+      expect(failedTask).not.toHaveProperty('routeSelectionSnapshot')
+  })
+
+  it('does not deduct balance or record usage when gallery gateway generation fails', async () => {
+    vi.mocked(isServerImageGatewayEnabled).mockReturnValue(true)
+    const gatewayError = Object.assign(new Error('网关线路繁忙'), {
+      requestId: 'imggw-failure-no-charge',
+      failureKind: 'upstream_server_error',
+      routeHealth: {
+        requestId: 'imggw-failure-no-charge',
+        modelSku: 'gpt-image-2-fast',
+        capturedAt: 1000,
+        routes: [
+          {
+            routeId: 'route-2',
+            upstreamModel: 'gpt-image-2',
+            status: 'failing',
+            inFlight: 0,
+            successCount: 0,
+            failureCount: 2,
+            consecutiveFailures: 2,
+            lastFailureKind: 'network',
+          },
+        ],
+      },
+      attempts: [
+        {
+          routeId: 'route-2',
+          upstreamModel: 'gpt-image-2',
+          success: false,
+          latencyMs: 1200,
+          errorMessage: 'fetch failed',
+          failureKind: 'network',
+        },
+      ],
+    })
+    vi.mocked(callServerImageGateway).mockRejectedValueOnce(gatewayError)
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, apiKey: '' },
+      selectedModelSkuId: 'gpt-image-2-fast',
+      account: { userId: 'test-user', isLoggedIn: true, displayName: 'Tester', balance: 20, planName: '体验版' },
+      billing: {
+        lastRechargeAmount: null,
+        lastRechargeStatus: 'idle',
+        lastRechargeAt: null,
+        pendingRechargeAmount: 30,
+        selectedPaymentMethod: 'wechat',
+        rechargeFlowStatus: 'idle',
+        rechargeReturnView: 'plan',
+        rechargeHistory: [],
+        usageHistory: [],
+      },
+    })
+
+    await submitTask()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const state = useStore.getState()
+    expect(state.tasks[0]).toMatchObject({
+      status: 'error',
+      gatewayFailureKind: 'upstream_server_error',
+    })
+    expect(state.detailTaskId).toBe(state.tasks[0].id)
+    expect(state.tasks[0].error).toContain('请求编号：imggw-failure-no-charge')
+    expect(state.account.balance).toBe(20)
+    expect(state.billing.usageHistory).toHaveLength(0)
+  })
+
+  it('keeps raw image urls and avoids local charge when gateway download fails after upstream output', async () => {
+    vi.mocked(isServerImageGatewayEnabled).mockReturnValue(true)
+    const rawUrl = 'https://cdn.example.test/generated.png'
+    const gatewayError = Object.assign(new Error('图片链接下载失败：HTTP 403'), {
+      requestId: 'imggw-url-download-failed',
+      failureKind: 'network',
+      rawImageUrls: [rawUrl],
+      attempts: [
+        {
+          routeId: 'route-1',
+          upstreamModel: 'gpt-image-2',
+          success: false,
+          latencyMs: 1500,
+          errorMessage: '图片链接下载失败：HTTP 403',
+          failureKind: 'network',
+        },
+      ],
+    })
+    vi.mocked(callServerImageGateway).mockRejectedValueOnce(gatewayError)
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, apiKey: '' },
+      selectedModelSkuId: 'gpt-image-2-fast',
+      account: { userId: 'test-user', isLoggedIn: true, displayName: 'Tester', balance: 20, planName: '体验版' },
+      billing: {
+        lastRechargeAmount: null,
+        lastRechargeStatus: 'idle',
+        lastRechargeAt: null,
+        pendingRechargeAmount: 30,
+        selectedPaymentMethod: 'wechat',
+        rechargeFlowStatus: 'idle',
+        rechargeReturnView: 'plan',
+        rechargeHistory: [],
+        usageHistory: [],
+      },
+    })
+
+    await submitTask()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const state = useStore.getState()
+    expect(state.tasks[0]).toMatchObject({
+      status: 'error',
+      rawImageUrls: [rawUrl],
+      gatewayFailureKind: 'network',
+    })
+    expect(state.detailTaskId).toBe(state.tasks[0].id)
+    expect(state.tasks[0].error).toContain('请求编号：imggw-url-download-failed')
+    expect(state.account.balance).toBe(20)
+    expect(state.billing.usageHistory).toHaveLength(0)
+  })
+
+  it('keeps route diagnostics out of task records after server gateway success', async () => {
+    vi.mocked(isServerImageGatewayEnabled).mockReturnValue(true)
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, apiKey: '' },
+      selectedModelSkuId: 'gpt-image-2-fast',
+    })
+
+    await submitTask()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const doneTask = useStore.getState().tasks[0]
+    expect(doneTask.status).toBe('done')
+    expect(doneTask.modelSku).toBe('gpt-image-2-fast')
+    expect(doneTask).not.toHaveProperty('routeId')
+    expect(doneTask).not.toHaveProperty('upstreamModel')
+    expect(doneTask).not.toHaveProperty('routeAttempts')
+    expect(doneTask).not.toHaveProperty('routeHealthSnapshot')
+    expect(doneTask).not.toHaveProperty('routeSelectionSnapshot')
+  })
+
+  it('records local usage and deducts balance after gallery generation succeeds', async () => {
+    await submitTask()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const state = useStore.getState()
+    expect(state.billing.usageHistory).toHaveLength(1)
+    expect(state.billing.usageHistory[0]).toMatchObject({
+      sourceMode: 'gallery',
+      outputCount: 1,
+      amount: 2,
+      quality: 'medium',
+    })
+    expect(state.account.balance).toBe(18)
+  })
+
+  it('uses resolution tier billing for gallery generation', async () => {
+    useStore.setState({
+      params: { ...DEFAULT_PARAMS, size: '2560x1440', quality: 'high', n: 1 },
+    })
+
+    await submitTask()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const state = useStore.getState()
+    expect(state.billing.usageHistory[0]).toMatchObject({
+      sourceMode: 'gallery',
+      outputCount: 1,
+      amount: 4,
+      quality: 'high',
+    })
+    expect(state.account.balance).toBe(16)
   })
 
   it('preserves selected image mentions when replacing a mask target with an equivalent image id', () => {
@@ -443,6 +861,51 @@ describe('agent conversation persistence', () => {
     const serializedMigrated = JSON.stringify(migrated)
     expect(serializedMigrated).not.toContain('legacy-base64')
     expect(serializedMigrated).toContain('image_generation_call')
+  })
+
+  it('forces persisted app mode back to gallery during migration', () => {
+    const migrated = migratePersistedState({
+      settings: { ...DEFAULT_SETTINGS },
+      appMode: 'agent',
+    }) as { appMode?: string }
+
+    expect(migrated.appMode).toBe('gallery')
+  })
+
+  it('upgrades persisted legacy low-quality defaults during migration', () => {
+    const migrated = migratePersistedState({
+      settings: { ...DEFAULT_SETTINGS },
+      params: {
+        ...DEFAULT_PARAMS,
+        quality: 'low',
+        output_format: 'jpeg',
+        output_compression: 60,
+      },
+    }) as { params?: typeof DEFAULT_PARAMS }
+
+    expect(migrated.params).toMatchObject({
+      quality: 'medium',
+      output_format: 'jpeg',
+      output_compression: 90,
+    })
+  })
+
+  it('preserves explicit persisted low-quality choices during migration', () => {
+    const migrated = migratePersistedState({
+      settings: { ...DEFAULT_SETTINGS },
+      params: {
+        ...DEFAULT_PARAMS,
+        quality: 'low',
+        output_format: 'png',
+        output_compression: null,
+      },
+    }) as { params?: typeof DEFAULT_PARAMS }
+
+    expect(migrated.params).toMatchObject({
+      quality: 'low',
+      output_format: 'png',
+      output_compression: null,
+    })
   })
 })
 
@@ -1370,6 +1833,18 @@ describe('agent batch reference resolution', () => {
         profiles: [responsesProfile],
         activeProfileId: responsesProfile.id,
       }),
+      account: { userId: 'test-user', isLoggedIn: true, displayName: 'Tester', balance: 20, planName: '体验版' },
+      billing: {
+        lastRechargeAmount: null,
+        lastRechargeStatus: 'idle',
+        lastRechargeAt: null,
+        pendingRechargeAmount: 20,
+        selectedPaymentMethod: 'wechat',
+        rechargeFlowStatus: 'idle',
+        rechargeReturnView: 'plan',
+        rechargeHistory: [],
+        usageHistory: [],
+      },
       prompt: '继续生成',
       inputImages: [],
       maskDraft: null,
@@ -1514,6 +1989,574 @@ describe('agent batch reference resolution', () => {
     expect(batchArgs.referenceImageDataUrls).toEqual([imageA.dataUrl])
     expect(batchArgs.referenceIds).toEqual(['round-3-reference-1'])
   })
+
+  it('records local usage and deducts balance after agent generation succeeds', async () => {
+    vi.mocked(callAgentResponsesApi).mockReset()
+    vi.mocked(callAgentResponsesApi).mockResolvedValueOnce({
+      text: '完成',
+      images: [{
+        dataUrl: 'data:image/png;base64,agent-output',
+        actualParams: { size: '2560x1440', quality: 'high' },
+        action: 'generate',
+      }],
+      outputItems: [{ type: 'message', content: [{ type: 'output_text', text: '完成' }] }],
+      responseId: 'response-usage-1',
+    })
+
+    await submitAgentMessage()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const state = useStore.getState()
+    expect(state.billing.usageHistory).toHaveLength(1)
+    expect(state.billing.usageHistory[0]).toMatchObject({
+      sourceMode: 'agent',
+      outputCount: 1,
+      amount: 4,
+      quality: 'high',
+    })
+    expect(state.account.balance).toBe(16)
+  })
+})
+
+describe('billing point estimation', () => {
+  it('estimates points from resolution tier, quality, and output count', () => {
+    expect(estimateBillingPoints({ size: '1280x720', quality: 'auto', n: 1 })).toMatchObject({
+      unitPoints: 1,
+      outputCount: 1,
+      totalPoints: 1,
+      sizeTier: '1K',
+    })
+    expect(estimateBillingPoints({ size: '2560x1440', quality: 'medium', n: 2 })).toMatchObject({
+      unitPoints: 3,
+      outputCount: 2,
+      totalPoints: 6,
+      sizeTier: '2K',
+    })
+    expect(estimateBillingPoints({ size: '3840x2160', quality: 'high', n: 3 })).toMatchObject({
+      unitPoints: 6,
+      outputCount: 3,
+      totalPoints: 18,
+      sizeTier: '4K',
+    })
+  })
+})
+
+describe('workbench return context', () => {
+  beforeEach(() => {
+    useStore.setState({
+      galleryView: 'workbench',
+      workbenchReturnContext: null,
+      authReturnContext: null,
+      authRedirectView: 'workbench',
+      authViewMode: 'login',
+      account: { userId: null, isLoggedIn: false, displayName: '访客', balance: 0, planName: '未开通' },
+      showToast: vi.fn(),
+      setConfirmDialog: vi.fn(),
+    })
+  })
+
+  it('sets context when returning from library to workbench', () => {
+    useStore.setState({ galleryView: 'library' })
+
+    useStore.getState().setGalleryView('workbench')
+
+    expect(useStore.getState().workbenchReturnContext).toMatchObject({
+      source: 'library',
+    })
+  })
+
+  it('restores local account balance and billing ledger after logout and login', () => {
+    useStore.setState({
+      galleryView: 'auth',
+      authRedirectView: 'workbench',
+      accountProfiles: {},
+      billing: {
+        lastRechargeAmount: null,
+        lastRechargeStatus: 'idle',
+        lastRechargeAt: null,
+        lastRechargeErrorMessage: null,
+        pendingRechargeAmount: 30,
+        selectedPaymentMethod: 'wechat',
+        rechargeFlowStatus: 'idle',
+        rechargeReturnView: 'plan',
+        rechargeHistory: [],
+        usageHistory: [],
+      },
+    })
+
+    useStore.getState().completeMockAuth({ displayName: 'Yeffei' })
+    useStore.setState((state) => ({
+      account: { ...state.account, balance: 60 },
+      billing: {
+        lastRechargeAmount: 60,
+        lastRechargeStatus: 'success',
+        lastRechargeAt: 1000,
+        lastRechargeErrorMessage: null,
+        pendingRechargeAmount: 30,
+        selectedPaymentMethod: 'wechat',
+        rechargeFlowStatus: 'idle',
+        rechargeReturnView: 'plan',
+        rechargeHistory: [{
+          id: 'recharge-a',
+          amount: 60,
+          status: 'success',
+          paymentMethod: 'wechat',
+          channel: 'recharge_code',
+          code: 'SST-60-TEST',
+          createdAt: 1000,
+          balanceAfter: 60,
+        }],
+        usageHistory: [],
+      },
+    }))
+    useStore.getState().logout()
+    useStore.setState({ galleryView: 'auth', authRedirectView: 'workbench' })
+    useStore.getState().completeMockAuth({ displayName: 'Yeffei' })
+
+    const state = useStore.getState()
+    expect(state.account).toMatchObject({
+      userId: 'mock-yeffei',
+      isLoggedIn: true,
+      displayName: 'Yeffei',
+      balance: 60,
+    })
+    expect(state.billing.rechargeHistory).toHaveLength(1)
+    expect(state.billing.rechargeHistory[0]).toMatchObject({
+      id: 'recharge-a',
+      balanceAfter: 60,
+    })
+  })
+
+  it('starts a new account with fresh local billing instead of inheriting the previous account ledger', () => {
+    useStore.setState({
+      galleryView: 'auth',
+      authRedirectView: 'workbench',
+      accountProfiles: {},
+      billing: {
+        lastRechargeAmount: null,
+        lastRechargeStatus: 'idle',
+        lastRechargeAt: null,
+        lastRechargeErrorMessage: null,
+        pendingRechargeAmount: 30,
+        selectedPaymentMethod: 'wechat',
+        rechargeFlowStatus: 'idle',
+        rechargeReturnView: 'plan',
+        rechargeHistory: [],
+        usageHistory: [],
+      },
+    })
+
+    useStore.getState().completeMockAuth({ userId: 'user-a', displayName: 'Account A' })
+    useStore.setState((state) => ({
+      account: { ...state.account, balance: 30 },
+      billing: {
+        ...state.billing,
+        lastRechargeAmount: 30,
+        lastRechargeStatus: 'success',
+        lastRechargeAt: 1000,
+        rechargeHistory: [{
+          id: 'recharge-a',
+          amount: 30,
+          status: 'success',
+          paymentMethod: 'wechat',
+          channel: 'recharge_code',
+          code: 'SST-30-A',
+          createdAt: 1000,
+          balanceAfter: 30,
+        }],
+      },
+    }))
+    useStore.getState().logout()
+
+    useStore.setState({ galleryView: 'auth', authRedirectView: 'workbench' })
+    useStore.getState().completeMockAuth({ userId: 'user-b', displayName: 'Account B' })
+
+    let state = useStore.getState()
+    expect(state.account).toMatchObject({
+      userId: 'user-b',
+      balance: 0,
+    })
+    expect(state.billing.rechargeHistory).toHaveLength(0)
+    expect(state.accountProfiles['user-a']?.billing.rechargeHistory[0]).toMatchObject({
+      id: 'recharge-a',
+      balanceAfter: 30,
+    })
+
+    useStore.getState().logout()
+    useStore.setState({ galleryView: 'auth', authRedirectView: 'workbench' })
+    useStore.getState().completeMockAuth({ userId: 'user-a', displayName: 'Account A' })
+
+    state = useStore.getState()
+    expect(state.account).toMatchObject({
+      userId: 'user-a',
+      balance: 30,
+    })
+    expect(state.billing.rechargeHistory).toHaveLength(1)
+    expect(state.billing.rechargeHistory[0]).toMatchObject({
+      id: 'recharge-a',
+      balanceAfter: 30,
+    })
+  })
+
+  it('keeps backend account billing profiles separate on the same device', () => {
+    useStore.setState({
+      galleryView: 'auth',
+      authRedirectView: 'workbench',
+      accountProfiles: {},
+      billing: {
+        lastRechargeAmount: null,
+        lastRechargeStatus: 'idle',
+        lastRechargeAt: null,
+        lastRechargeErrorMessage: null,
+        pendingRechargeAmount: 30,
+        selectedPaymentMethod: 'wechat',
+        rechargeFlowStatus: 'idle',
+        rechargeReturnView: 'plan',
+        rechargeHistory: [],
+        usageHistory: [],
+      },
+    })
+
+    useStore.getState().completeAuthSession({
+      token: 'token-a',
+      account: { userId: 'backend-user-a', email: 'a@example.com', displayName: 'Backend A', balance: 0 },
+    })
+    useStore.setState((state) => ({
+      account: { ...state.account, balance: 30 },
+      billing: {
+        ...state.billing,
+        lastRechargeAmount: 30,
+        lastRechargeStatus: 'success',
+        lastRechargeAt: 1000,
+        rechargeHistory: [{
+          id: 'backend-recharge-a',
+          amount: 30,
+          status: 'success',
+          paymentMethod: 'wechat',
+          channel: 'recharge_code',
+          code: 'SST-30-A',
+          createdAt: 1000,
+          balanceAfter: 30,
+        }],
+      },
+    }))
+
+    useStore.getState().completeAuthSession({
+      token: 'token-b',
+      account: { userId: 'backend-user-b', email: 'b@example.com', displayName: 'Backend B', balance: 0 },
+    })
+
+    let state = useStore.getState()
+    expect(state.account).toMatchObject({
+      userId: 'backend-user-b',
+      balance: 0,
+    })
+    expect(state.billing.rechargeHistory).toHaveLength(0)
+    expect(state.accountProfiles['backend-user-a']?.billing.rechargeHistory[0]).toMatchObject({
+      id: 'backend-recharge-a',
+      balanceAfter: 30,
+    })
+
+    useStore.getState().completeAuthSession({
+      token: 'token-a-next',
+      account: { userId: 'backend-user-a', email: 'a@example.com', displayName: 'Backend A', balance: 30 },
+    })
+
+    state = useStore.getState()
+    expect(state.account).toMatchObject({
+      userId: 'backend-user-a',
+      balance: 30,
+    })
+    expect(state.billing.rechargeHistory).toHaveLength(1)
+    expect(state.billing.rechargeHistory[0]).toMatchObject({
+      id: 'backend-recharge-a',
+      balanceAfter: 30,
+    })
+  })
+
+  it('switches local billing and transient UI state when backend account snapshot changes', () => {
+    useStore.setState({
+      accountProfiles: {},
+      account: { userId: 'backend-user-a', email: 'a@example.com', isLoggedIn: true, displayName: 'Backend A', balance: 30, planName: '个人标准版' },
+      billing: {
+        lastRechargeAmount: 30,
+        lastRechargeStatus: 'success',
+        lastRechargeAt: 1000,
+        lastRechargeErrorMessage: null,
+        pendingRechargeAmount: 30,
+        selectedPaymentMethod: 'wechat',
+        rechargeFlowStatus: 'idle',
+        rechargeReturnView: 'plan',
+        rechargeHistory: [{
+          id: 'backend-recharge-a',
+          amount: 30,
+          status: 'success',
+          paymentMethod: 'wechat',
+          channel: 'recharge_code',
+          code: 'SST-30-A',
+          createdAt: 1000,
+          balanceAfter: 30,
+        }],
+        usageHistory: [],
+      },
+      detailTaskId: 'task-a',
+      lightboxImageId: imageA.id,
+      lightboxImageList: [imageA.id],
+      selectedTaskIds: ['task-a'],
+    })
+
+    useStore.getState().setAccountState({
+      userId: 'backend-user-b',
+      email: 'b@example.com',
+      isLoggedIn: true,
+      displayName: 'Backend B',
+      balance: 0,
+      planName: '个人标准版',
+    })
+
+    const state = useStore.getState()
+    expect(state.account).toMatchObject({
+      userId: 'backend-user-b',
+      email: 'b@example.com',
+      balance: 0,
+    })
+    expect(state.billing.rechargeHistory).toHaveLength(0)
+    expect(state.accountProfiles['backend-user-a']?.billing.rechargeHistory[0]).toMatchObject({
+      id: 'backend-recharge-a',
+      balanceAfter: 30,
+    })
+    expect(state.detailTaskId).toBeNull()
+    expect(state.lightboxImageId).toBeNull()
+    expect(state.lightboxImageList).toEqual([])
+    expect(state.selectedTaskIds).toEqual([])
+  })
+
+  it('stamps submitted tasks with the current account owner and filters task visibility by account', async () => {
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key' },
+      account: { userId: 'user-owner', isLoggedIn: true, displayName: 'Owner', balance: 20, planName: '体验版' },
+      prompt: 'owner prompt',
+      inputImages: [],
+      maskDraft: null,
+      params: { ...DEFAULT_PARAMS },
+      tasks: [],
+      showToast: vi.fn(),
+    })
+
+    await submitTask()
+
+    const ownedTask = useStore.getState().tasks[0]
+    expect(ownedTask.ownerUserId).toBe('user-owner')
+    expect(isTaskVisibleForAccount(ownedTask, { userId: 'user-owner', isLoggedIn: true })).toBe(true)
+    expect(isTaskVisibleForAccount(ownedTask, { userId: 'other-user', isLoggedIn: true })).toBe(false)
+    expect(isTaskVisibleForAccount(ownedTask, { userId: null, isLoggedIn: false })).toBe(false)
+    expect(isTaskVisibleForAccount(task({ ownerUserId: null }), { userId: null, isLoggedIn: false })).toBe(true)
+  })
+
+  it('keeps same-device backend account library and favorites visibility separate', () => {
+    const accountA = { userId: 'backend-user-a', isLoggedIn: true, displayName: 'Backend A', balance: 0, planName: '个人标准版' }
+    const accountB = { userId: 'backend-user-b', isLoggedIn: true, displayName: 'Backend B', balance: 0, planName: '个人标准版' }
+    const accountC = { userId: 'backend-user-c', isLoggedIn: true, displayName: 'Backend C', balance: 0, planName: '个人标准版' }
+    const tasks = [
+      task({ id: 'task-a-favorite', ownerUserId: 'backend-user-a', isFavorite: true, outputImages: [imageA.id] }),
+      task({ id: 'task-a-plain', ownerUserId: 'backend-user-a', isFavorite: false, outputImages: [imageB.id] }),
+      task({ id: 'task-b-favorite', ownerUserId: 'backend-user-b', isFavorite: true, outputImages: [imageB.id] }),
+      task({ id: 'task-guest-legacy', ownerUserId: null, isFavorite: true, outputImages: [imageA.id] }),
+    ]
+
+    const visibleForA = tasks.filter((item) => isTaskVisibleForAccount(item, accountA))
+    const visibleForB = tasks.filter((item) => isTaskVisibleForAccount(item, accountB))
+    const visibleForC = tasks.filter((item) => isTaskVisibleForAccount(item, accountC))
+    const visibleForGuest = tasks.filter((item) => isTaskVisibleForAccount(item, { userId: null, isLoggedIn: false }))
+
+    expect(visibleForA.map((item) => item.id)).toEqual(['task-a-favorite', 'task-a-plain'])
+    expect(visibleForA.filter((item) => item.isFavorite).map((item) => item.id)).toEqual(['task-a-favorite'])
+    expect(visibleForB.map((item) => item.id)).toEqual(['task-b-favorite'])
+    expect(visibleForB.filter((item) => item.isFavorite).map((item) => item.id)).toEqual(['task-b-favorite'])
+    expect(visibleForC).toHaveLength(0)
+    expect(visibleForGuest.map((item) => item.id)).toEqual(['task-guest-legacy'])
+  })
+
+  it('does not set auth context when manually returning from auth to workbench', () => {
+    useStore.setState({ galleryView: 'auth' })
+
+    useStore.getState().setGalleryView('workbench')
+
+    expect(useStore.getState().workbenchReturnContext).toBeNull()
+  })
+
+  it('sets auth context when mock auth redirects back to workbench', () => {
+    useStore.setState({
+      galleryView: 'auth',
+      authRedirectView: 'workbench',
+    })
+
+    useStore.getState().completeMockAuth({ displayName: 'Tester', balance: 12 })
+
+    expect(useStore.getState().galleryView).toBe('workbench')
+    expect(useStore.getState().account.userId).toBe('mock-tester')
+    expect(useStore.getState().workbenchReturnContext).toMatchObject({
+      source: 'auth',
+    })
+  })
+
+  it('clears context when opening auth view from workbench', () => {
+    useStore.setState({
+      galleryView: 'workbench',
+      workbenchReturnContext: { source: 'library', timestamp: 1 },
+    })
+
+    useStore.getState().openAuthView({ mode: 'login', redirectTo: 'workbench' })
+
+    expect(useStore.getState().galleryView).toBe('auth')
+    expect(useStore.getState().workbenchReturnContext).toBeNull()
+  })
+
+  it('sets auth return context when mock auth redirects back to library', () => {
+    useStore.setState({
+      galleryView: 'auth',
+      authRedirectView: 'library',
+    })
+
+    useStore.getState().completeMockAuth({ displayName: 'Tester', balance: 12 })
+
+    expect(useStore.getState().galleryView).toBe('library')
+    expect(useStore.getState().account.userId).toBe('mock-tester')
+    expect(useStore.getState().workbenchReturnContext).toBeNull()
+    expect(useStore.getState().authReturnContext).toMatchObject({
+      source: 'library',
+    })
+  })
+
+  it('does not set auth return context when manually returning from auth to library', () => {
+    useStore.setState({ galleryView: 'auth' })
+
+    useStore.getState().setGalleryView('library')
+
+    expect(useStore.getState().authReturnContext).toBeNull()
+  })
+
+  it('clears auth return context when leaving the redirected page', () => {
+    useStore.setState({
+      galleryView: 'library',
+      authReturnContext: { source: 'library', timestamp: 1 },
+    })
+
+    useStore.getState().setGalleryView('workbench')
+
+    expect(useStore.getState().authReturnContext).toBeNull()
+  })
+
+  it('dismisses auth return context independently', () => {
+    useStore.setState({
+      galleryView: 'promptLibrary',
+      authReturnContext: { source: 'promptLibrary', timestamp: 1 },
+    })
+
+    useStore.getState().dismissAuthReturnContext()
+
+    expect(useStore.getState().authReturnContext).toBeNull()
+  })
+})
+
+describe('recharge payment method guard', () => {
+  beforeEach(() => {
+    vi.mocked(redeemRechargeCodeWithApi).mockReset()
+    useStore.setState({
+      account: { userId: 'test-user', isLoggedIn: true, displayName: 'Tester', balance: 20, planName: '体验版' },
+      billing: {
+        lastRechargeAmount: null,
+        lastRechargeStatus: 'idle',
+        lastRechargeAt: null,
+        lastRechargeErrorMessage: null,
+        pendingRechargeAmount: 30,
+        selectedPaymentMethod: 'wechat',
+        rechargeFlowStatus: 'idle',
+        rechargeReturnView: 'plan',
+        rechargeHistory: [],
+        usageHistory: [],
+      },
+      showToast: vi.fn(),
+      setConfirmDialog: vi.fn(),
+    })
+  })
+
+  it('keeps the current available payment method when trying to switch to card', () => {
+    useStore.getState().setSelectedPaymentMethod('alipay')
+    useStore.getState().setSelectedPaymentMethod('card')
+
+    expect(useStore.getState().billing.selectedPaymentMethod).toBe('alipay')
+  })
+
+  it('falls back to wechat when migrating persisted billing state with card selected', () => {
+    const migrated = migratePersistedState({
+      settings: { ...DEFAULT_SETTINGS },
+      billing: {
+        selectedPaymentMethod: 'card',
+      },
+    }) as { billing?: { selectedPaymentMethod?: string } }
+
+    expect(migrated.billing?.selectedPaymentMethod).toBe('wechat')
+  })
+
+  it('stores backend recharge-code failure message without changing balance', async () => {
+    vi.mocked(redeemRechargeCodeWithApi).mockRejectedValueOnce(new RechargeCodeApiError('该余额码已被兑换', 'code_already_redeemed'))
+
+    await useStore.getState().redeemRechargeCode('SST-30-USED')
+
+    const state = useStore.getState()
+    expect(state.account.balance).toBe(20)
+    expect(state.billing.rechargeFlowStatus).toBe('failed')
+    expect(state.billing.lastRechargeStatus).toBe('failed')
+    expect(state.billing.lastRechargeErrorMessage).toBe('该余额码已被兑换')
+    expect(state.billing.rechargeHistory[0]).toMatchObject({
+      status: 'failed',
+      channel: 'recharge_code',
+      code: 'SST-30-USED',
+      balanceAfter: 20,
+    })
+    expect(state.showToast).toHaveBeenCalledWith('该余额码已被兑换', 'error')
+  })
+})
+
+describe('retry task', () => {
+  beforeEach(() => {
+    vi.mocked(isServerImageGatewayEnabled).mockReturnValue(false)
+    vi.mocked(isClientImageGatewayFallbackEnabled).mockReturnValue(false)
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key' },
+      account: { userId: 'test-user', isLoggedIn: true, displayName: 'Tester', balance: 20, planName: '体验版' },
+      billing: {
+        lastRechargeAmount: null,
+        lastRechargeStatus: 'idle',
+        lastRechargeAt: null,
+        pendingRechargeAmount: 30,
+        selectedPaymentMethod: 'wechat',
+        rechargeFlowStatus: 'idle',
+        rechargeReturnView: 'plan',
+        rechargeHistory: [],
+        usageHistory: [],
+      },
+      tasks: [],
+      showToast: vi.fn(),
+      setConfirmDialog: vi.fn(),
+    })
+  })
+
+  it('keeps model sku when retrying a gateway task', async () => {
+    await retryTask(task({
+      modelSku: 'gpt-image-2-quality',
+      params: { ...DEFAULT_PARAMS, quality: 'low', size: '2560x1440', n: 3 },
+    }))
+
+    const retriedTask = useStore.getState().tasks[0]
+    expect(retriedTask.modelSku).toBe('gpt-image-2-quality')
+    expect(retriedTask.params).toMatchObject({
+      quality: 'high',
+      size: '2560x1440',
+      n: 1,
+    })
+  })
 })
 
 describe('agent assistant regeneration', () => {
@@ -1527,6 +2570,7 @@ describe('agent assistant regeneration', () => {
         activeProfileId: responsesProfile.id,
         alwaysShowRetryButton: false,
       }),
+      account: { userId: 'test-user', isLoggedIn: true, displayName: 'Tester', balance: 20, planName: '体验版' },
       params: { ...DEFAULT_PARAMS, n: 4 },
       agentEditingRoundId: 'round-a',
       agentConversations: [
@@ -1641,6 +2685,7 @@ describe('reused task API profile', () => {
         activeProfileId: openaiProfile.id,
         reuseTaskApiProfileTemporarily: true,
       }),
+      account: { userId: 'test-user', isLoggedIn: true, displayName: 'Tester', balance: 20, planName: '体验版' },
       prompt: '',
       inputImages: [],
       maskDraft: null,
@@ -1683,7 +2728,7 @@ describe('reused task API profile', () => {
     expect(state.settings.activeProfileId).toBe(openaiProfile.id)
     expect(state.reusedTaskApiProfileId).toBe(falProfile.id)
     expect(state.params).toMatchObject({ n: 4, size: '1360x1024', quality: 'high' })
-    expect(state.showToast).toHaveBeenCalledWith('已临时复用该任务的 API 配置「fal 配置」', 'success')
+    expect(state.showToast).toHaveBeenCalledWith('已临时使用当前生成服务', 'success')
   })
 
   it('keeps selected image mentions when reusing a task with different current input images', async () => {
@@ -1723,6 +2768,21 @@ describe('reused task API profile', () => {
     expect(state.reusedTaskApiProfileMissing).toBe(false)
   })
 
+  it('restores model sku when reusing a gateway task', async () => {
+    await reuseConfig(task({
+      modelSku: 'gpt-image-2-quality',
+      params: { ...DEFAULT_PARAMS, quality: 'low', size: '2560x1440', n: 3 },
+    }))
+
+    const state = useStore.getState()
+    expect(state.selectedModelSkuId).toBe('gpt-image-2-quality')
+    expect(state.params).toMatchObject({
+      quality: 'high',
+      size: '2560x1440',
+      n: 1,
+    })
+  })
+
   it('normalizes reused params to the current API profile when temporary reuse is disabled', async () => {
     useStore.setState({
       settings: normalizeSettings({
@@ -1749,11 +2809,12 @@ describe('reused task API profile', () => {
     const state = useStore.getState()
     expect(state.tasks).toEqual([])
     expect(state.setConfirmDialog).toHaveBeenCalledWith(expect.objectContaining({
-      title: '找不到 API 配置',
-      message: '找不到复用任务所使用的 API 配置「未知配置」，要使用当前的 API 配置「默认」提交任务吗？',
-      confirmText: '使用当前配置提交',
+      title: '生成配置不可用',
+      message: '这条历史任务使用的旧生成配置「未知配置」当前不可用。要改用当前生成服务提交吗？',
+      confirmText: '使用当前生成服务',
       cancelText: '放弃提交',
     }))
     expect(state.showSettings).toBe(false)
   })
 })
+

@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import type { AppMode } from '../types'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
+import { useStore } from '../store'
+import { GUEST_HELP_INTRO_COPY } from '../lib/accessCopy'
 
 interface HelpModalProps {
-  appMode: AppMode
   onClose: () => void
 }
 
@@ -19,10 +19,10 @@ function useIsMobile() {
   return isMobile
 }
 
-export default function HelpModal({ appMode, onClose }: HelpModalProps) {
+export default function HelpModal({ onClose }: HelpModalProps) {
   const isMobile = useIsMobile()
+  const account = useStore((s) => s.account)
   const modalRef = useRef<HTMLDivElement>(null)
-  const isAgentMode = appMode === 'agent'
   useCloseOnEscape(true, onClose)
   usePreventBackgroundScroll(true, modalRef)
 
@@ -45,7 +45,7 @@ export default function HelpModal({ appMode, onClose }: HelpModalProps) {
               <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
               <path d="M12 17h.01" />
             </svg>
-            操作指南
+            使用说明
           </h3>
           <div className="flex items-center gap-3">
             <button
@@ -61,22 +61,13 @@ export default function HelpModal({ appMode, onClose }: HelpModalProps) {
         </div>
 
         <div className="flex-1 overflow-y-auto overscroll-contain mb-6 text-sm text-gray-600 dark:text-gray-300 space-y-6 custom-scrollbar pr-2">
-          {isAgentMode ? (
-            <>
-              <section>
-                <div className="space-y-4">
-                  <ul className="list-disc pl-4 space-y-2">
-                    <li>这是进阶用法，适合连续迭代、追改和多轮比较；日常单次生图更建议直接使用作品流。</li>
-                    <li>需要使用 Responses API 配置。</li>
-                    <li>如需连续创作搜索互联网或读取 URL 内容，可在设置里的“连续创作”中开启“网络搜索”。</li>
-                    <li>输入 <strong className="text-blue-500 dark:text-blue-400 font-medium">@</strong> 可引用参考图或前面轮次生成的图片；连续创作也会自行参考上下文中的图片。</li>
-                    <li>编辑某轮消息重新发送，或重新生成某轮消息，会产生可切换的分支。</li>
-                    <li>生成的图片会同步到作品流；删除对话默认不会删除作品流中的记录。</li>
-                  </ul>
-                </div>
-              </section>
-            </>
-          ) : isMobile ? (
+          {!account.isLoggedIn && (
+            <section>
+              <h4 className="mb-3 text-sm font-medium text-gray-800 dark:text-gray-200">访客说明</h4>
+              <p>{GUEST_HELP_INTRO_COPY}</p>
+            </section>
+          )}
+          {isMobile ? (
             <>
               <section>
                 <h4 className="mb-4 text-sm font-medium text-gray-800 dark:text-gray-200 flex items-center gap-1.5">
@@ -86,7 +77,7 @@ export default function HelpModal({ appMode, onClose }: HelpModalProps) {
                   多选记录
                 </h4>
                 <div className="space-y-4">
-                  <p>在历史记录卡片上<strong className="text-blue-500 dark:text-blue-400 font-medium">左右滑动</strong>即可选中或取消选中该卡片。</p>
+                  <p>{account.isLoggedIn ? '在历史记录卡片上' : '登录后在历史记录卡片上'}<strong className="text-blue-500 dark:text-blue-400 font-medium">左右滑动</strong>即可选中或取消选中该卡片。</p>
                 </div>
               </section>
               <section>
@@ -97,7 +88,7 @@ export default function HelpModal({ appMode, onClose }: HelpModalProps) {
                   批量操作
                 </h4>
                 <div className="space-y-4">
-                  <p>选中一条或多条记录后，页面底部会出现操作栏，支持<strong className="text-gray-500 dark:text-gray-400 font-medium">取消选择</strong>、<strong className="text-blue-500 dark:text-blue-400 font-medium">全选当前可见记录</strong>、<strong className="text-yellow-500 dark:text-yellow-400 font-medium">批量收藏</strong>、<strong className="text-green-500 dark:text-green-400 font-medium">批量下载</strong>，和<strong className="text-red-500 dark:text-red-400 font-medium">批量删除</strong>。</p>
+                  <p>{account.isLoggedIn ? '选中一条或多条记录后，页面底部会出现操作栏，支持' : '登录后选中一条或多条记录，页面底部会出现操作栏，支持'}<strong className="text-gray-500 dark:text-gray-400 font-medium">取消选择</strong>、<strong className="text-blue-500 dark:text-blue-400 font-medium">全选当前可见记录</strong>、<strong className="text-yellow-500 dark:text-yellow-400 font-medium">批量收藏</strong>、<strong className="text-green-500 dark:text-green-400 font-medium">批量下载</strong>，和<strong className="text-red-500 dark:text-red-400 font-medium">批量删除</strong>。</p>
                 </div>
               </section>
             </>
@@ -112,7 +103,7 @@ export default function HelpModal({ appMode, onClose }: HelpModalProps) {
                 </h4>
                 <div className="space-y-4">
                   <ul className="list-disc pl-4 space-y-2">
-                    <li>使用鼠标在空白处<strong className="text-blue-500 dark:text-blue-400 font-medium">拖拽框选</strong>。</li>
+                    <li>{account.isLoggedIn ? '使用鼠标在空白处' : '登录后可使用鼠标在空白处'}<strong className="text-blue-500 dark:text-blue-400 font-medium">拖拽框选</strong>。</li>
                     <li>按住 <kbd className="px-1.5 py-0.5 rounded-md bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-xs font-sans">Ctrl</kbd> 或 <kbd className="px-1.5 py-0.5 rounded-md bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-xs font-sans">⌘</kbd> 并点击卡片，可添加或移除单项。</li>
                     <li>再次框选已选中的卡片会将其取消选中。</li>
                     <li>点击卡片外任意空白处可取消所有选择。</li>
@@ -127,7 +118,7 @@ export default function HelpModal({ appMode, onClose }: HelpModalProps) {
                   批量操作
                 </h4>
                 <div className="space-y-4">
-                  <p>选中一条或多条记录后，页面底部会出现操作栏，支持<strong className="text-gray-500 dark:text-gray-400 font-medium">取消选择</strong>、<strong className="text-blue-500 dark:text-blue-400 font-medium">全选当前可见记录</strong>、<strong className="text-yellow-500 dark:text-yellow-400 font-medium">批量收藏</strong>、<strong className="text-green-500 dark:text-green-400 font-medium">批量下载</strong>，和<strong className="text-red-500 dark:text-red-400 font-medium">批量删除</strong>。</p>
+                  <p>{account.isLoggedIn ? '选中一条或多条记录后，页面底部会出现操作栏，支持' : '登录后选中一条或多条记录，页面底部会出现操作栏，支持'}<strong className="text-gray-500 dark:text-gray-400 font-medium">取消选择</strong>、<strong className="text-blue-500 dark:text-blue-400 font-medium">全选当前可见记录</strong>、<strong className="text-yellow-500 dark:text-yellow-400 font-medium">批量收藏</strong>、<strong className="text-green-500 dark:text-green-400 font-medium">批量下载</strong>，和<strong className="text-red-500 dark:text-red-400 font-medium">批量删除</strong>。</p>
                 </div>
               </section>
             </>
@@ -136,7 +127,7 @@ export default function HelpModal({ appMode, onClose }: HelpModalProps) {
 
         <div className="flex justify-center border-t border-gray-200 pt-4 dark:border-white/[0.08]">
           <div className="text-sm font-medium text-gray-500 dark:text-gray-400">
-            当前版本聚焦个人独立使用与方案迭代。
+            当前以创作体验和高频迭代为主。
           </div>
         </div>
       </div>

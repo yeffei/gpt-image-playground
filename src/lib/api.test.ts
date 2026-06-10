@@ -139,9 +139,9 @@ describe('callImageApi', () => {
       stream: true,
       partial_images: 3,
     })
-    expect(partialImages).toEqual(['data:image/png;base64,cGFydGlhbA=='])
+    expect(partialImages).toEqual(['data:image/jpeg;base64,cGFydGlhbA=='])
     expect(result).toMatchObject({
-      images: ['data:image/png;base64,ZmluYWw='],
+      images: ['data:image/jpeg;base64,ZmluYWw='],
       actualParams: {
         output_format: 'png',
         quality: 'high',
@@ -184,7 +184,7 @@ describe('callImageApi', () => {
     } as any)
 
     expect(result).toMatchObject({
-      images: ['data:image/png;base64,ZmluYWw='],
+      images: ['data:image/jpeg;base64,ZmluYWw='],
       actualParams: {
         output_format: 'jpeg',
         quality: 'medium',
@@ -225,7 +225,7 @@ describe('callImageApi', () => {
     } as any)
 
     expect(result).toMatchObject({
-      images: ['data:image/png;base64,ZmluYWw='],
+      images: ['data:image/jpeg;base64,ZmluYWw='],
       actualParams: {
         output_format: 'png',
         quality: 'medium',
@@ -285,13 +285,13 @@ describe('callImageApi', () => {
     }
     expect(result.images).toHaveLength(2)
     expect(result.images).toEqual([
-      'data:image/png;base64,ZmluYWw=',
-      'data:image/png;base64,ZmluYWw=',
+      'data:image/jpeg;base64,ZmluYWw=',
+      'data:image/jpeg;base64,ZmluYWw=',
     ])
     expect(partials.map((partial) => partial.requestIndex).sort()).toEqual([0, 1])
     expect(partials.map((partial) => partial.image)).toEqual([
-      'data:image/png;base64,cGFydGlhbA==',
-      'data:image/png;base64,cGFydGlhbA==',
+      'data:image/jpeg;base64,cGFydGlhbA==',
+      'data:image/jpeg;base64,cGFydGlhbA==',
     ])
   })
 
@@ -335,9 +335,9 @@ describe('callImageApi', () => {
     const body = JSON.parse(String((init as RequestInit).body))
     expect(body.stream).toBe(true)
     expect(body.tools[0].partial_images).toBe(1)
-    expect(partialImages).toEqual(['data:image/png;base64,cGFydGlhbA=='])
+    expect(partialImages).toEqual(['data:image/jpeg;base64,cGFydGlhbA=='])
     expect(result).toMatchObject({
-      images: ['data:image/png;base64,ZmluYWw='],
+      images: ['data:image/jpeg;base64,ZmluYWw='],
       actualParams: { size: '1024x1024' },
       actualParamsList: [{ size: '1024x1024' }],
       revisedPrompts: ['rewritten'],
@@ -364,7 +364,7 @@ describe('callImageApi', () => {
     })
 
     expect(result).toMatchObject({
-      images: ['data:image/png;base64,ZmluYWw='],
+      images: ['data:image/jpeg;base64,ZmluYWw='],
       actualParams: { size: '1024x1024' },
       actualParamsList: [{ size: '1024x1024' }],
     })
@@ -403,7 +403,7 @@ describe('callImageApi', () => {
     } as any)
 
     expect(result).toMatchObject({
-      images: ['data:image/png;base64,ZmluYWw='],
+      images: ['data:image/jpeg;base64,ZmluYWw='],
       actualParams: { size: '1024x1024' },
       actualParamsList: [{ size: '1024x1024' }],
     })
@@ -612,6 +612,32 @@ describe('callImageApi', () => {
     expect((init as RequestInit).cache).toBe('no-store')
   })
 
+  it('retries a single time for retryable image generation failures', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: { message: 'Too many requests' },
+      }), {
+        status: 429,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: [{ b64_json: 'aW1hZ2U=' }],
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+
+    const result = await callImageApi({
+      settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key' },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [],
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(result.images).toEqual(['data:image/jpeg;base64,aW1hZ2U='])
+  })
+
   it('ignores stored API proxy settings when the current deployment has no proxy', async () => {
     vi.stubEnv('VITE_API_PROXY_AVAILABLE', 'false')
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
@@ -713,7 +739,7 @@ describe('callImageApi', () => {
     await vi.advanceTimersByTimeAsync(1000)
 
     await expect(promise).resolves.toEqual({
-      images: ['data:image/png;base64,aW1hZ2U='],
+      images: ['data:image/jpeg;base64,aW1hZ2U='],
     })
     expect(fetchMock).toHaveBeenCalledTimes(3)
   })
@@ -789,7 +815,7 @@ describe('callImageApi', () => {
     await vi.advanceTimersByTimeAsync(6000)
 
     await expect(promise).resolves.toEqual({
-      images: ['data:image/png;base64,aW1hZ2U='],
+      images: ['data:image/jpeg;base64,aW1hZ2U='],
     })
   })
 })

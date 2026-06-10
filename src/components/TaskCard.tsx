@@ -1,57 +1,24 @@
 import { useEffect, useState, useRef, type ReactNode } from 'react'
-import type { TaskRecord } from '../types'
-import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, updateTaskInStore, retryTask, appendNegativePromptTerms } from '../store'
+import type { ImageGatewayFailureKind, TaskRecord } from '../types'
+import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, updateTaskInStore, retryTask } from '../store'
 import { formatImageRatio } from '../lib/size'
-import { getParamDisplay, ActualValueBadge } from '../lib/paramDisplay'
+import { getParamDisplay } from '../lib/paramDisplay'
 import { DEFAULT_IMAGES_MODEL, DEFAULT_FAL_MODEL } from '../lib/apiProfiles'
+import { getModelSku } from '../lib/modelSkus'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { CodeIcon } from './icons'
 import ViewportTooltip from './ViewportTooltip'
 
-function getSuggestedConstraintTerms(task: TaskRecord) {
-  const prompt = (task.prompt || '').toLowerCase()
-  const suggestions: Array<{ label: string; terms: string[] }> = []
-
-  if (task.maskImageId) {
-    suggestions.push({ label: '保留原构图', terms: ['避免重绘主体结构', '避免裁切主体'] })
-  }
-
-  if (task.params.n > 1) {
-    suggestions.push({ label: '收敛一致性', terms: ['避免风格漂移', '避免构图偏移'] })
-  }
-
-  if (/\bportrait\b|full body|hand|hands|人像|人物|模特|角色|全身|手部|手指/.test(prompt)) {
-    suggestions.push({ label: '限制手部错误', terms: ['避免畸形手部', '避免多余手指'] })
-  }
-
-  if (/\bposter\b|typography|text|logo|banner|海报|包装|标题|文字|字体|排版|标志/.test(prompt)) {
-    suggestions.push({ label: '限制杂乱文字', terms: ['避免乱码文字', '避免多余文案'] })
-  }
-
-  if (/\binterior\b|room|space|architecture|building|scene|environment|室内|空间|建筑|展厅|场景/.test(prompt)) {
-    suggestions.push({ label: '限制结构变形', terms: ['避免透视变形', '避免结构错乱'] })
-  }
-
-  const deduped: Array<{ label: string; terms: string[] }> = []
-  const seen = new Set<string>()
-  for (const item of suggestions) {
-    const key = item.terms.join('|').toLowerCase()
-    if (seen.has(key)) continue
-    seen.add(key)
-    deduped.push(item)
-  }
-  return deduped.slice(0, 3)
-}
-
 interface Props {
   task: TaskRecord
   onReuse: () => void
-  onEditOutputs: () => void
   onDelete: () => void
   onClick: (e: React.MouseEvent | React.TouchEvent) => void
   isSelected?: boolean
   disableSwipe?: boolean
 }
+
+const EMPTY_STREAM_PREVIEW_SLOTS: Record<string, string> = {}
 
 function TaskActionButton({
   tooltip,
@@ -92,16 +59,76 @@ function TaskActionButton({
   )
 }
 
+function getFailureDisplay(error: string | null, isInterrupted: boolean, failureKind?: ImageGatewayFailureKind) {
+  if (isInterrupted) {
+    return {
+      headline: '任务已停止',
+      summary: '这次生成已中止，没有产出新的图片结果。',
+      note: '可直接重试这组配置。',
+    }
+  }
+
+  const raw = (error || '').trim()
+  const requestIdMatch = raw.match(/请求编号[:：]\s*([A-Za-z0-9-]+)/i)
+  const requestId = requestIdMatch?.[1] || ''
+
+  let headline = ''
+  let summary = ''
+  if (failureKind === 'route_exhausted') {
+    headline = '生成服务暂时不可用'
+    summary = '当前生成服务额度不足，这次没有成功返回图片。'
+  } else if (failureKind === 'upstream_timeout') {
+    headline = '请求超时'
+    summary = '生成服务响应超时，这次没有成功返回图片。'
+  } else if (failureKind === 'upstream_rate_limited') {
+    headline = '生成服务繁忙'
+    summary = '当前生成服务繁忙或限流，这次没有成功返回图片。'
+  } else if (failureKind === 'upstream_bad_request') {
+    headline = '请求未通过'
+    summary = '这次生成请求未通过，请调整参数后再试。'
+  } else if (failureKind === 'upstream_auth_error') {
+    headline = '生成服务暂时不可用'
+    summary = '当前生成线路鉴权失败，这次没有成功返回图片。'
+  } else if (failureKind === 'content_policy_violation') {
+    headline = '内容未通过审核'
+    summary = '这次内容未通过生成服务审核，请调整提示词后再试。'
+  } else if (failureKind === 'unsupported_model') {
+    headline = '模型暂不可用'
+    summary = '当前生成线路暂不支持这个模型，这次没有成功返回图片。'
+  } else if (failureKind === 'parameter_incompatible') {
+    headline = '参数不兼容'
+    summary = '当前参数组合不被支持，请调整后再试。'
+  } else if (/insufficient account balance/i.test(raw)) {
+    headline = '生成服务暂时不可用'
+    summary = '当前生成服务额度不足，这次没有成功返回图片。'
+  } else if (/无效请求|invalid request/i.test(raw)) {
+    headline = '请求未通过'
+    summary = '这次生成请求未通过，请调整参数后再试。'
+  } else if (/timeout|超时/i.test(raw)) {
+    headline = '请求超时'
+    summary = '生成服务响应超时，这次没有成功返回图片。'
+  } else if (/rate limit|频率/i.test(raw)) {
+    headline = '生成服务繁忙'
+    summary = '当前生成服务繁忙或限流，这次没有成功返回图片。'
+  }
+
+  headline = headline || '未返回可用结果'
+  summary = summary || '这次生成没有成功返回图片，可以直接重试或调整参数后再试。'
+  const note = requestId ? `请求编号 ${requestId}` : '可直接重试，或调整参数后再试。'
+
+  return { headline, summary, note }
+}
+
 export default function TaskCard({
   task,
   onReuse,
-  onEditOutputs,
   onDelete,
   onClick,
   isSelected,
   disableSwipe,
 }: Props) {
   const [thumbSrc, setThumbSrc] = useState<string>('')
+  const [outputThumbs, setOutputThumbs] = useState<Record<string, { dataUrl: string; width?: number; height?: number }>>({})
   const [coverRatio, setCoverRatio] = useState<string>('')
   const [coverSize, setCoverSize] = useState<string>('')
   const [now, setNow] = useState(Date.now())
@@ -111,8 +138,11 @@ export default function TaskCard({
   const [swipeDirection, setSwipeDirection] = useState<-1 | 0 | 1>(0)
   const [streamPreviewLoaded, setStreamPreviewLoaded] = useState(false)
   const toggleTaskSelection = useStore((s) => s.toggleTaskSelection)
+  const setLightboxImageId = useStore((s) => s.setLightboxImageId)
   const settings = useStore((s) => s.settings)
+  const modelSkus = useStore((s) => s.modelSkus)
   const streamPreviewSrc = useStore((s) => s.streamPreviews[task.id] || '')
+  const streamPreviewSlots = useStore((s) => s.streamPreviewSlots[task.id] ?? EMPTY_STREAM_PREVIEW_SLOTS)
   const touchStartRef = useRef<{ x: number; y: number } | null>(null)
   const swipeResetTimerRef = useRef<number | null>(null)
   const suppressClickUntilRef = useRef(0)
@@ -284,33 +314,37 @@ export default function TaskCard({
     setCoverRatio('')
     setCoverSize('')
     setThumbSrc('')
+    setOutputThumbs({})
 
     let cancelled = false
-    const imageId = task.outputImages?.[0]
-    let unsubscribe: (() => void) | undefined
+    const imageIds = task.outputImages ?? []
+    let unsubscribes: Array<() => void> = []
 
-    const applyThumbnail = (thumbnail: { dataUrl: string; width?: number; height?: number }) => {
+    const applyThumbnail = (imageId: string, thumbnail: { dataUrl: string; width?: number; height?: number }) => {
       if (cancelled) return
-      setThumbSrc(thumbnail.dataUrl)
-      if (thumbnail.width && thumbnail.height) {
+      setOutputThumbs((prev) => ({ ...prev, [imageId]: thumbnail }))
+      if (imageId === imageIds[0]) {
+        setThumbSrc(thumbnail.dataUrl)
+      }
+      if (imageId === imageIds[0] && thumbnail.width && thumbnail.height) {
         setCoverRatio(formatImageRatio(thumbnail.width, thumbnail.height))
         setCoverSize(`${thumbnail.width}×${thumbnail.height}`)
       }
     }
 
-    if (imageId) {
-      unsubscribe = subscribeImageThumbnail(imageId, applyThumbnail)
+    for (const imageId of imageIds) {
+      unsubscribes.push(subscribeImageThumbnail(imageId, (thumbnail) => applyThumbnail(imageId, thumbnail)))
       ensureImageThumbnailCached(imageId).then((thumbnail) => {
         if (cancelled || !thumbnail) return
-        applyThumbnail(thumbnail)
+        applyThumbnail(imageId, thumbnail)
       }).catch(() => {
-        if (!cancelled) setThumbSrc('')
+        if (!cancelled && imageId === imageIds[0]) setThumbSrc('')
       })
     }
 
     return () => {
       cancelled = true
-      unsubscribe?.()
+      unsubscribes.forEach((unsubscribe) => unsubscribe())
     }
   }, [task.outputImages])
 
@@ -340,9 +374,6 @@ export default function TaskCard({
   const qualityDisplay = getParamDisplay(task, 'quality')
   const showQuality = task.params.quality !== 'auto' || qualityDisplay.isMismatch
 
-  const sizeDisplay = getParamDisplay(task, 'size')
-  const showSize = task.params.size !== 'auto' || sizeDisplay.isMismatch
-
   const formatDisplay = getParamDisplay(task, 'output_format')
   const showFormat = task.params.output_format !== 'png' || formatDisplay.isMismatch
 
@@ -351,11 +382,27 @@ export default function TaskCard({
   const showPendingPrompt = isAgentTaskPromptPending(task)
   const showN = !isAgentTask && (task.params.n > 1 || nDisplay.isMismatch)
 
+  const modelSku = task.modelSku ? getModelSku(task.modelSku, modelSkus) : null
+  const displayProfileName = modelSku?.label ?? (task.modelSku ? '系统线路' : task.apiProfileName ?? task.apiProvider)
+  const displayModelName = modelSku || task.modelSku ? '' : task.apiModel
   const defaultModelForProvider = task.apiProvider === 'fal' ? DEFAULT_FAL_MODEL : DEFAULT_IMAGES_MODEL
-  const showModel = task.apiModel && task.apiModel !== defaultModelForProvider
+  const showModel = displayModelName && displayModelName !== defaultModelForProvider
   const isInterrupted = task.status === 'error' && task.error === '已停止生成。'
-  const canBackfillNegativePrompt = task.status === 'done'
-  const suggestedConstraintTerms = getSuggestedConstraintTerms(task)
+  const compactParamParts = [
+    showQuality ? `质量 ${qualityDisplay.displayValue}` : null,
+    showFormat ? `格式 ${formatDisplay.displayValue}` : null,
+    showN ? `数量 ${nDisplay.displayValue}` : null,
+  ].filter(Boolean)
+  const compactParamLine = compactParamParts.slice(0, 3).join(' · ')
+  const isFailedCard = task.status === 'error' && !isFalReconnecting
+  const showFavoriteAction = !isFailedCard
+  const failureDisplay = getFailureDisplay(task.error, isInterrupted, task.gatewayFailureKind)
+  const requestedOutputCount = Math.min(Math.max(Math.trunc(task.params.n || 1), 1), 4)
+  const outputPreviewIds = task.outputImages.slice(0, 4)
+  const isMultiOutputTask = outputPreviewIds.length > 1
+  const runningPreviewSlots = Array.from({ length: requestedOutputCount }, (_, index) => streamPreviewSlots[String(index)] || (index === 0 ? streamPreviewSrc : ''))
+  const outputGridClass = outputPreviewIds.length === 2 ? 'is-two' : outputPreviewIds.length > 2 ? 'is-four' : 'is-one'
+  const runningGridClass = requestedOutputCount === 2 ? 'is-two' : requestedOutputCount > 2 ? 'is-four' : 'is-one'
 
   return (
     <div className="relative rounded-[1.45rem]">
@@ -378,10 +425,12 @@ export default function TaskCard({
 
       <div
         ref={cardRef}
-        className={`task-card-shell prototype-result-card relative border overflow-hidden cursor-pointer touch-pan-y will-change-transform duration-200 rounded-[1.45rem] ${
+        className={`task-card-shell prototype-result-card relative border overflow-hidden cursor-pointer touch-pan-y duration-200 rounded-[1.45rem] ${
           isSwiping ? '!bg-white dark:!bg-gray-900' : ''
         } ${
           !isSwiping ? 'transition-[box-shadow,border-color,background-color,transform]' : 'transition-[box-shadow,border-color,background-color]'
+        } ${
+          isSwiping || swipeDirection !== 0 ? 'will-change-transform' : ''
         } ${
           task.status === 'running'
             ? 'border-cyan-400 generating'
@@ -430,45 +479,65 @@ export default function TaskCard({
         </div>
       )}
       <div className="flex flex-col">
-        <div className="prototype-result-media relative h-56 sm:h-64 bg-[linear-gradient(180deg,rgba(247,249,252,0.92),rgba(229,235,245,0.88))] dark:bg-black/20 flex items-center justify-center overflow-hidden flex-shrink-0">
-          {task.status === 'running' && streamPreviewSrc && (
-            <>
-              <img
-                src={streamPreviewSrc}
-                className={`h-full w-full object-cover ${streamPreviewLoaded ? '' : 'hidden'}`}
-                alt=""
-                onLoad={() => setStreamPreviewLoaded(true)}
-                onError={() => setStreamPreviewLoaded(false)}
-              />
-              {streamPreviewLoaded && (
-                <span className="absolute top-3 right-3 flex items-center gap-1 rounded-full bg-cyan-500 px-2 py-1 text-[10px] font-medium text-white backdrop-blur-sm sm:text-xs">
-                  预览
-                </span>
-              )}
-            </>
+        <div className={`prototype-result-media relative h-48 sm:h-52 bg-[linear-gradient(180deg,rgba(247,249,252,0.92),rgba(229,235,245,0.88))] dark:bg-black/20 flex items-center justify-center overflow-hidden flex-shrink-0 ${isFailedCard ? 'is-failed-card' : ''}`}>
+          {task.status === 'running' && requestedOutputCount === 1 && (
+            streamPreviewSrc ? (
+              <>
+                <img
+                  src={streamPreviewSrc}
+                  className={`h-full w-full object-cover ${streamPreviewLoaded ? '' : 'hidden'}`}
+                  alt=""
+                  onLoad={() => setStreamPreviewLoaded(true)}
+                  onError={() => setStreamPreviewLoaded(false)}
+                />
+                {streamPreviewLoaded && (
+                  <span className="absolute top-3 right-3 flex items-center gap-1 rounded-full bg-cyan-500 px-2 py-1 text-[10px] font-medium text-white backdrop-blur-sm sm:text-xs">
+                    预览
+                  </span>
+                )}
+              </>
+            ) : (
+              <div className="flex flex-col items-center gap-2">
+                <svg
+                  className="w-8 h-8 text-blue-400 animate-spin"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                >
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  />
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                  />
+                </svg>
+                <span className="text-xs text-gray-400 dark:text-gray-500">生成中...</span>
+              </div>
+            )
           )}
-          {task.status === 'running' && (!streamPreviewSrc || !streamPreviewLoaded) && (
-            <div className="flex flex-col items-center gap-2">
-              <svg
-                className="w-8 h-8 text-blue-400 animate-spin"
-                fill="none"
-                viewBox="0 0 24 24"
-              >
-                <circle
-                  className="opacity-25"
-                  cx="12"
-                  cy="12"
-                  r="10"
-                  stroke="currentColor"
-                  strokeWidth="4"
-                />
-                <path
-                  className="opacity-75"
-                  fill="currentColor"
-                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                />
-              </svg>
-              <span className="text-xs text-gray-400 dark:text-gray-500">生成中...</span>
+          {task.status === 'running' && requestedOutputCount > 1 && (
+            <div className={`task-output-grid ${runningGridClass} is-running`} aria-label={`正在生成 ${requestedOutputCount} 张图片`}>
+              {runningPreviewSlots.map((previewSrc, index) => (
+                <div key={index} className="task-output-tile">
+                  {previewSrc ? (
+                    <img src={previewSrc} className="h-full w-full object-cover" alt="" />
+                  ) : (
+                    <div className="task-output-placeholder">
+                      <svg className="w-5 h-5 text-cyan-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                    </div>
+                  )}
+                  <span className="task-output-index">{index + 1}</span>
+                </div>
+              ))}
             </div>
           )}
           {task.status === 'error' && isFalReconnecting && (
@@ -492,9 +561,12 @@ export default function TaskCard({
             </div>
           )}
           {task.status === 'error' && !isFalReconnecting && (
-            <div className="flex flex-col items-center gap-1 px-2">
+            <div className="task-failure-state px-3">
+              <span className={`task-failure-pill ${isInterrupted ? 'is-interrupted' : ''}`}>
+                {isInterrupted ? '已停止' : '生成失败'}
+              </span>
               <svg
-                className={`w-7 h-7 ${isInterrupted ? 'text-yellow-400' : 'text-red-400'}`}
+                className={`w-7 h-7 ${isInterrupted ? 'text-yellow-500' : 'text-rose-500'}`}
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -506,12 +578,13 @@ export default function TaskCard({
                   d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
                 />
               </svg>
-              <span className={`text-xs text-center leading-tight ${isInterrupted ? 'text-yellow-500' : 'text-red-400'}`}>
-                {isInterrupted ? '已停止' : '失败'}
-              </span>
+              <div className="task-failure-copy">
+                <strong>{failureDisplay.headline}</strong>
+                <span>{failureDisplay.summary}</span>
+              </div>
             </div>
           )}
-          {task.status === 'done' && thumbSrc && (
+          {task.status === 'done' && thumbSrc && !isMultiOutputTask && (
             <>
               <img
                 src={thumbSrc}
@@ -521,12 +594,48 @@ export default function TaskCard({
                 loading="lazy"
                 alt=""
               />
-              {task.outputImages.length > 1 && (
-                <span className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">
-                  {task.outputImages.length}
-                </span>
-              )}
             </>
+          )}
+          {task.status === 'done' && isMultiOutputTask && (
+            <div className={`task-output-grid ${outputGridClass}`} aria-label={`共 ${task.outputImages.length} 张图片`}>
+              {outputPreviewIds.map((imageId, index) => {
+                const thumbnail = outputThumbs[imageId]
+                return (
+                  <button
+                    key={imageId}
+                    type="button"
+                    className="task-output-tile"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      setLightboxImageId(imageId, task.outputImages)
+                    }}
+                    aria-label={`查看第 ${index + 1} 张图片`}
+                  >
+                    {thumbnail?.dataUrl ? (
+                      <img
+                        src={thumbnail.dataUrl}
+                        data-image-id={imageId}
+                        data-output-image-ids={task.outputImages.join(',')}
+                        className="saveable-image h-full w-full object-cover"
+                        loading="lazy"
+                        alt=""
+                      />
+                    ) : (
+                      <div className="task-output-placeholder">
+                        <svg className="w-6 h-6 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                      </div>
+                    )}
+                    <span className="task-output-index">{index + 1}</span>
+                  </button>
+                )
+              })}
+              <span className="task-output-count-badge" aria-label={`共 ${task.outputImages.length} 张图片`}>
+                {task.outputImages.length} 张
+              </span>
+            </div>
           )}
           {task.status === 'done' && !thumbSrc && (
             <svg
@@ -566,9 +675,24 @@ export default function TaskCard({
           {task.status === 'done' && (
             <div className="absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/40 via-black/12 to-transparent pointer-events-none" />
           )}
+          {task.status === 'done' && task.outputImages?.length > 0 && (
+            <button
+              type="button"
+              className="task-image-preview-button"
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                setLightboxImageId(task.outputImages[0], task.outputImages)
+              }}
+              aria-label="查看全图"
+              title="查看全图"
+            >
+              全图
+            </button>
+          )}
         </div>
 
-        <div className="prototype-result-body flex-1 p-4 flex flex-col min-w-0 bg-white/92 dark:bg-gray-900/92">
+        <div className="prototype-result-body flex-1 p-3 flex flex-col min-w-0 bg-white/92 dark:bg-gray-900/92">
           <div className="prototype-result-meta mb-3 flex items-center gap-1.5 min-h-[20px] flex-wrap">
             {task.isFavorite && (
               <span className="inline-flex items-center justify-center w-5 h-5 text-amber-500 dark:text-amber-400" title="已收藏">
@@ -577,24 +701,28 @@ export default function TaskCard({
                 </svg>
               </span>
             )}
-            {(task.apiProfileName || task.apiProvider) && (
+            {displayProfileName && (
               <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 dark:bg-white/[0.06] px-2.5 py-1 text-[10px] text-slate-600 dark:text-gray-300">
                 <CodeIcon className="w-3 h-3 flex-shrink-0" />
-                <span className="truncate max-w-[8rem]">{task.apiProfileName || task.apiProvider}</span>
+                <span className="truncate max-w-[8rem]">{displayProfileName}</span>
               </span>
             )}
             {showModel && (
               <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 dark:bg-white/[0.06] px-2.5 py-1 text-[10px] text-slate-600 dark:text-gray-300">
-                <span className="truncate max-w-[8rem]">{task.apiModel}</span>
+                <span className="truncate max-w-[8rem]">{displayModelName}</span>
               </span>
             )}
-            <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-medium ${
+            <span
+              data-task-status-badge
+              data-task-status={task.status}
+              className={`inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-medium ${
               task.status === 'done'
                 ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300'
                 : task.status === 'running'
                 ? 'bg-cyan-50 text-cyan-700 dark:bg-cyan-500/10 dark:text-cyan-300'
                 : 'bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300'
-            }`}>
+            }`}
+            >
               {task.status === 'done' ? '已完成' : task.status === 'running' ? '生成中' : isInterrupted ? '已停止' : '失败'}
             </span>
             {task.maskImageId && (
@@ -612,7 +740,7 @@ export default function TaskCard({
               </div>
             ) : (
               <div className="space-y-2">
-                <p className="text-[15px] text-slate-800 dark:text-gray-200 leading-relaxed line-clamp-3 font-medium">
+                <p className="text-[15px] text-slate-800 dark:text-gray-200 leading-relaxed line-clamp-2 font-medium">
                   {task.prompt || '(无提示词)'}
                 </p>
               </div>
@@ -620,162 +748,106 @@ export default function TaskCard({
           </div>
 
           <div className="mt-auto flex flex-col gap-2">
-            <div 
-              data-tag-scroll-area
-              className="prototype-result-tags flex overflow-x-auto hide-scrollbar pt-0.5 gap-2 whitespace-nowrap mask-edge-r min-w-0 pr-2"
-              onTouchStart={(e) => e.stopPropagation()}
-              onTouchMove={(e) => e.stopPropagation()}
-              onTouchEnd={(e) => e.stopPropagation()}
-              onTouchCancel={(e) => e.stopPropagation()}
-            >
-              {showQuality && (
-                <span className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-100 dark:bg-white/[0.04] text-xs flex-shrink-0">
-                  <span className="text-slate-400 dark:text-gray-500">质量</span>
-                  {qualityDisplay.isMismatch ? <ActualValueBadge value={qualityDisplay.displayValue} className="px-1 rounded-sm" /> : <span className="text-slate-700 dark:text-gray-300">{qualityDisplay.displayValue}</span>}
-                </span>
+            {isFailedCard && (
+              <div className="task-failure-note">
+                <strong>{failureDisplay.headline}</strong>
+                <span>{failureDisplay.note}</span>
+              </div>
+            )}
+            <div className="prototype-result-footer">
+              {compactParamLine ? (
+                <div className="prototype-result-summary">
+                  <span className="truncate">{compactParamLine}</span>
+                </div>
+              ) : (
+                <div className="prototype-result-summary is-empty" aria-hidden="true" />
               )}
-              {showSize && (
-                <span className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-100 dark:bg-white/[0.04] text-xs flex-shrink-0">
-                  <span className="text-slate-400 dark:text-gray-500">尺寸</span>
-                  {sizeDisplay.isMismatch ? <ActualValueBadge value={sizeDisplay.displayValue} className="px-1 rounded-sm" /> : <span className="text-slate-700 dark:text-gray-300">{sizeDisplay.displayValue}</span>}
-                </span>
-              )}
-              {showFormat && (
-                <span className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-100 dark:bg-white/[0.04] text-xs flex-shrink-0">
-                  <span className="text-slate-400 dark:text-gray-500">格式</span>
-                  {formatDisplay.isMismatch ? <ActualValueBadge value={formatDisplay.displayValue} className="px-1 rounded-sm" /> : <span className="text-slate-700 dark:text-gray-300">{formatDisplay.displayValue}</span>}
-                </span>
-              )}
-              {showN && (
-                <span className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-100 dark:bg-white/[0.04] text-xs flex-shrink-0">
-                  <span className="text-slate-400 dark:text-gray-500">数量</span>
-                  {nDisplay.isMismatch ? <ActualValueBadge value={nDisplay.displayValue} className="px-1 rounded-sm" /> : <span className="text-slate-700 dark:text-gray-300">{nDisplay.displayValue}</span>}
-                </span>
-              )}
-            </div>
-            <div
-              data-tag-scroll-area
-              className="prototype-result-actions flex items-center gap-2 flex-shrink-0 mt-0.5 ml-auto max-w-full overflow-x-auto hide-scrollbar mask-edge-r pr-2"
-              onClick={(e) => e.stopPropagation()}
-              onTouchStart={(e) => e.stopPropagation()}
-              onTouchMove={(e) => e.stopPropagation()}
-              onTouchEnd={(e) => e.stopPropagation()}
-              onTouchCancel={(e) => e.stopPropagation()}
-            >
-              {((task.status === 'error' && !isFalReconnecting) || settings.alwaysShowRetryButton) && (
+              <div
+                data-tag-scroll-area
+                className="prototype-result-actions flex items-center gap-1.5 flex-shrink-0 max-w-full overflow-x-auto hide-scrollbar mask-edge-r"
+                onClick={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
+                onTouchMove={(e) => e.stopPropagation()}
+                onTouchEnd={(e) => e.stopPropagation()}
+                onTouchCancel={(e) => e.stopPropagation()}
+              >
+                {((task.status === 'error' && !isFalReconnecting) || settings.alwaysShowRetryButton) && (
+                  <TaskActionButton
+                    tooltip="重试任务"
+                    onClick={() => retryTask(task)}
+                    className="task-mini-action"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                  </TaskActionButton>
+                )}
+                {showFavoriteAction && (
+                  <TaskActionButton
+                    tooltip={task.isFavorite ? '取消收藏' : '收藏记录'}
+                    onClick={() =>
+                      updateTaskInStore(task.id, { isFavorite: !task.isFavorite })
+                    }
+                    className={`p-1.5 rounded-md transition ${
+                      task.isFavorite
+                        ? 'task-mini-action text-amber-500'
+                        : 'task-mini-action'
+                    }`}
+                  >
+                    <svg
+                      className="w-4 h-4"
+                      fill={task.isFavorite ? 'currentColor' : 'none'}
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"
+                      />
+                    </svg>
+                  </TaskActionButton>
+                )}
                 <TaskActionButton
-                  tooltip="重试任务"
-                  onClick={() => retryTask(task)}
+                  tooltip="复用配置"
+                  onClick={onReuse}
                   className="task-mini-action"
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  <svg
+                    className="w-4 h-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"
+                    />
                   </svg>
                 </TaskActionButton>
-              )}
-              <TaskActionButton
-                tooltip={task.isFavorite ? '取消收藏' : '收藏记录'}
-                onClick={() =>
-                  updateTaskInStore(task.id, { isFavorite: !task.isFavorite })
-                }
-                className={`p-1.5 rounded-md transition ${
-                  task.isFavorite
-                    ? 'task-mini-action text-amber-500'
-                    : 'task-mini-action'
-                }`}
-              >
-                <svg
-                  className="w-4 h-4"
-                  fill={task.isFavorite ? 'currentColor' : 'none'}
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
+                <TaskActionButton
+                  tooltip="删除记录"
+                  onClick={onDelete}
+                  className="task-mini-action danger"
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"
-                  />
-                </svg>
-              </TaskActionButton>
-              <TaskActionButton
-                tooltip="复用配置"
-                onClick={onReuse}
-                className="task-mini-action"
-              >
-                <svg
-                  className="w-4 h-4"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"
-                  />
-                </svg>
-              </TaskActionButton>
-              <TaskActionButton
-                tooltip="编辑输出"
-                onClick={onEditOutputs}
-                className="task-mini-action disabled:opacity-30"
-                disabled={!task.outputImages?.length}
-              >
-                <svg
-                  className="w-4 h-4"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                  />
-                </svg>
-              </TaskActionButton>
-              <TaskActionButton
-                tooltip="回填到负面提示词"
-                onClick={() => appendNegativePromptTerms(suggestedConstraintTerms[0].terms, `已添加建议约束：${suggestedConstraintTerms[0].label}`)}
-                className="task-mini-action disabled:opacity-30"
-                disabled={!canBackfillNegativePrompt || suggestedConstraintTerms.length === 0}
-              >
-                <svg
-                  className="w-4 h-4"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M7 8h10M7 12h7m-7 4h5M5 4h14a2 2 0 012 2v12a2 2 0 01-2 2H9l-4 0V6a2 2 0 012-2z"
-                  />
-                </svg>
-              </TaskActionButton>
-              <TaskActionButton
-                tooltip="删除记录"
-                onClick={onDelete}
-                className="task-mini-action danger"
-              >
-                <svg
-                  className="w-4 h-4"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                  />
-                </svg>
-              </TaskActionButton>
+                  <svg
+                    className="w-4 h-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                    />
+                  </svg>
+                </TaskActionButton>
+              </div>
             </div>
           </div>
         </div>

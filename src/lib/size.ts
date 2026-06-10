@@ -2,8 +2,6 @@ const SIZE_PATTERN = /^\s*(\d+)\s*[xX×]\s*(\d+)\s*$/
 const RATIO_PATTERN = /^\s*(\d+(?:\.\d+)?)\s*[:xX×]\s*(\d+(?:\.\d+)?)\s*$/
 const SIZE_MULTIPLE = 16
 const MAX_EDGE = 3840
-const MAX_ASPECT_RATIO = 3
-const MIN_PIXELS = 655_360
 const MAX_PIXELS = 8_294_400
 
 export type SizeTier = '1K' | '2K' | '4K'
@@ -17,10 +15,6 @@ function floorToMultiple(value: number, multiple: number) {
   return Math.max(multiple, Math.floor(value / multiple) * multiple)
 }
 
-function ceilToMultiple(value: number, multiple: number) {
-  return Math.max(multiple, Math.ceil(value / multiple) * multiple)
-}
-
 function normalizeDimensions(width: number, height: number) {
   let normalizedWidth = roundToMultiple(width, SIZE_MULTIPLE)
   let normalizedHeight = roundToMultiple(height, SIZE_MULTIPLE)
@@ -30,28 +24,15 @@ function normalizeDimensions(width: number, height: number) {
     normalizedHeight = floorToMultiple(normalizedHeight * scale, SIZE_MULTIPLE)
   }
 
-  const scaleToFill = (scale: number) => {
-    normalizedWidth = ceilToMultiple(normalizedWidth * scale, SIZE_MULTIPLE)
-    normalizedHeight = ceilToMultiple(normalizedHeight * scale, SIZE_MULTIPLE)
-  }
-
   for (let i = 0; i < 4; i++) {
     const maxEdge = Math.max(normalizedWidth, normalizedHeight)
     if (maxEdge > MAX_EDGE) {
       scaleToFit(MAX_EDGE / maxEdge)
     }
 
-    if (normalizedWidth / normalizedHeight > MAX_ASPECT_RATIO) {
-      normalizedWidth = floorToMultiple(normalizedHeight * MAX_ASPECT_RATIO, SIZE_MULTIPLE)
-    } else if (normalizedHeight / normalizedWidth > MAX_ASPECT_RATIO) {
-      normalizedHeight = floorToMultiple(normalizedWidth * MAX_ASPECT_RATIO, SIZE_MULTIPLE)
-    }
-
     const pixels = normalizedWidth * normalizedHeight
     if (pixels > MAX_PIXELS) {
       scaleToFit(Math.sqrt(MAX_PIXELS / pixels))
-    } else if (pixels < MIN_PIXELS) {
-      scaleToFill(Math.sqrt(MIN_PIXELS / pixels))
     }
   }
 
@@ -160,6 +141,12 @@ const TIER_PIXEL_BUDGET: Record<SizeTier, number> = {
   '4K': MAX_PIXELS,  // 8_294_400
 }
 
+const TIER_MAX_EDGE: Record<SizeTier, number> = {
+  '1K': 1536,
+  '2K': 2560,
+  '4K': MAX_EDGE,
+}
+
 /**
  * 常用比例优先使用官方示例或通用显示标准，避免按像素预算计算出不常见尺寸。
  * 其中 21:9 的常见显示器尺寸会按 16 倍数约束做轻微规整。
@@ -219,12 +206,13 @@ export function calculateImageSize(tier: SizeTier, ratio: string) {
 
   const targetRatio = ratioWidth / ratioHeight
   const pixelBudget = TIER_PIXEL_BUDGET[tier]
+  const maxTierEdge = TIER_MAX_EDGE[tier]
 
   let bestWidth = 0
   let bestHeight = 0
   let bestPixels = 0
 
-  for (let w = SIZE_MULTIPLE; w <= MAX_EDGE; w += SIZE_MULTIPLE) {
+  for (let w = SIZE_MULTIPLE; w <= maxTierEdge; w += SIZE_MULTIPLE) {
     const idealH = w / targetRatio
     // 尝试 floor 和 ceil 对齐到 16 的倍数，取像素更大且合法的那个
     const candidates = [
@@ -233,11 +221,10 @@ export function calculateImageSize(tier: SizeTier, ratio: string) {
     ]
 
     for (const h of candidates) {
-      if (h < SIZE_MULTIPLE || h > MAX_EDGE) continue
+      if (h < SIZE_MULTIPLE || h > maxTierEdge) continue
 
       const pixels = w * h
-      if (pixels > pixelBudget || pixels < MIN_PIXELS) continue
-      if (Math.max(w / h, h / w) > MAX_ASPECT_RATIO) continue
+      if (pixels > pixelBudget) continue
 
       const actualRatio = w / h
       const ratioError = Math.abs(actualRatio - targetRatio) / targetRatio
@@ -253,4 +240,21 @@ export function calculateImageSize(tier: SizeTier, ratio: string) {
 
   if (bestPixels === 0) return null
   return `${bestWidth}x${bestHeight}`
+}
+
+export function getSizeTier(size: string): SizeTier | null {
+  const normalized = normalizeImageSize(size)
+  const match = normalized.match(/^(\d+)[xX](\d+)$/)
+  if (!match) return null
+
+  const width = Number(match[1])
+  const height = Number(match[2])
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null
+  }
+
+  const longestEdge = Math.max(width, height)
+  if (longestEdge <= 1536) return '1K'
+  if (longestEdge <= 2560) return '2K'
+  return '4K'
 }

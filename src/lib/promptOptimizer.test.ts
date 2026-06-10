@@ -78,4 +78,33 @@ describe('promptOptimizer', () => {
     expect(lowQualityCount).toBe(1)
     expect(blurryCount).toBe(1)
   })
+
+  it('uses image-to-image mode whenever reference images are present', () => {
+    const result = optimizePrompt({
+      prompt: '保留人物姿态和光线方向，提升服饰质感',
+      negativePrompt: '',
+      hasReferenceImages: true,
+      hasMask: false,
+      currentSize: '1024x1536',
+    })
+
+    expect(result.mode).toBe('image-to-image')
+    expect(result.optimizedPrompt).toContain('保留参考图主体和构图方向')
+  })
+
+  it('normalizes lightweight input before deriving optimizer output', () => {
+    const result = optimizePrompt({
+      prompt: '  东京街头人像  \n\n  女性，  时尚编辑风  ',
+      negativePrompt: ' low quality , blurry \n\n low quality ',
+      hasReferenceImages: false,
+      hasMask: false,
+      currentSize: ' 1024x1536 ',
+    })
+
+    expect(result.optimizedPrompt).not.toContain('  ')
+    expect(result.optimizedPrompt).not.toContain('\n\n\n')
+    expect(result.negativePrompt).toContain('low quality')
+    expect((result.negativePrompt.match(/low quality|低质量/g) ?? []).length).toBe(1)
+    expect(result.recommendedRatio).toBe('2:3')
+  })
 })

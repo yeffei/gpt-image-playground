@@ -58,7 +58,7 @@ function createAgentInstructions(settings: AppSettings) {
     AGENT_IMAGE_INSTRUCTIONS,
     '',
     '## Tool policy',
-    `- Current maximum tool-use rounds for this Agent turn: ${maxToolRounds}.`,
+    `- Current maximum tool-use rounds for this turn: ${maxToolRounds}.`,
     '- Call continue_generation ONLY when you have generated a prerequisite image and need another round to generate dependent images. Do NOT call it when the task is complete.',
     '- When web_search is available, use it only when current external information would improve the answer or the user asks for research/news/facts.',
     '- When the requested task is complete, stop calling tools and provide the final response.',
@@ -79,6 +79,34 @@ function createHeaders(profile: ApiProfile): Record<string, string> {
   return {
     Authorization: `Bearer ${profile.apiKey}`,
     'Content-Type': 'application/json',
+  }
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function isAbortLikeError(err: unknown) {
+  return typeof DOMException !== 'undefined' && err instanceof DOMException && err.name === 'AbortError'
+}
+
+function isRetryableStatus(status: number) {
+  return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500
+}
+
+function isRetryableErrorMessage(message: string) {
+  return /timeout|timed out|network|failed to fetch|fetch failed|load failed|connection|reset|econnreset|socket hang up|temporarily unavailable|overloaded|rate limit|too many requests|429|502|503|504|408/i.test(message)
+}
+
+async function withSingleRetry<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation()
+  } catch (error) {
+    if (isAbortLikeError(error)) throw error
+    const message = error instanceof Error ? error.message : String(error)
+    if (!isRetryableErrorMessage(message)) throw error
+    await sleep(1200)
+    return operation()
   }
 }
 
@@ -248,7 +276,7 @@ function getStreamEventErrorMessage(event: Record<string, unknown>): string | nu
   if (typeof error === 'string' && error.trim()) return error
 
   const type = getStringValue(event, 'type')
-  if (type?.endsWith('.failed')) return getStringValue(event, 'message') ?? 'Agent 流式请求失败'
+  if (type?.endsWith('.failed')) return getStringValue(event, 'message') ?? '流式请求失败'
   return null
 }
 
@@ -295,7 +323,7 @@ async function readJsonServerSentEvents(response: Response, onEvent: (event: Rec
     try {
       event = JSON.parse(data)
     } catch {
-      throw new Error('Agent 流式响应包含无法解析的 JSON 事件')
+      throw new Error('流式响应包含无法解析的 JSON 事件')
     }
     if (!isRecordValue(event)) return
 
@@ -332,25 +360,6 @@ async function readJsonServerSentEvents(response: Response, onEvent: (event: Rec
   } finally {
     for (const signal of signals) signal?.removeEventListener('abort', cancelReader)
   }
-}
-
-function createInput(messages: AgentApiMessage[]) {
-  return messages.map((message) => {
-    const content: Array<Record<string, string>> = [
-      { type: message.role === 'user' ? 'input_text' : 'output_text', text: message.text },
-    ]
-
-    if (message.role === 'user') {
-      for (const dataUrl of message.imageDataUrls ?? []) {
-        content.push({ type: 'input_image', image_url: dataUrl })
-      }
-    }
-
-    return {
-      role: message.role,
-      content,
-    }
-  })
 }
 
 function extractText(payload: ResponsesApiResponse) {
@@ -589,7 +598,7 @@ async function parseAgentStreamResponse(
 
   throwIfAborted(signal, callerSignal)
   const payload: ResponsesApiResponse | null = completedPayload ?? (outputItems.length ? { output: outputItems } : null)
-  if (!payload) throw new Error('Agent 流式接口未返回最终响应数据')
+  if (!payload) throw new Error('流式接口未返回最终响应数据')
 
   const text = extractText(payload) || streamedText.trim()
   return {
@@ -635,12 +644,18 @@ export async function callAgentResponsesApi(opts: {
       body.stream = true
     }
 
-    const response = await fetch(buildApiUrl(profile.baseUrl, 'responses', proxyConfig, useApiProxy), {
-      method: 'POST',
-      headers: createHeaders(profile),
-      cache: 'no-store',
-      body: JSON.stringify(body),
-      signal: controller.signal,
+    const response = await withSingleRetry(async () => {
+      const nextResponse = await fetch(buildApiUrl(profile.baseUrl, 'responses', proxyConfig, useApiProxy), {
+        method: 'POST',
+        headers: createHeaders(profile),
+        cache: 'no-store',
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      })
+      if (!nextResponse.ok && isRetryableStatus(nextResponse.status)) {
+        throw new Error(await getApiErrorMessage(nextResponse))
+      }
+      return nextResponse
     })
 
     if (!response.ok) {
@@ -690,17 +705,23 @@ export async function callAgentConversationTitleApi(opts: {
       content.push({ type: 'input_image', image_url: dataUrl })
     }
 
-    const response = await fetch(buildApiUrl(profile.baseUrl, 'responses', proxyConfig, useApiProxy), {
-      method: 'POST',
-      headers: createHeaders(profile),
-      cache: 'no-store',
-      body: JSON.stringify({
-        model: profile.model || settings.model,
-        instructions: AGENT_TITLE_INSTRUCTIONS,
-        input: [{ role: 'user', content }],
-        max_output_tokens: 32,
-      }),
-      signal: controller.signal,
+    const response = await withSingleRetry(async () => {
+      const nextResponse = await fetch(buildApiUrl(profile.baseUrl, 'responses', proxyConfig, useApiProxy), {
+        method: 'POST',
+        headers: createHeaders(profile),
+        cache: 'no-store',
+        body: JSON.stringify({
+          model: profile.model || settings.model,
+          instructions: AGENT_TITLE_INSTRUCTIONS,
+          input: [{ role: 'user', content }],
+          max_output_tokens: 32,
+        }),
+        signal: controller.signal,
+      })
+      if (!nextResponse.ok && isRetryableStatus(nextResponse.status)) {
+        throw new Error(await getApiErrorMessage(nextResponse))
+      }
+      return nextResponse
     })
 
     if (!response.ok) {
@@ -807,12 +828,18 @@ export async function callBatchImageSingle(opts: {
       body.stream = true
     }
 
-    const response = await fetch(buildApiUrl(profile.baseUrl, 'responses', proxyConfig, useApiProxy), {
-      method: 'POST',
-      headers: createHeaders(profile),
-      cache: 'no-store',
-      body: JSON.stringify(body),
-      signal: controller.signal,
+    const response = await withSingleRetry(async () => {
+      const nextResponse = await fetch(buildApiUrl(profile.baseUrl, 'responses', proxyConfig, useApiProxy), {
+        method: 'POST',
+        headers: createHeaders(profile),
+        cache: 'no-store',
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      })
+      if (!nextResponse.ok && isRetryableStatus(nextResponse.status)) {
+        throw new Error(await getApiErrorMessage(nextResponse))
+      }
+      return nextResponse
     })
 
     if (!response.ok) {

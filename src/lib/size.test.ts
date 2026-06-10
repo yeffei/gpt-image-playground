@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { calculateImageSize } from './size'
+import { calculateImageSize, normalizeImageSize } from './size'
 
 describe('calculateImageSize', () => {
   it('uses common 16:9 display resolutions for the built-in tiers', () => {
@@ -16,5 +16,15 @@ describe('calculateImageSize', () => {
 
   it('falls back to budget-based sizing for custom ratios', () => {
     expect(calculateImageSize('2K', '5:4')).toBe('2288x1824')
+  })
+
+  it('allows extra-wide custom ratios within the tier edge and pixel budgets', () => {
+    expect(calculateImageSize('2K', '4:1')).toBe('2560x640')
+    expect(calculateImageSize('4K', '4:1')).toBe('3840x960')
+  })
+
+  it('normalizes dimensions without forcing a maximum aspect ratio or minimum pixel count', () => {
+    expect(normalizeImageSize('4096x512')).toBe('3840x480')
+    expect(normalizeImageSize('320x128')).toBe('320x128')
   })
 })

@@ -110,13 +110,13 @@ export default function TemplatesPreview() {
               <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                 <div className="max-w-3xl">
                   <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-[#d8ccbc] bg-[#f8f2e8] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-[#7b654c]">
-                    Template Library Preview
+                    模板库
                   </div>
                   <h2 className="text-[2rem] font-semibold tracking-[-0.06em] text-[#1f1e1b] sm:text-[2.6rem]">
                     模板库
                   </h2>
                   <p className="mt-2 max-w-2xl text-sm leading-7 text-[#6f6559] sm:text-[15px]">
-                    先选一个合适模板，再带回生成台继续修改。第一版重点是搜索、筛选、预览与套用，不做重型内容站。
+                    先选一个合适模板，再带回工作台继续修改。这里聚焦搜索、筛选、预览和套用，保持轻量。
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
@@ -161,14 +161,14 @@ export default function TemplatesPreview() {
             <aside className="w-full rounded-[1.7rem] border border-[#e4d7c7] bg-[#f7f1e8] p-4 xl:w-[330px]">
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[#927b61]">当前策略</div>
-                  <div className="mt-1 text-sm font-medium text-[#40362c]">V2 模板库首版</div>
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[#927b61]">使用方式</div>
+                  <div className="mt-1 text-sm font-medium text-[#40362c]">轻量模板库</div>
                 </div>
                 <div className="rounded-full bg-[#ebe1d3] px-3 py-1 text-xs font-semibold text-[#705e4b]">50 条</div>
               </div>
               <div className="mt-4 space-y-3 text-sm leading-6 text-[#6b5d50]">
                 <div className="rounded-[1.15rem] bg-white/70 p-3">
-                  官方模板优先，当前重点是帮助用户更快开始生成，不做模板分享，不放预计积分消耗。
+                  当前以官方模板和个人常用模板为主，帮助你更快开始，不打断创作节奏。
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-[13px]">
                   <div className="rounded-[1rem] bg-white/60 px-3 py-2">海报插画 14</div>
@@ -227,7 +227,7 @@ export default function TemplatesPreview() {
             <div className="mb-4 flex items-center justify-between">
               <div>
                 <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[#947b61]">模板列表</div>
-                <div className="mt-1 text-sm text-[#6d6155]">先看图，再决定是否套用到生成台。</div>
+                <div className="mt-1 text-sm text-[#6d6155]">先看图，再决定是否带回工作台。</div>
               </div>
               <div className="rounded-full bg-[#f3eadf] px-3 py-1 text-xs font-semibold text-[#776754]">{visibleTemplates.length} 条结果</div>
             </div>
@@ -364,7 +364,7 @@ export default function TemplatesPreview() {
                 className="inline-flex items-center justify-center gap-2 rounded-[1rem] bg-[#1f1b17] px-4 py-3 text-sm font-medium text-white shadow-[0_18px_30px_rgba(31,27,23,0.15)]"
               >
                 <PlusIcon className="h-4 w-4" />
-                套用到生成台
+                套用到工作台
               </button>
               <div className="grid grid-cols-2 gap-3">
                 <button type="button" className="inline-flex items-center justify-center gap-2 rounded-[1rem] border border-[#e7dac9] bg-[#fcf8f2] px-4 py-3 text-sm font-medium text-[#66584a]">
@@ -383,4 +383,3 @@ export default function TemplatesPreview() {
     </main>
   )
 }
-

@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { TaskRecord } from '../types'
-import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, updateTaskInStore, reuseConfig } from '../store'
+import type { AccountState, TaskRecord } from '../types'
+import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, updateTaskInStore, reuseConfig, isTaskVisibleForAccount } from '../store'
+import { formatParamDisplayValue } from '../lib/paramDisplay'
+import './CuratedShelf.css'
 
 function CuratedShelfCard({
   task,
-  label,
 }: {
   task: TaskRecord
-  label: string
 }) {
   const [thumbSrc, setThumbSrc] = useState('')
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
@@ -43,14 +43,14 @@ function CuratedShelfCard({
   }, [task.id, task.outputImages])
 
   const summary = task.prompt?.trim() || '未命名结果'
-  const compactSummary = summary.length > 40 ? `${summary.slice(0, 40)}...` : summary
-  const statLine = [
-    task.params.size !== 'auto' ? task.params.size : null,
+  const compactSummary = summary.length > 30 ? `${summary.slice(0, 30)}...` : summary
+  const metaLine = [
+    task.params.quality && task.params.quality !== 'auto' ? formatParamDisplayValue('quality', task.params.quality) : null,
     task.params.output_format?.toUpperCase?.() ?? null,
-    task.isFavorite ? '已收藏' : label,
   ]
     .filter(Boolean)
     .join(' / ')
+  const sizeLabel = task.params.size === 'auto' ? 'AUTO' : task.params.size
 
   return (
     <article
@@ -74,7 +74,7 @@ function CuratedShelfCard({
       </div>
       <div className="curated-card-body">
         <div className="curated-card-headline">
-          <span className="curated-card-badge">{task.isFavorite ? '精选收藏' : label}</span>
+          <span className="curated-card-chip">{metaLine ? `${sizeLabel} · ${metaLine}` : sizeLabel}</span>
           <button
             type="button"
             className={`curated-card-favorite ${task.isFavorite ? 'is-active' : ''}`}
@@ -89,9 +89,8 @@ function CuratedShelfCard({
             </svg>
           </button>
         </div>
-        <div className="curated-card-title">{compactSummary}</div>
-        <div className="curated-card-copy">{statLine}</div>
-        <div className="curated-card-actions">
+        <div className="curated-card-main-row">
+          <div className="curated-card-title">{compactSummary}</div>
           <button
             type="button"
             className="curated-card-action primary"
@@ -100,17 +99,7 @@ function CuratedShelfCard({
               void reuseConfig(task)
             }}
           >
-            复用配置
-          </button>
-          <button
-            type="button"
-            className="curated-card-action"
-            onClick={(event) => {
-              event.stopPropagation()
-              setDetailTaskId(task.id)
-            }}
-          >
-            打开详情
+            复用
           </button>
         </div>
       </div>
@@ -125,10 +114,12 @@ export default function CuratedShelf({
   favoriteDoneTasks: number
   onViewAll?: () => void
 }) {
+  const account = useStore((s) => s.account)
   const tasks = useStore((s) => s.tasks)
 
   const { favorites, suggestions } = useMemo(() => {
     const doneTasks = [...tasks]
+      .filter((task) => isTaskVisibleForAccount(task, account))
       .filter((task) => task.status === 'done' && task.outputImages.length > 0)
       .sort((a, b) => b.createdAt - a.createdAt)
 
@@ -136,57 +127,40 @@ export default function CuratedShelf({
       favorites: doneTasks.filter((task) => task.isFavorite),
       suggestions: doneTasks.filter((task) => !task.isFavorite).slice(0, 4),
     }
-  }, [tasks])
+  }, [account, tasks])
 
-  const maxShelfItems = 6
-  const displayTasks = favorites.length > 0 ? favorites.slice(0, maxShelfItems) : doneTasksFallback(suggestions, tasks, maxShelfItems)
+  const maxShelfItems = 8
+  const displayTasks = favorites.length > 0 ? favorites.slice(0, maxShelfItems) : doneTasksFallback(suggestions, tasks, account, maxShelfItems)
   const isEmpty = displayTasks.length === 0
-  const layoutClass =
-    displayTasks.length <= 1
-      ? 'is-single'
-      : displayTasks.length <= 3
-      ? 'is-compact'
-      : 'is-grid'
 
   return (
     <section className="curated-shelf-shell" aria-label="沉淀资产区">
-      <div className="curated-shelf-heading">
-        <div className="curated-shelf-heading-main">
-          <p className="curated-shelf-kicker">
-            {favorites.length > 0 ? 'CURATED OUTPUTS' : 'REUSABLE ASSETS'}
-          </p>
-          <h2 className="curated-shelf-title">{favorites.length > 0 ? '收藏与复用' : '沉淀结果'}</h2>
-        </div>
+        <div className="curated-shelf-heading">
+          <div className="curated-shelf-heading-main">
+          <h2 className="curated-shelf-title">{favorites.length > 0 ? '收藏复用' : '灵感胶片'}</h2>
+          <p className="curated-shelf-subtitle">{favorites.length > 0 ? '把确认过的方向做成可复用预设，下一轮直接起稿。' : '先从最近产出的可用结果里挑几个继续复用。'}</p>
+          </div>
         <div className="curated-shelf-heading-side">
           <div className="curated-shelf-actions">
-            <div className="curated-shelf-meta">
-              <span>首页上限</span>
-              <strong>{maxShelfItems}</strong>
-            </div>
             <button type="button" className="curated-shelf-view-all" onClick={onViewAll}>
               查看全部
             </button>
           </div>
-          <p className="curated-shelf-copy">
-            {favorites.length > 0
-              ? `当前共有 ${favoriteDoneTasks} 个收藏作品，首页只放最常复用的 ${maxShelfItems} 个。`
-              : `还没有收藏时，先展示最多 ${maxShelfItems} 个最近结果作为待沉淀建议。`}
-          </p>
+          {favorites.length > 0 ? <p className="curated-shelf-copy">{favoriteDoneTasks} 条</p> : null}
         </div>
       </div>
 
       {isEmpty ? (
         <div className="curated-shelf-empty">
-          <div className="curated-shelf-empty-title">还没有可沉淀的结果</div>
-          <p className="curated-shelf-empty-copy">先完成几轮生成，再把值得复用的图加入收藏。之后这块区域会自动承接它们。</p>
+          <div className="curated-shelf-empty-title">还没有可复用内容</div>
+          <p className="curated-shelf-empty-copy">先出几张图，再把值得留的结果收进来。</p>
         </div>
       ) : (
-        <div className={`curated-shelf-grid ${layoutClass}`}>
-          {displayTasks.map((task, index) => (
+        <div className="curated-shelf-grid is-filmstrip">
+          {displayTasks.map((task) => (
             <CuratedShelfCard
               key={task.id}
               task={task}
-              label={favorites.length > 0 ? `收藏 ${index + 1}` : `推荐沉淀 ${index + 1}`}
             />
           ))}
         </div>
@@ -198,6 +172,7 @@ export default function CuratedShelf({
 function doneTasksFallback(
   suggestions: TaskRecord[],
   tasks: TaskRecord[],
+  account: AccountState,
   maxItems: number,
 ) {
   if (suggestions.length >= maxItems) {
@@ -205,6 +180,7 @@ function doneTasksFallback(
   }
 
   const doneTasks = [...tasks]
+    .filter((task) => isTaskVisibleForAccount(task, account))
     .filter((task) => task.status === 'done' && task.outputImages.length > 0)
     .sort((a, b) => b.createdAt - a.createdAt)
 

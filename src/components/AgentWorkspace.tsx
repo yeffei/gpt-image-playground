@@ -1,14 +1,12 @@
 import { useEffect, useMemo, useState, useRef, useCallback, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import type { AgentConversation, AgentMessage, AgentRound, ResponsesOutputItem, TaskRecord } from '../types'
-import { deleteAgentRoundFromConversation, editOutputs, getActiveAgentRounds, getAgentBranchLeafId, getAgentSiblingRounds, getCachedImage, ensureImageCached, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeMultipleTasks, removeTask, reuseConfig, updateTaskInStore, useStore } from '../store'
+import { deleteAgentRoundFromConversation, getActiveAgentRounds, getAgentBranchLeafId, getAgentSiblingRounds, getCachedImage, ensureImageCached, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeMultipleTasks, removeTask, reuseConfig, updateTaskInStore, useStore } from '../store'
 import { getPromptMentionParts } from '../lib/promptImageMentions'
-import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { collectWebSearchCalls, getAgentRoundOutputItems, getWebSearchStatusForCalls, type AgentWebSearchStatus } from '../lib/agentWebSearch'
-import { createMaskPreviewDataUrl } from '../lib/canvasImage'
-import { downloadImageIds } from '../lib/downloadImages'
 import TaskCard from './TaskCard'
 import ViewportTooltip from './ViewportTooltip'
 import MarkdownRenderer from './MarkdownRenderer'
+import './AgentWorkspace.css'
 import { TrashIcon, DownloadIcon, EditIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, SidebarLeftIcon, FavoriteIcon, CloseIcon, CopyIcon, RefreshIcon, ArrowDownIcon } from './icons'
 
 function AgentActionButton({
@@ -64,6 +62,7 @@ function ChatImageThumb({ imageId, imageIndex, maskImageId }: { imageId: string;
       Promise.all([ensureImageCached(imageId), ensureImageCached(maskImageId)])
         .then(async ([baseUrl, maskUrl]) => {
           if (!baseUrl || !maskUrl) return baseUrl || ''
+          const { createMaskPreviewDataUrl } = await import('../lib/canvasImage')
           return createMaskPreviewDataUrl(baseUrl, maskUrl)
         })
         .then((url) => {
@@ -337,7 +336,6 @@ export default function AgentWorkspace() {
   const showToast = useStore((s) => s.showToast)
   const agentGeneratingTitleIds = useStore((s) => s.agentGeneratingTitleIds)
   const conversation = conversations.find((item) => item.id === activeConversationId) ?? null
-  const [selectedRoundId, setSelectedRoundId] = useState<string | null>(null)
   const [editingConversationTitle, setEditingConversationTitle] = useState('')
 
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -606,7 +604,7 @@ export default function AgentWorkspace() {
 
     setConfirmDialog({
       title: '删除对话',
-        message: '确定要删除这个连续创作对话吗？',
+      message: '确定要删除这个对话吗？',
       checkbox: generatedImageCount > 0
         ? {
             label: `同时删除对话中生成的图片（${generatedImageCount} 张）`,
@@ -753,8 +751,8 @@ export default function AgentWorkspace() {
 
   const handleReuse = (task: TaskRecord) => {
     setConfirmDialog({
-        title: '切换到作品流？',
-        message: '复用参数会应用到作品流输入区。切换到作品流后，当前连续创作对话仍会保留。',
+      title: '切换到工作台？',
+      message: '复用参数会应用到工作台输入区。切换到工作台后，当前对话仍会保留。',
       confirmText: '切换并复用',
       cancelText: '取消',
       action: () => {
@@ -791,9 +789,11 @@ export default function AgentWorkspace() {
 
   const handleCopyMessage = async (content: string, successMessage = '提示词已复制', failureMessage = '复制提示词失败') => {
     try {
+      const { copyTextToClipboard } = await import('../lib/clipboard')
       await copyTextToClipboard(content)
       showToast(successMessage, 'success')
     } catch (err) {
+      const { getClipboardFailureMessage } = await import('../lib/clipboard')
       showToast(getClipboardFailureMessage(failureMessage, err), 'error')
     }
   }
@@ -952,7 +952,7 @@ export default function AgentWorkspace() {
               }}
               className="text-sm font-semibold text-gray-700 dark:text-gray-300 truncate flex-1 text-center px-2 hover:bg-gray-100 dark:hover:bg-white/[0.04] rounded transition-colors"
             >
-              {conversation?.title || '连续创作'}
+              {conversation?.title || '对话'}
             </button>
             <button type="button" onClick={createConversation} className="p-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-white/[0.04] rounded-lg transition-colors" title="新对话">
               <EditIcon className="w-5 h-5" />
@@ -969,7 +969,7 @@ export default function AgentWorkspace() {
         >
           {!conversation ? (
             <div className="py-20 text-center text-gray-400">
-              <p className="mb-3">还没有连续创作对话</p>
+              <p className="mb-3">还没有对话</p>
               <button type="button" onClick={createConversation} className="rounded-lg bg-blue-500 px-4 py-2 text-white hover:bg-blue-600 transition-colors">创建对话</button>
             </div>
           ) : (
@@ -977,7 +977,7 @@ export default function AgentWorkspace() {
               if (activeMessages.length === 0) {
                 return (
                   <div className="py-20 text-center text-gray-400">
-                    <p className="mb-2">开始新的连续创作对话</p>
+                    <p className="mb-2">开始新的对话</p>
                     <p className="text-xs">在底部输入框发送消息即可创建第一轮对话。</p>
                   </div>
                 )
@@ -1016,9 +1016,9 @@ export default function AgentWorkspace() {
                       }`}
                       >
                     <div className="mb-2 flex items-center justify-between gap-4 text-sm text-gray-500 dark:text-gray-400">
-                      <button type="button" onClick={(e) => { e.stopPropagation(); setSelectedRoundId(message.roundId); }} className="hover:text-gray-800 dark:hover:text-gray-200 transition-colors font-medium">
+                      <div className="font-medium">
                          <span className={isAssistant ? 'text-blue-600 dark:text-blue-400 font-semibold' : 'text-gray-700 dark:text-gray-200 font-semibold'}>{isAssistant ? '创作助手' : '用户'}</span> <span className="opacity-60 font-normal ml-1">· 第 {round?.index ?? '?'} 轮</span>
-                      </button>
+                      </div>
                     </div>
                     
                     {message.role === 'user' && round && round.inputImageIds.length > 0 && (
@@ -1093,7 +1093,6 @@ export default function AgentWorkspace() {
                                     disableSwipe={true}
                                     onClick={() => setDetailTaskId(block.task.id)}
                                     onReuse={() => handleReuse(block.task)}
-                                    onEditOutputs={() => editOutputs(block.task)}
                                     onDelete={() => setConfirmDialog({ title: '删除记录', message: '确定要删除这条记录吗？', action: () => removeTask(block.task) })}
                                   />
                                 </div>
@@ -1172,6 +1171,7 @@ export default function AgentWorkspace() {
                                if (imageIds.length === 0) return;
                                try {
                                  const roundIndex = round?.index ?? 0;
+                                 const { downloadImageIds } = await import('../lib/downloadImages');
                                  const { successCount, failCount } = await downloadImageIds(imageIds, 'agent-round-' + roundIndex);
                                  if (successCount === 0) {
                                    useStore.getState().showToast('下载失败', 'error');
