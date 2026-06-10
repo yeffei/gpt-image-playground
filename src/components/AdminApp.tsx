@@ -2040,20 +2040,33 @@ function GatewayActions(props: {
     }
     setName(readRecordString(props.selectedRecord, 'name'))
     setBaseUrl(readRecordString(props.selectedRecord, 'baseUrl'))
-    setApiKeyRef(readRecordString(props.selectedRecord, 'apiKeyRef'))
+    setApiKeyRef('')
     setShowApiKeyRef(false)
     setNotes(readRecordString(props.selectedRecord, 'notes'))
     setEnabled(readRecordBoolean(props.selectedRecord, 'enabled', true))
   }, [props.selectedId, props.selectedRecord])
 
-  const buildRoutePayload = () => ({
-    name: name.trim(),
-    provider: 'openai-compatible',
-    baseUrl: baseUrl.trim(),
-    apiKeyRef: apiKeyRef.trim(),
-    notes: readOptionalText(notes),
-    enabled,
-  })
+  const buildRoutePayload = () => {
+    const payload: {
+      name: string
+      provider: string
+      baseUrl: string
+      apiKeyRef?: string
+      notes?: string
+      enabled: boolean
+    } = {
+      name: name.trim(),
+      provider: 'openai-compatible',
+      baseUrl: baseUrl.trim(),
+      notes: readOptionalText(notes),
+      enabled,
+    }
+    const nextApiKeyRef = apiKeyRef.trim()
+    if (!props.selectedId || nextApiKeyRef) {
+      payload.apiKeyRef = nextApiKeyRef
+    }
+    return payload
+  }
 
   return (
     <div className="admin-action-grid">
@@ -2091,6 +2104,7 @@ function GatewayActions(props: {
               type={showApiKeyRef ? 'text' : 'password'}
               autoComplete="off"
               spellCheck={false}
+              placeholder={props.selectedId ? '留空则保留当前密钥' : ''}
               onChange={(event) => setApiKeyRef(event.target.value)}
               required={!props.selectedId}
               disabled={props.disabled}
