@@ -6,11 +6,13 @@ const state = {
   adminToken: '',
   userToken: '',
   userId: '',
-  routeId: `accept-route-${stamp}`,
-  skuId: `accept-sku-${stamp}`,
-  redeemCode: `ACCEPT-REDEEM-${stamp}`,
-  disableCode: `ACCEPT-DISABLE-${stamp}`,
-  batchId: `accept-batch-${stamp}`,
+  routeId: '',
+  skuId: '',
+  bindingId: '',
+  redeemCode: '',
+  disableCode: '',
+  batchNo: '',
+  importRunId: '',
 }
 
 const results = []
@@ -64,12 +66,14 @@ function summarizePayload(payload) {
     balance: payload.account?.balance,
     codeIds: payload.codes?.map((code) => code.id),
     rechargeStatus: payload.rechargeCode?.status,
+    batchNo: payload.batch?.batchNo,
     routeId: payload.route?.id,
     routeEnabled: payload.route?.enabled,
-    modelSkuId: payload.modelSku?.id,
-    modelSkuEnabled: payload.modelSku?.enabled,
-    importBatchId: payload.importBatch?.id,
-    importBatchName: payload.importBatch?.name,
+    modelId: payload.model?.id,
+    modelEnabled: payload.model?.enabled,
+    bindingId: payload.binding?.id,
+    importRunId: payload.importRun?.id,
+    importRunStatus: payload.importRun?.status,
   }
 }
 
@@ -107,17 +111,21 @@ try {
     expected: [200],
   })
 
-  await request('create recharge code', 'POST', '/api/admin/recharge-codes', {
+  const generatedCodes = await request('create recharge code', 'POST', '/api/admin/recharge-codes', {
     token: state.adminToken,
     body: {
       points: 30,
-      codes: [state.redeemCode, state.disableCode],
-      source: 'acceptance-local',
-      batchName: `acceptance ${stamp}`,
-      externalOrderId: `accept-order-${stamp}`,
+      count: 2,
     },
     expected: [201],
   })
+  const createdCodes = Array.isArray(generatedCodes?.codes) ? generatedCodes.codes : []
+  state.redeemCode = createdCodes[0]?.code
+  state.disableCode = createdCodes[1]?.code
+  state.batchNo = generatedCodes?.batch?.batchNo
+  if (!state.redeemCode || !state.disableCode || !state.batchNo) {
+    throw new Error('create recharge code response did not include two redeemable codes and batchNo')
+  }
 
   await request('redeem recharge code', 'POST', '/api/recharge-codes/redeem', {
     token: state.userToken,
@@ -125,11 +133,13 @@ try {
     expected: [200],
   })
 
-  const codes = await request('list recharge code by query', 'GET', `/api/admin/recharge-codes?query=${encodeURIComponent(state.disableCode)}&limit=5&offset=0`, {
+  const codes = await request('list recharge code by batch', 'GET', `/api/admin/recharge-codes?batchNo=${encodeURIComponent(state.batchNo)}&status=active&limit=5&offset=0`, {
     token: state.adminToken,
     expected: [200],
   })
-  const codeId = Array.isArray(codes?.codes) ? codes.codes[0]?.id : ''
+  const codeId = Array.isArray(codes?.codes)
+    ? codes.codes.find((code) => code?.codePreview === buildCodePreview(state.disableCode))?.id
+    : ''
   if (codeId) {
     const disabledCode = await request('disable active recharge code', 'PATCH', `/api/admin/recharge-codes/${encodeURIComponent(codeId)}`, {
       token: state.adminToken,
@@ -144,7 +154,7 @@ try {
     })
     if (disabledDetail?.code?.status !== 'disabled') throw new Error('disabled recharge code detail did not persist disabled status')
 
-    const disabledList = await request('verify disabled recharge code list', 'GET', `/api/admin/recharge-codes?status=disabled&query=${encodeURIComponent(state.disableCode)}&limit=5&offset=0`, {
+    const disabledList = await request('verify disabled recharge code list', 'GET', `/api/admin/recharge-codes?status=disabled&batchNo=${encodeURIComponent(state.batchNo)}&limit=5&offset=0`, {
       token: state.adminToken,
       expected: [200],
     })
@@ -154,32 +164,21 @@ try {
     if (persistedDisabledCode?.status !== 'disabled') throw new Error('disabled recharge code list did not include disabled status')
   }
 
-  await request('create import batch', 'POST', '/api/admin/content/templates/import-batch', {
+  const importRun = await request('create import run', 'POST', '/api/admin/content/template-import-runs', {
     token: state.adminToken,
     body: {
-      id: state.batchId,
-      name: `Acceptance import ${stamp}`,
-      sourceName: 'Local Acceptance',
-      sourceUrl: 'https://example.com/local-acceptance',
-      sourceAuthor: 'Codex',
-      license: 'internal',
-      templateCount: 0,
-      note: 'local admin write acceptance',
-      reason: `acceptance create ${stamp}`,
+      sourceUrl: 'data:text/markdown;charset=utf-8,%23%20Acceptance%20Template%0A%0AA%20minimal%20local%20acceptance%20template.',
     },
     expected: [201],
   })
-  await request('update import batch', 'PATCH', `/api/admin/content/templates/import-batch/${encodeURIComponent(state.batchId)}`, {
-    token: state.adminToken,
-    body: { note: 'local admin write acceptance updated', reason: `acceptance update ${stamp}` },
-    expected: [200],
-  })
+  state.importRunId = importRun?.importRun?.id
+  if (!state.importRunId) throw new Error('create import run response did not include importRun.id')
 
-  await request('create model sku without routes', 'POST', '/api/admin/model-skus', {
+  const model = await request('create model sku', 'POST', '/api/admin/model-skus', {
     token: state.adminToken,
     body: {
-      id: state.skuId,
-      name: `Acceptance SKU ${stamp}`,
+      name: `acceptance-sku-${stamp}`,
+      displayName: `Acceptance SKU ${stamp}`,
       description: 'Local admin write acceptance SKU',
       supportedSizes: ['1024x1024'],
       supportedQualities: ['low'],
@@ -192,39 +191,54 @@ try {
     },
     expected: [201],
   })
+  state.skuId = model?.model?.id
+  if (!state.skuId) throw new Error('create model sku response did not include model.id')
 
-  await request('create gateway route', 'POST', '/api/admin/gateway/routes', {
+  const route = await request('create gateway route', 'POST', '/api/admin/gateway-routes', {
     token: state.adminToken,
     body: {
-      id: state.routeId,
       name: `Acceptance Route ${stamp}`,
+      provider: 'acceptance',
       baseUrl: 'https://acceptance-route.example.com',
       apiKeyRef: 'ACCEPTANCE_ROUTE_KEY',
-      upstreamModelBySku: { [state.skuId]: 'gpt-image-2' },
-      priority: 99,
-      weight: 1,
-      maxConcurrency: 1,
-      timeoutSeconds: 60,
-      supportsEdit: true,
-      supportsMask: true,
-      compatibilityStrategy: 'openai_standard',
+      defaultUpstreamModel: 'gpt-image-2',
       enabled: true,
-      reason: `acceptance route create ${stamp}`,
     },
     expected: [201],
   })
+  state.routeId = route?.route?.id
+  if (!state.routeId) throw new Error('create gateway route response did not include route.id')
+
+  const binding = await request('create model route binding', 'POST', '/api/admin/model-route-bindings', {
+    token: state.adminToken,
+    body: {
+      modelSkuId: state.skuId,
+      routeId: state.routeId,
+      upstreamModel: 'gpt-image-2',
+      priority: 99,
+      weight: 1,
+      timeoutSeconds: 60,
+      enabled: true,
+    },
+    expected: [201],
+  })
+  state.bindingId = binding?.binding?.id
+  if (!state.bindingId) throw new Error('create model route binding response did not include binding.id')
+
   await request('update model sku', 'PATCH', `/api/admin/model-skus/${encodeURIComponent(state.skuId)}`, {
     token: state.adminToken,
-    body: { routeIds: [state.routeId], enabled: false, reason: `acceptance sku update ${stamp}` },
+    body: { enabled: false },
     expected: [200],
   })
-  await request('update gateway route', 'PATCH', `/api/admin/gateway/routes/${encodeURIComponent(state.routeId)}`, {
+  await request('update gateway route', 'PATCH', `/api/admin/gateway-routes/${encodeURIComponent(state.routeId)}`, {
     token: state.adminToken,
     body: {
       name: `Acceptance Route Updated ${stamp}`,
-      upstreamModelBySku: { [state.skuId]: 'gpt-image-2' },
+      provider: 'acceptance',
+      baseUrl: 'https://acceptance-route.example.com',
+      apiKeyRef: 'ACCEPTANCE_ROUTE_KEY',
+      defaultUpstreamModel: 'gpt-image-2',
       enabled: false,
-      reason: `acceptance route update ${stamp}`,
     },
     expected: [200],
   })
@@ -244,4 +258,9 @@ try {
     results,
   }, null, 2))
   process.exitCode = 1
+}
+
+function buildCodePreview(code) {
+  const normalized = String(code || '').trim().toUpperCase()
+  return `${normalized.slice(0, 8)}****${normalized.slice(-4)}`
 }
