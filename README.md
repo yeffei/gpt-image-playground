@@ -45,13 +45,6 @@
 <br>
 
 <div align="center">
-  <b>桌面端连续创作模式</b><br>
-  <img src="docs/images/example_pc_4.jpg" alt="桌面端连续创作模式" />
-</div>
-
-<br>
-
-<div align="center">
   <b>移动端主界面</b><br>
   <img src="docs/images/example_mb_1.jpg" alt="移动端主界面" width="420" />
 </div>
@@ -72,6 +65,8 @@
 - 当前仓库已可直接本地运行，也适合作为二次开发起点。
 - 默认采用 `local-first` 结构：历史、参数和图片记录优先存储在浏览器本地。
 - 适合个人创作、自托管使用，或作为你自己的图像工作台前端基础仓库。
+- 当前 V1 口径下，`工作台` 与 `官方模板浏览` 可先公开使用；`作品库 / 收藏 / 我的模板 / 最近使用 / 结果详情整理` 属于登录后的个人沉淀区。
+- 访客当前可以先填写工作台输入、浏览官方模板与查看额度说明；真正的提交生成、个人结果查看与充值结果承接都放在登录后继续完成。
 
 ---
 
@@ -82,20 +77,15 @@
 - **批量与迭代**：支持单次多图生成；一键将满意结果转为参考图，无缝开启下一轮修改。
 - **流式生成预览**：`Images API` 与 `Responses API` 模式均支持流式接收中间步骤图像，缓解连接超时问题。
 
-### 🤖 连续创作模式（进阶）
-- **多轮对话与上下文记忆**：基于 Responses API 的对话式生成，适合连续追改、比较方向和沿用上轮结果；支持 `@` 引用参考图或前面轮次生成的图片，并自动识别上下文中的图片。
-- **并发批量生成**：内置 `generate_image_batch` 工具，可在一次轮次中并发生成多张关联图像，并通过 `continue_generation` 自动追加新一轮以处理依赖关系。
-- **分支与重新生成**：编辑某轮消息重新发送或重新生成某轮消息会产生可切换的分支，引用解析严格限定在当前分支路径内，避免误用其他分支的图片。
-- **作品流同步与隔离删除**：连续创作生成的图片会同步到作品流；删除对话默认保留作品流记录，删除作品流任务时也会自动清理对话中残留的图片引用。
-- **可选 Web 搜索**：可开启 `web_search` 工具，连续创作会在需要时搜索网络信息并附带引用链接。
-
 ### ⚙️ 精细化参数追踪
 - **智能尺寸控制**：提供 1K/2K/4K 快速预设，自定义宽高时会自动规整至模型安全范围（16 的倍数、总像素校验等）。
 - **实际参数对比**：自动提取 API 响应中真实生效的尺寸、质量、耗时以及**模型改写后的提示词**，与你的请求参数高亮对比。支持定制化的参数列表横向平滑滚动体验。
 
 ### 📁 高效历史管理 (纯本地)
-- **瀑布流与画廊**：历史任务自动保存，支持按状态过滤、全屏大图预览与快捷下载。
-- **快捷批量操作**：桌面端支持鼠标拖拽框选、Ctrl/⌘ 连选，移动端支持顺滑侧滑多选；轻松实现批量收藏与清理。
+- **结果沉淀边界**：公开工作台优先负责开始创作；作品库、收藏、历史详情和个人整理动作默认放在登录后的个人区域中。
+- **访客口径**：访客入口优先强调“先填写 / 先浏览 / 先查看说明”，避免误导成已经能直接查看个人结果或进入真实充值流程。
+- **瀑布流与画廊**：登录后历史任务会自动保存，支持按状态过滤、全屏大图预览与快捷下载。
+- **快捷批量操作**：登录后的个人结果区支持桌面端拖拽框选、Ctrl/⌘ 连选，以及移动端顺滑侧滑多选；适合批量收藏、下载与清理。
 - **优化的图片查看与下载**：大图预览支持左右滑动切换、移动端长按弹出操作菜单，支持快捷下载与批量下载。
 - **极致性能与隐私**：所有记录与图片均存放在浏览器 IndexedDB 中（采用 SHA-256 去重压缩），不经过任何第三方服务器。支持一键打包导出 ZIP 备份。
 
@@ -131,9 +121,7 @@ npm run dev
 VITE_DEFAULT_API_URL=https://api.openai.com/v1
 ```
 
-> 推荐先从本地开发模式开始，再按需要接入代理、Docker、Vercel 或 Cloudflare Workers。
-
-> 连续创作属于进阶模式，适合连续迭代、追改和分支比较；如果只是日常单次生图，优先使用作品流即可。
+> 推荐先从本地开发模式开始，再按需要接入代理、Docker、Vercel 或自托管 Node API。
 
 ---
 
@@ -147,6 +135,14 @@ VITE_DEFAULT_API_URL=https://api.openai.com/v1
 **1. 环境准备与启动**
 
 你可以在项目根目录新建 `.env.local` 文件配置默认 API URL（如 `VITE_DEFAULT_API_URL=https://api.openai.com/v1`）。然后安装依赖并启动：
+
+如果需要同时配置默认 API、前台网关开关和服务端 Image Gateway 密钥，可直接从项目根目录的 `.env.example` 复制一份到你自己的 `.env.local` / `.env` 后再按需修改。
+
+如果你只是要接入一条真实的 Image Gateway relay 线路，仓库里也提供了更小的模板：`.env.local.example`。
+
+- 默认推荐：复制为项目根目录 `.env.local`，用于普通本地 Web 开发。
+- 仅桌面模式需要时：复制为 `.env.desktop.local`，只让 `vite --mode desktop` / `npm run desktop:web:dev` 读取。
+- 不建议把真实 relay 密钥写进 `.env.example`、`VITE_IMAGE_GATEWAY_ROUTE_*`，或任何会进入前台构建产物的变量。
 
 **导入自定义服务商配置**：`VITE_DEFAULT_API_URL` 除了填写普通 API 地址外，也支持直接填写 `.json` 配置 URL 或带 `settings` 参数的分享 URL。设为配置 URL 时，页面启动后会自动导入其中的自定义服务商和 API 配置，设置页显示的是配置 JSON 中 profile 定义的 `baseUrl`（而非配置 URL 本身）。
 
@@ -165,6 +161,78 @@ cp dev-proxy.config.example.json dev-proxy.config.json
 
 修改 `dev-proxy.config.json`，将 `target` 设置为真实的完整 API 基础地址。代理不会自动补 `/v1`，OpenAI 兼容接口通常必须填写到版本前缀，如 `https://api.example.com/v1`。重启开发服务器后，在页面设置中开启 **API 代理** 即可（请求将被转发如 `http://localhost:5173/api-proxy/... -> target/...`）。此功能仅在 `npm run dev` 阶段生效，不会影响打包产物。
 
+**2.1 本地 Image Gateway 边界（标准版平台线路）**
+
+如果要在本地验证产品级模型 SKU 和系统线路调度，而不是让前台直接持有线路密钥，可在启动前设置：
+
+```bash
+VITE_IMAGE_GATEWAY_ENABLED=true
+IMAGE_GATEWAY_ROUTE_1_BASE_URL=https://your-relay.example.com/v1
+IMAGE_GATEWAY_ROUTE_1_API_KEY=your-relay-key
+IMAGE_GATEWAY_ROUTE_1_MODEL=gpt-image-2
+```
+
+PowerShell 示例：
+
+```powershell
+$env:VITE_IMAGE_GATEWAY_ENABLED="true"
+$env:IMAGE_GATEWAY_ROUTE_1_BASE_URL="https://your-relay.example.com/v1"
+$env:IMAGE_GATEWAY_ROUTE_1_API_KEY="your-relay-key"
+$env:IMAGE_GATEWAY_ROUTE_1_MODEL="gpt-image-2"
+npm run dev
+```
+
+更适合长期本地使用的方式是放进私有 env 文件，而不是每次临时设 shell 变量：
+
+```powershell
+Copy-Item .env.local.example .env.local
+```
+
+然后至少填写这 4 个键：
+
+```dotenv
+VITE_IMAGE_GATEWAY_ENABLED=true
+IMAGE_GATEWAY_ROUTE_1_BASE_URL=https://your-relay.example.com/v1
+IMAGE_GATEWAY_ROUTE_1_API_KEY=your-relay-key
+IMAGE_GATEWAY_ROUTE_1_MODEL=gpt-image-2
+```
+
+如果你只想让这条真实线路在桌面模式可用，可改为：
+
+```powershell
+Copy-Item .env.local.example .env.desktop.local
+```
+
+建议启动顺序：
+
+1. 填好 `.env.local` 或 `.env.desktop.local`
+2. 启动 `npm run dev`，或桌面预览用 `npm run desktop:web:dev`
+3. 打开设置里的网关诊断，确认线路映射 / 线路健康里已出现 `route-1`
+4. 再从工作台发一次 `GPT Image 2 快速`，验证真实 relay 成功出图
+
+如果你只是想在本地先验证“系统线路成功出图”这条产品链路，而不想先接真实 relay，可直接运行仓库内置 mock：
+
+```bash
+npm run dev:gateway:mock
+```
+
+这个命令会同时启动：
+
+- `mock-image-api` 上游：`http://127.0.0.1:8788/url-ok`
+- 本地产品网关：`/api/image/generate`
+- 前端开发页：`http://127.0.0.1:4173`
+
+启动后，工作台里的 `GPT Image 2 快速` 会走 `route-1`，可直接验证系统线路成功出图、任务记录、诊断面板和 route 快照链路。
+
+启用后，本地开发服务器会提供同源的 `/api/image/generate`，前台优先通过这个网关边界发起生图请求。可继续按同样规则补充 `IMAGE_GATEWAY_ROUTE_2_*`、`IMAGE_GATEWAY_ROUTE_3_*`。
+
+说明：`VITE_IMAGE_GATEWAY_ROUTE_*` 这类前台线路变量只保留给本地开发兼容，不建议作为正式产品部署方式；正式环境应优先使用 `VITE_IMAGE_GATEWAY_ENABLED=true` + 服务端 `IMAGE_GATEWAY_ROUTE_*`。
+
+变量分层：
+
+- 前台构建变量：`VITE_IMAGE_GATEWAY_ENABLED`、`VITE_IMAGE_GATEWAY_PATH`
+- 服务端密钥变量：`IMAGE_GATEWAY_ROUTE_*`
+
 **3. 本地故障模拟 API (可选)**
 
 如果需要复现图片 URL 跨域、接口返回结构异常、原始响应查看等问题，可启动内置模拟服务：
@@ -175,6 +243,72 @@ npm run mock:api
 
 使用方式见 [本地故障模拟 API](docs/mock-image-api.md)。
 
+**3.1 Live Verify 内部比对工具 (可选)**
+
+如果你在排查 direct upstream 和 Image Gateway 的实际行为差异，可使用内部 `live verify` 工具链：
+
+```powershell
+npm run verify:image:live -- --gateway-url http://127.0.0.1:8788/api/image/generate --gateway-model-sku gpt-image-2-fast
+```
+
+如果要验证 `edit` 路径，请额外传入你自己的 `--edit-image-path` 和 `--mask-image-path`；仓库本身不再依赖预置的 edit fixture 文件。
+
+如果你修改了对应的 comparison/reporting 逻辑，优先跑这组定向回归：
+
+```powershell
+npm run test:verify:image:live
+```
+
+详细说明见 [Live Verify Image Gateway](docs/live-verify-image-gateway.md)。这是内部 ops/debug 工具，不属于普通用户工作流。
+仓库也提供了对应的 GitHub Actions workflow：`.github/workflows/live-verify.yml`。
+
+如果你想补一轮真实页面证据，仓库也提供了工作台级别的成功 / 失败验证：
+
+```powershell
+npm run verify:image:gateway:success-ux -- --url http://127.0.0.1:4273
+npm run verify:image:gateway:failure-ux -- --url http://127.0.0.1:4274
+```
+
+如果你这次改动属于 Image Gateway / verifier / release baseline 这一条线，优先直接跑聚合入口：
+
+```powershell
+npm run verify:image:gateway:release -- --healthy-url http://127.0.0.1:4273 --failing-url http://127.0.0.1:4274
+```
+
+这个命令会先跑：
+
+- `npm run test:verify:image:gateway:ux`
+- `npm run test:verify:image:live`
+
+然后在提供 URL 时继续跑页面成功 / 失败验证。当前聚合入口默认会把页面级校验超时设为 `60000ms`，因为 `4273` healthy 本地页在部分运行态下可能需要更长时间才稳定进入成功态；若当前环境只适合非浏览器检查，可加 `--skip-page-ux`，也可以用 `--timeout-ms` 显式覆盖。
+
+这些命令会在本地浏览器里模拟“已登录且有余额”的工作台状态，提交一次真实请求，并输出一段 JSON。成功态重点看：
+
+- 是否进入 `已完成` 状态
+- 是否出现成功文案（如果当前页面仍显示）
+- 顶部余额是否从种子值下降
+- `latestTaskCardId` / `latestTaskStatusSource` 是否表明这次校验优先锁定到了本次提交对应的新任务；正常情况下 `latestTaskStatusSource` 应优先为 `indexeddb_new_task`
+
+失败态重点看：
+
+- 是否仍然显示 `请求编号`
+- 是否能看到失败相关文案 / `fetch failed`
+- 失败前后顶部余额是否保持不变
+
+如果这些关键检查不成立，命令会返回非零退出码，并在 JSON 里带出 `failures` 列表。
+
+如果你改的是 verifier 自身逻辑，而不是页面或路由实现，优先跑：
+
+```powershell
+npm run test:verify:image:gateway:ux
+```
+
+如果本机缓存里还没有 Playwright，可先运行一次：
+
+```powershell
+npx playwright --version
+```
+
 **4. 构建静态产物**
 
 ```bash
@@ -182,6 +316,57 @@ npm run build
 ```
 
 构建输出的文件位于 `dist/` 目录下，可将其部署至任何静态文件服务器（如普通 Nginx、GitHub Pages、Netlify 等）。
+
+</details>
+
+<details open>
+<summary><strong>🧭 标准版生产部署：Node API + PostgreSQL</strong></summary>
+
+当前商业化后台主线是自托管 Node API + PostgreSQL。推荐把前台和 API 固定为：
+
+- 前台：`https://www.example.com`
+- API：`https://api.example.com`
+- 生图入口：`https://api.example.com/api/image/generate`
+- 结果图：`https://api.example.com/api/generated-images/...`
+
+API 服务器使用 `server/.env.local`，至少配置：
+
+```dotenv
+NODE_ENV=production
+HOST=127.0.0.1
+PORT=3001
+DATABASE_URL=postgres://gpt_image:replace-with-strong-password@127.0.0.1:5432/gpt_image
+ADMIN_BOOTSTRAP_TOKEN=replace-with-a-long-one-time-bootstrap-token
+APP_PUBLIC_ORIGIN=https://www.example.com
+SERVER_IMAGE_STORAGE_DIR=/srv/gpt-image/storage/generated-images
+SERVER_IMAGE_PUBLIC_BASE_PATH=/api/generated-images
+```
+
+启动顺序：
+
+```powershell
+npm ci
+npm run server:build
+npm run server:migrate
+npm run server:start
+```
+
+部署前先跑配置预检：
+
+```powershell
+npm run verify:server-deploy-config
+```
+
+如果要检查具体生产 env 文件：
+
+```powershell
+$env:SERVER_DEPLOY_ENV_FILE="server/.env.local"
+$env:EXPECTED_FRONTEND_ORIGIN="https://www.example.com"
+$env:EXPECTED_API_ORIGIN="https://api.example.com"
+npm run verify:server-deploy-config
+```
+
+反代层负责 HTTPS，并把 `api.example.com/api/*`、`/healthz`、`/readyz` 转发到 Node 服务。完整清单见 [Image Gateway Node/Postgres Deployment Checklist](docs/image-gateway-backend-deployment-checklist.md)。
 
 </details>
 
@@ -201,42 +386,7 @@ npm run build
 </details>
 
 <details>
-<summary><strong>☁️ 方式三：Cloudflare Workers 部署</strong></summary>
-
-项目已内置 Wrangler 配置，可将 Vite 构建产物作为 Cloudflare Workers 静态资源部署。
-
-**1. 登录 Cloudflare**
-
-```bash
-npx wrangler login
-```
-
-**2. 部署到 Workers**
-
-```bash
-npm run deploy:cf
-```
-
-部署脚本会先执行 `npm run build`，再通过 `wrangler deploy` 上传 `dist/` 目录。
-
-**配置默认 API URL**：Cloudflare Workers 的环境变量不会自动改写已经构建好的静态文件。若需预设默认 API 地址，请在构建前设置 `VITE_DEFAULT_API_URL` 后再部署。
-
-```bash
-VITE_DEFAULT_API_URL=https://api.openai.com/v1 npm run deploy:cf
-```
-
-PowerShell 示例：
-
-```powershell
-$env:VITE_DEFAULT_API_URL="https://api.openai.com/v1"; npm run deploy:cf
-```
-
-**导入自定义服务商配置**：`VITE_DEFAULT_API_URL` 除了填写普通 API 地址外，也支持直接填写 `.json` 配置 URL 或带 `settings` 参数的分享 URL。设为配置 URL 时，页面启动后会自动导入其中的自定义服务商和 API 配置，设置页显示的是配置 JSON 中 profile 定义的 `baseUrl`（而非配置 URL 本身）。
-
-</details>
-
-<details>
-<summary><strong>🐳 方式四：Docker 部署</strong></summary>
+<summary><strong>🐳 方式三：Docker 部署</strong></summary>
 
 如果你计划自托管，可基于 `deploy/Dockerfile` 构建自己的镜像。Docker 部署支持在运行时注入默认配置。
 

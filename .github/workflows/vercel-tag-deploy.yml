@@ -6,7 +6,11 @@ on:
       - 'v*'
 
 jobs:
+  verify-live-compare:
+    uses: ./.github/workflows/live-verify.yml
+
   deploy:
+    needs: verify-live-compare
     runs-on: ubuntu-latest
     steps:
       - name: Call Vercel Deploy Hook

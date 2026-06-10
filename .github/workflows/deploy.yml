@@ -15,7 +15,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  verify-live-compare:
+    uses: ./.github/workflows/live-verify.yml
+
   build:
+    needs: verify-live-compare
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

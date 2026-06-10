@@ -95,6 +95,10 @@ function getMode(url, body) {
   return defaultMode
 }
 
+function isMultipartEditRequest(bodyText) {
+  return /name="image\[\]"/i.test(bodyText) || /name="mask"/i.test(bodyText)
+}
+
 function getRequestedN(url, body) {
   const raw = url.searchParams.get('n') ?? (body && typeof body === 'object' ? body.n : undefined)
   const n = Number(raw)
@@ -221,6 +225,7 @@ async function handleApi(req, res, url) {
   const body = req.method === 'GET' ? { json: null } : await readBody(req)
   const mode = getMode(url, body.json)
   const n = getRequestedN(url, body.json)
+  const isEdit = url.pathname.endsWith('/v1/images/edits') || isMultipartEditRequest(body.text)
 
   if (mode === 'slow') {
     const delayMs = Math.max(1, Number(url.searchParams.get('delayMs') || 15000))
@@ -245,11 +250,18 @@ async function handleApi(req, res, url) {
   const wantsStream = (body.json && typeof body.json === 'object' && body.json.stream === true) ||
     /name="stream"[\s\S]*?\r?\n\r?\ntrue/.test(body.text)
   if (wantsStream) {
-    await sendSse(res, createImagesStreamEvents(req, mode, n, url.pathname.endsWith('/v1/images/edits')))
+    await sendSse(res, createImagesStreamEvents(req, mode, n, isEdit))
     return
   }
 
-  sendJson(res, 200, createOpenAIResponse(req, mode, n))
+  const payload = createOpenAIResponse(req, mode, n)
+  if (isEdit && Array.isArray(payload.data)) {
+    payload.data = payload.data.map((item, index) => ({
+      ...item,
+      revised_prompt: item.revised_prompt || `mock edit ${mode} ${index + 1}`,
+    }))
+  }
+  sendJson(res, 200, payload)
 }
 
 async function handleResponses(req, res, url) {

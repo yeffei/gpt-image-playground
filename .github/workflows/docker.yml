@@ -10,7 +10,11 @@ permissions:
   packages: write
 
 jobs:
+  verify-live-compare:
+    uses: ./.github/workflows/live-verify.yml
+
   docker:
+    needs: verify-live-compare
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

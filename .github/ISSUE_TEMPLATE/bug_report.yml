@@ -76,7 +76,6 @@ body:
       description: 请选择你使用的部署方式。
       options:
         - Vercel
-        - Cloudflare Workers
         - Docker
         - 本地部署
         - 其他
