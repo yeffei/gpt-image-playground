@@ -104,6 +104,14 @@ function normalizeStringArray(value: unknown, fallback: string[]) {
     .slice(0, 50)
 }
 
+function normalizePagination(query: Record<string, unknown>) {
+  const rawLimit = typeof query.limit === 'string' ? Number.parseInt(query.limit, 10) : 25
+  const rawOffset = typeof query.offset === 'string' ? Number.parseInt(query.offset, 10) : 0
+  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 200) : 25
+  const offset = Number.isFinite(rawOffset) ? Math.max(rawOffset, 0) : 0
+  return { limit, offset }
+}
+
 function isFutureIso(value?: string | null) {
   if (!value) return false
   const timestamp = new Date(value).getTime()
@@ -287,6 +295,9 @@ export function registerGatewayModelRoutes(app: FastifyInstance, db: Db) {
   app.get('/api/admin/gateway-routes', async (request, reply) => {
     try {
       await requireAdminSession(db, request.headers.authorization)
+      const query = isRecord(request.query) ? request.query : {}
+      const { limit, offset } = normalizePagination(query)
+      const total = (await db.query<{ total: string }>('SELECT COUNT(*)::text AS total FROM gateway_routes')).rows[0]
       const result = await db.query<GatewayRouteRow>(`
         SELECT id, name, provider, base_url, api_key_ref, default_upstream_model, enabled,
           notes, created_at::text, updated_at::text,
@@ -316,8 +327,17 @@ export function registerGatewayModelRoutes(app: FastifyInstance, db: Db) {
           ) AS cooldown_until
         FROM gateway_routes
         ORDER BY enabled DESC, updated_at DESC
-      `)
-      return reply.send({ ok: true, routes: result.rows.map(serializeRoute) })
+        LIMIT $1 OFFSET $2
+      `, [limit, offset])
+      return reply.send({
+        ok: true,
+        routes: result.rows.map(serializeRoute),
+        pagination: {
+          limit,
+          offset,
+          total: Number(total?.total ?? 0),
+        },
+      })
     } catch (error) {
       return sendError(reply, error)
     }
@@ -440,13 +460,25 @@ export function registerGatewayModelRoutes(app: FastifyInstance, db: Db) {
   app.get('/api/admin/model-skus', async (request, reply) => {
     try {
       await requireAdminSession(db, request.headers.authorization)
+      const query = isRecord(request.query) ? request.query : {}
+      const { limit, offset } = normalizePagination(query)
+      const total = (await db.query<{ total: string }>('SELECT COUNT(*)::text AS total FROM model_skus')).rows[0]
       const result = await db.query<ModelSkuRow>(`
         SELECT id, name, display_name, description, enabled, supported_sizes, supported_qualities,
           supports_edit, supports_mask, sort_order, created_at::text, updated_at::text
         FROM model_skus
         ORDER BY enabled DESC, sort_order ASC, updated_at DESC
-      `)
-      return reply.send({ ok: true, models: result.rows.map(serializeModel) })
+        LIMIT $1 OFFSET $2
+      `, [limit, offset])
+      return reply.send({
+        ok: true,
+        models: result.rows.map(serializeModel),
+        pagination: {
+          limit,
+          offset,
+          total: Number(total?.total ?? 0),
+        },
+      })
     } catch (error) {
       return sendError(reply, error)
     }
@@ -587,7 +619,16 @@ export function registerGatewayModelRoutes(app: FastifyInstance, db: Db) {
         values.push(`%${routeId}%`)
         whereClauses.push(`(b.route_id ILIKE $${values.length} OR r.name ILIKE $${values.length})`)
       }
+      const { limit, offset } = normalizePagination(query)
       const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : ''
+      const total = (await db.query<{ total: string }>(`
+        SELECT COUNT(*)::text AS total
+        FROM model_route_bindings b
+        JOIN model_skus m ON m.id = b.model_sku_id
+        JOIN gateway_routes r ON r.id = b.route_id
+        LEFT JOIN gateway_route_health h ON h.route_id = b.route_id AND h.model_sku_id = b.model_sku_id
+        ${whereSql}
+      `, values)).rows[0]
       const result = await db.query<ModelRouteBindingRow>(`
         SELECT b.id, b.model_sku_id, m.name AS model_name, m.display_name AS model_display_name,
           b.route_id, r.name AS route_name, b.upstream_model, b.priority, b.weight,
@@ -601,8 +642,17 @@ export function registerGatewayModelRoutes(app: FastifyInstance, db: Db) {
         LEFT JOIN gateway_route_health h ON h.route_id = b.route_id AND h.model_sku_id = b.model_sku_id
         ${whereSql}
         ORDER BY m.sort_order ASC, b.enabled DESC, b.priority ASC, b.weight DESC
-      `, values)
-      return reply.send({ ok: true, bindings: result.rows.map(serializeBinding) })
+        LIMIT $${values.length + 1} OFFSET $${values.length + 2}
+      `, [...values, String(limit), String(offset)])
+      return reply.send({
+        ok: true,
+        bindings: result.rows.map(serializeBinding),
+        pagination: {
+          limit,
+          offset,
+          total: Number(total?.total ?? 0),
+        },
+      })
     } catch (error) {
       return sendError(reply, error)
     }

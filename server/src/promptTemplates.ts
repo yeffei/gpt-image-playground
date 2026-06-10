@@ -158,6 +158,14 @@ function normalizeCandidateStatus(value: unknown, fallback: typeof CANDIDATE_STA
   return status
 }
 
+function normalizePagination(query: Record<string, unknown>) {
+  const rawLimit = typeof query.limit === 'string' ? Number.parseInt(query.limit, 10) : 25
+  const rawOffset = typeof query.offset === 'string' ? Number.parseInt(query.offset, 10) : 0
+  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 200) : 25
+  const offset = Number.isFinite(rawOffset) ? Math.max(rawOffset, 0) : 0
+  return { limit, offset }
+}
+
 function serializeTemplate(row: PromptTemplateRow) {
   return {
     id: row.id,
@@ -754,15 +762,26 @@ export function registerPromptTemplateRoutes(app: FastifyInstance, db: Pool) {
   app.get('/api/admin/content/template-import-runs', async (request, reply) => {
     try {
       await requireAdminSession(db, request.headers.authorization)
+      const query = isRecord(request.query) ? request.query : {}
+      const { limit, offset } = normalizePagination(query)
+      const total = (await db.query<{ total: string }>('SELECT COUNT(*)::text AS total FROM prompt_template_import_runs')).rows[0]
       const result = await db.query<ImportRunRow>(`
         SELECT id, source_url, source_type, status, local_asset_root, total_candidates,
           approved_count, rejected_count, error_summary, created_by_admin_id,
           created_at::text, updated_at::text
         FROM prompt_template_import_runs
         ORDER BY created_at DESC
-        LIMIT 100
-      `)
-      return reply.send({ ok: true, importRuns: result.rows.map(serializeRun) })
+        LIMIT $1 OFFSET $2
+      `, [limit, offset])
+      return reply.send({
+        ok: true,
+        importRuns: result.rows.map(serializeRun),
+        pagination: {
+          limit,
+          offset,
+          total: Number(total?.total ?? 0),
+        },
+      })
     } catch (error) {
       return sendError(reply, error)
     }
@@ -800,15 +819,30 @@ export function registerPromptTemplateRoutes(app: FastifyInstance, db: Pool) {
         values.push(importRunId)
         where.push(`import_run_id = $${values.length}`)
       }
+      const { limit, offset } = normalizePagination(query)
+      const whereSql = where.join(' AND ')
+      const total = (await db.query<{ total: string }>(`
+        SELECT COUNT(*)::text AS total
+        FROM prompt_template_candidates
+        WHERE ${whereSql}
+      `, values)).rows[0]
       const result = await db.query<CandidateRow>(`
         SELECT id, import_run_id, title, category, tags, prompt, image_path, source_url,
           status, review_note, approved_template_id, created_at::text, updated_at::text
         FROM prompt_template_candidates
-        WHERE ${where.join(' AND ')}
+        WHERE ${whereSql}
         ORDER BY updated_at DESC
-        LIMIT 200
-      `, values)
-      return reply.send({ ok: true, candidates: result.rows.map(serializeCandidate) })
+        LIMIT $${values.length + 1} OFFSET $${values.length + 2}
+      `, [...values, limit, offset])
+      return reply.send({
+        ok: true,
+        candidates: result.rows.map(serializeCandidate),
+        pagination: {
+          limit,
+          offset,
+          total: Number(total?.total ?? 0),
+        },
+      })
     } catch (error) {
       return sendError(reply, error)
     }

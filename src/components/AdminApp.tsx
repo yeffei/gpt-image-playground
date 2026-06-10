@@ -541,7 +541,6 @@ const ADMIN_FILTERS: Partial<Record<Exclude<AdminSectionKey, 'dashboard'> | User
     { key: 'codePreview', label: '码预览' },
     { key: 'user', label: '用户' },
     { key: 'failureKind', label: '失败类型' },
-    { key: 'codePreview', label: '码预览' },
     { key: 'dateFrom', label: '开始日期', type: 'date' },
     { key: 'dateTo', label: '结束日期', type: 'date' },
   ],

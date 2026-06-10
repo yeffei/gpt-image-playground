@@ -691,8 +691,15 @@ export function registerRechargeCodeRoutes(app: FastifyInstance, db: Pool) {
         where.push(`(c.redeemed_by_user_id ILIKE $${values.length} OR u.email ILIKE $${values.length} OR u.display_name ILIKE $${values.length})`)
       }
 
-      const limit = 200
+      const { limit, offset } = normalizePagination(query)
       const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
+      const total = (await db.query<{ total: string }>(`
+        SELECT COUNT(*)::text AS total
+        FROM recharge_codes c
+        JOIN recharge_code_batches b ON b.id = c.batch_id
+        LEFT JOIN users u ON u.id = c.redeemed_by_user_id
+        ${whereSql}
+      `, values)).rows[0]
       const result = await db.query<RechargeCodeRow>(`
         SELECT c.id, c.batch_id, b.batch_no, c.sequence_no, c.code_preview, c.points::text, c.status,
           c.expires_at::text, c.redeemed_by_user_id, u.email AS redeemed_by_user_email,
@@ -703,11 +710,16 @@ export function registerRechargeCodeRoutes(app: FastifyInstance, db: Pool) {
         LEFT JOIN users u ON u.id = c.redeemed_by_user_id
         ${whereSql}
         ORDER BY b.created_at DESC, c.sequence_no ASC
-        LIMIT ${limit}
-      `, values)
+        LIMIT $${values.length + 1} OFFSET $${values.length + 2}
+      `, [...values, limit, offset])
       return reply.send({
         ok: true,
         codes: result.rows.map(serializeCode),
+        pagination: {
+          limit,
+          offset,
+          total: Number(total?.total ?? 0),
+        },
       })
     } catch (error) {
       return sendError(reply, error)
