@@ -255,6 +255,7 @@ CREATE TABLE IF NOT EXISTS prompt_template_candidates (
   tags JSONB NOT NULL DEFAULT '[]'::jsonb,
   prompt TEXT NOT NULL,
   image_path TEXT,
+  original_image_url TEXT,
   source_url TEXT,
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
   review_note TEXT,
@@ -262,6 +263,9 @@ CREATE TABLE IF NOT EXISTS prompt_template_candidates (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE prompt_template_candidates
+  ADD COLUMN IF NOT EXISTS original_image_url TEXT;
 
 CREATE TABLE IF NOT EXISTS system_settings (
   key TEXT PRIMARY KEY,

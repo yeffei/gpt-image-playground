@@ -85,6 +85,7 @@ interface CandidateRow {
   tags: unknown
   prompt: string
   image_path?: string | null
+  original_image_url?: string | null
   source_url?: string | null
   status: string
   review_note?: string | null
@@ -211,6 +212,7 @@ function serializeCandidate(row: CandidateRow) {
     tags: Array.isArray(row.tags) ? row.tags : [],
     prompt: row.prompt,
     imagePath: row.image_path ?? null,
+    originalImageUrl: row.original_image_url ?? null,
     sourceUrl: row.source_url ?? null,
     status: row.status,
     reviewNote: row.review_note ?? null,
@@ -410,6 +412,11 @@ function hasEnoughPromptDetail(prompt: string) {
 
 function filterQualityCandidates(candidates: CandidateInput[]) {
   return candidates.filter((candidate) => hasEnoughPromptDetail(candidate.prompt))
+}
+
+function normalizeOriginalImageUrl(imageUrl: string | null) {
+  if (!imageUrl || !/^https?:\/\//i.test(imageUrl)) return null
+  return imageUrl.slice(0, 2000)
 }
 
 async function filterExistingTemplateDuplicates(db: Db, candidates: CandidateInput[]) {
@@ -709,9 +716,9 @@ export function registerPromptTemplateRoutes(app: FastifyInstance, db: Pool) {
         for (const candidate of candidates) {
           await db.query(`
             INSERT INTO prompt_template_candidates (
-              id, import_run_id, title, category, tags, prompt, image_path, source_url,
+              id, import_run_id, title, category, tags, prompt, image_path, original_image_url, source_url,
               status, created_at, updated_at
-            ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'pending', $9, $9)
+            ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, 'pending', $10, $10)
           `, [
             createId('template_candidate'),
             runId,
@@ -720,6 +727,7 @@ export function registerPromptTemplateRoutes(app: FastifyInstance, db: Pool) {
             JSON.stringify(candidate.tags),
             candidate.prompt,
             candidate.imagePath,
+            normalizeOriginalImageUrl(candidate.imageUrl),
             candidate.sourceUrl,
             nowIso(),
           ])
@@ -827,7 +835,7 @@ export function registerPromptTemplateRoutes(app: FastifyInstance, db: Pool) {
         WHERE ${whereSql}
       `, values)).rows[0]
       const result = await db.query<CandidateRow>(`
-        SELECT id, import_run_id, title, category, tags, prompt, image_path, source_url,
+        SELECT id, import_run_id, title, category, tags, prompt, image_path, original_image_url, source_url,
           status, review_note, approved_template_id, created_at::text, updated_at::text
         FROM prompt_template_candidates
         WHERE ${whereSql}
@@ -854,7 +862,7 @@ export function registerPromptTemplateRoutes(app: FastifyInstance, db: Pool) {
       const params = isRecord(request.params) ? request.params : {}
       const id = typeof params.id === 'string' ? params.id.trim() : ''
       const row = (await db.query<CandidateRow>(`
-        SELECT id, import_run_id, title, category, tags, prompt, image_path, source_url,
+        SELECT id, import_run_id, title, category, tags, prompt, image_path, original_image_url, source_url,
           status, review_note, approved_template_id, created_at::text, updated_at::text
         FROM prompt_template_candidates
         WHERE id = $1
@@ -875,7 +883,7 @@ export function registerPromptTemplateRoutes(app: FastifyInstance, db: Pool) {
       const payload = isRecord(request.body) ? request.body : {}
       const result = await withTransaction(db, async (tx) => {
         const candidate = (await tx.query<CandidateRow>(`
-          SELECT id, import_run_id, title, category, tags, prompt, image_path, source_url,
+          SELECT id, import_run_id, title, category, tags, prompt, image_path, original_image_url, source_url,
             status, review_note, approved_template_id, created_at::text, updated_at::text
           FROM prompt_template_candidates
           WHERE id = $1
@@ -910,7 +918,7 @@ export function registerPromptTemplateRoutes(app: FastifyInstance, db: Pool) {
           UPDATE prompt_template_candidates
           SET status = 'approved', approved_template_id = $1, review_note = $2, updated_at = $3
           WHERE id = $4
-          RETURNING id, import_run_id, title, category, tags, prompt, image_path, source_url,
+          RETURNING id, import_run_id, title, category, tags, prompt, image_path, original_image_url, source_url,
             status, review_note, approved_template_id, created_at::text, updated_at::text
         `, [template.id, normalizeOptionalText(payload.reviewNote, 1000), updatedAt, id])).rows[0]
         await recalculateRunCounts(tx, candidate.import_run_id, updatedAt)
@@ -939,7 +947,7 @@ export function registerPromptTemplateRoutes(app: FastifyInstance, db: Pool) {
       const id = typeof params.id === 'string' ? params.id.trim() : ''
       const payload = isRecord(request.body) ? request.body : {}
       const before = (await db.query<CandidateRow>(`
-        SELECT id, import_run_id, title, category, tags, prompt, image_path, source_url,
+        SELECT id, import_run_id, title, category, tags, prompt, image_path, original_image_url, source_url,
           status, review_note, approved_template_id, created_at::text, updated_at::text
         FROM prompt_template_candidates
         WHERE id = $1
@@ -952,7 +960,7 @@ export function registerPromptTemplateRoutes(app: FastifyInstance, db: Pool) {
         UPDATE prompt_template_candidates
         SET status = 'rejected', review_note = $1, updated_at = $2
         WHERE id = $3
-        RETURNING id, import_run_id, title, category, tags, prompt, image_path, source_url,
+        RETURNING id, import_run_id, title, category, tags, prompt, image_path, original_image_url, source_url,
           status, review_note, approved_template_id, created_at::text, updated_at::text
       `, [normalizeOptionalText(payload.reviewNote, 1000), updatedAt, id])).rows[0]
       await recalculateRunCounts(db, before.import_run_id, updatedAt)

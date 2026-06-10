@@ -88,6 +88,11 @@ export default defineConfig(({ command, mode }) => {
           changeOrigin: true,
           secure: false,
         },
+        '/prompt-template-assets': {
+          target: loadedEnv.VITE_POSTGRES_API_BASE_URL || loadedEnv.VITE_ADMIN_API_BASE_URL || 'http://127.0.0.1:3001',
+          changeOrigin: true,
+          secure: false,
+        },
         ...(devProxyConfig?.enabled
           ? {
               [devProxyConfig.prefix]: {

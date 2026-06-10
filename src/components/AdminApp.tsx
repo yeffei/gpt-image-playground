@@ -657,17 +657,31 @@ function extractMarkdownImageUrl(markdown: string) {
   return match?.[1] ?? null
 }
 
-function getTemplatePreviewUrl(row: Record<string, unknown>) {
-  const imagePath = getValueByPath(row, 'imagePath')
-  if (typeof imagePath === 'string' && imagePath.trim()) return imagePath.trim()
+function normalizePreviewImageUrl(value: unknown) {
+  const url = typeof value === 'string' ? value.trim() : ''
+  if (!url) return null
+  return /^(data:image\/|https?:\/\/|\/)/i.test(url) ? url : null
+}
+
+function getTemplatePreviewUrls(row: Record<string, unknown>) {
+  const urls: string[] = []
+  const addUrl = (value: unknown) => {
+    const url = normalizePreviewImageUrl(value)
+    if (url && !urls.includes(url)) urls.push(url)
+  }
+  addUrl(getValueByPath(row, 'imagePath'))
+  addUrl(getValueByPath(row, 'originalImageUrl'))
+  addUrl(getValueByPath(row, 'previewImageUrl'))
   const sourceUrl = getValueByPath(row, 'sourceUrl')
-  if (typeof sourceUrl !== 'string' || !sourceUrl.startsWith('data:text/')) return null
-  const markdown = decodeDataTextUrl(sourceUrl)
-  if (!markdown) return null
-  const previewUrl = extractMarkdownImageUrl(markdown)
-  if (!previewUrl) return null
-  if (/^(data:image\/|https?:\/\/|\/)/i.test(previewUrl)) return previewUrl
-  return null
+  if (typeof sourceUrl === 'string' && sourceUrl.startsWith('data:text/')) {
+    const markdown = decodeDataTextUrl(sourceUrl)
+    if (markdown) addUrl(extractMarkdownImageUrl(markdown))
+  }
+  return urls
+}
+
+function getTemplatePreviewUrl(row: Record<string, unknown>) {
+  return getTemplatePreviewUrls(row)[0] ?? null
 }
 
 function getOfficialTemplateAdminPayload(limit: number, offset: number, filters: Record<string, string>) {
@@ -1017,18 +1031,20 @@ function AdminValue(props: { fieldKey: string; value: unknown }) {
 }
 
 function AdminTemplatePreview(props: { row: Record<string, unknown> }) {
-  const previewUrl = getTemplatePreviewUrl(props.row)
-  const [failedUrl, setFailedUrl] = useState('')
+  const previewUrls = getTemplatePreviewUrls(props.row)
+  const previewKey = previewUrls.join('\n')
+  const [previewIndex, setPreviewIndex] = useState(0)
 
   useEffect(() => {
-    setFailedUrl('')
-  }, [previewUrl])
+    setPreviewIndex(0)
+  }, [previewKey])
 
-  if (!previewUrl) return <span className="admin-template-preview-empty">无图</span>
-  if (failedUrl === previewUrl) return <span className="admin-template-preview-empty is-missing">图片缺失</span>
+  if (!previewUrls.length) return <span className="admin-template-preview-empty">无图</span>
+  const previewUrl = previewUrls[previewIndex]
+  if (!previewUrl) return <span className="admin-template-preview-empty is-missing">图片缺失</span>
   return (
     <span className="admin-template-preview">
-      <img src={previewUrl} alt="" loading="lazy" onError={() => setFailedUrl(previewUrl)} />
+      <img src={previewUrl} alt="" loading="lazy" onError={() => setPreviewIndex((index) => index + 1)} />
       <span>有图</span>
     </span>
   )
@@ -2811,12 +2827,13 @@ function CandidateReviewActions(props: {
 }
 
 function CandidateReviewPreview(props: { selectedRecord: Record<string, unknown> | null }) {
-  const previewUrl = props.selectedRecord ? getTemplatePreviewUrl(props.selectedRecord) : null
-  const [failedUrl, setFailedUrl] = useState('')
+  const previewUrls = props.selectedRecord ? getTemplatePreviewUrls(props.selectedRecord) : []
+  const previewKey = previewUrls.join('\n')
+  const [previewIndex, setPreviewIndex] = useState(0)
 
   useEffect(() => {
-    setFailedUrl('')
-  }, [previewUrl])
+    setPreviewIndex(0)
+  }, [previewKey])
 
   if (!props.selectedRecord) {
     return (
@@ -2830,17 +2847,18 @@ function CandidateReviewPreview(props: { selectedRecord: Record<string, unknown>
   const title = getValueByPath(props.selectedRecord, 'title')
   const category = getValueByPath(props.selectedRecord, 'category')
   const sourceUrl = getValueByPath(props.selectedRecord, 'sourceUrl')
-  const hasUsablePreview = previewUrl && failedUrl !== previewUrl
+  const previewUrl = previewUrls[previewIndex] ?? null
+  const hasUsablePreview = Boolean(previewUrl)
 
   return (
     <section className="admin-action-form admin-action-form-wide">
       <h3>候选预览</h3>
       {hasUsablePreview ? (
         <div className="admin-template-action-preview admin-template-review-preview">
-          <img src={previewUrl} alt={typeof title === 'string' ? title : '候选图片预览'} onError={() => setFailedUrl(previewUrl)} />
+          <img src={previewUrl} alt={typeof title === 'string' ? title : '候选图片预览'} onError={() => setPreviewIndex((index) => index + 1)} />
         </div>
       ) : (
-        <p className="admin-template-review-missing">{previewUrl ? '图片加载失败，请核对本地图片或来源链接。' : '这条候选没有可预览图片。'}</p>
+        <p className="admin-template-review-missing">{previewUrls.length ? '图片加载失败，请核对本地图片或来源链接。' : '这条候选没有可预览图片。'}</p>
       )}
       <div className="admin-strategy-list">
         <div><span>标题</span><strong>{formatAdminValue(title)}</strong></div>
