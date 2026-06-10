@@ -46,6 +46,34 @@ function registerGeneratedImageRoutes(app: FastifyInstance, env: ServerEnv) {
   })
 }
 
+function registerPromptTemplateAssetRoutes(app: FastifyInstance) {
+  const root = normalize(join(process.cwd(), 'public', 'prompt-template-assets'))
+  app.get('/prompt-template-assets/:runId/:filename', async (request, reply) => {
+    const params = request.params as { runId?: string; filename?: string }
+    const runId = typeof params.runId === 'string' ? params.runId : ''
+    const filename = typeof params.filename === 'string' ? params.filename : ''
+    const filePath = normalize(join(root, runId, filename))
+    if (!filePath.startsWith(`${root}${sep}`)) return reply.status(400).send({ ok: false, error: 'invalid_path' })
+    try {
+      await access(filePath)
+      const mimeType = extname(filename).toLowerCase() === '.png'
+        ? 'image/png'
+        : extname(filename).toLowerCase() === '.webp'
+          ? 'image/webp'
+          : extname(filename).toLowerCase() === '.gif'
+            ? 'image/gif'
+            : extname(filename).toLowerCase() === '.jpg' || extname(filename).toLowerCase() === '.jpeg'
+              ? 'image/jpeg'
+              : 'application/octet-stream'
+      reply.header('Content-Type', mimeType)
+      reply.header('Cache-Control', 'public, max-age=31536000, immutable')
+      return reply.send(createReadStream(filePath))
+    } catch {
+      return reply.status(404).send({ ok: false, error: 'asset_not_found' })
+    }
+  })
+}
+
 function sanitizeDownloadFilename(value: string) {
   return value
     .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-')
@@ -90,6 +118,7 @@ export function buildApp(db: Pool, env: ServerEnv) {
   registerRechargeCodeRoutes(app, db)
   registerGatewayModelRoutes(app, db)
   registerGeneratedImageRoutes(app, env)
+  registerPromptTemplateAssetRoutes(app)
   registerImageGatewayRoutes(app, db, env)
   registerPromptTemplateRoutes(app, db)
 
