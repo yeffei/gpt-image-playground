@@ -3018,6 +3018,23 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
     }
   }
 
+  const resetSubsectionState = () => {
+    setFilters({})
+    setPageOffset(0)
+    setPageLimit(25)
+    setSelectedId('')
+    setSelectedLabel('')
+    setSelectedRecord(null)
+    setDetail(null)
+    setError('')
+  }
+
+  const switchSubsection = <T extends string>(current: T, next: T, setNext: (value: T) => void) => {
+    if (current === next) return
+    resetSubsectionState()
+    setNext(next)
+  }
+
   const handleActionComplete = async (actionName?: string) => {
     if (actionName?.startsWith('删除')) {
       await loadModuleData()
@@ -3052,7 +3069,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
               key={item.key}
               type="button"
               className={userSubsection === item.key ? 'is-active' : ''}
-              onClick={() => setUserSubsection(item.key)}
+              onClick={() => switchSubsection(userSubsection, item.key, setUserSubsection)}
             >
               {item.label}
             </button>
@@ -3067,7 +3084,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
               key={item.key}
               type="button"
               className={contentSubsection === item.key ? 'is-active' : ''}
-              onClick={() => setContentSubsection(item.key)}
+              onClick={() => switchSubsection(contentSubsection, item.key, setContentSubsection)}
             >
               {item.label}
             </button>
@@ -3082,7 +3099,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
               key={item.key}
               type="button"
               className={rechargeSubsection === item.key ? 'is-active' : ''}
-              onClick={() => setRechargeSubsection(item.key)}
+              onClick={() => switchSubsection(rechargeSubsection, item.key, setRechargeSubsection)}
             >
               {item.label}
             </button>
@@ -3097,7 +3114,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
               key={item.key}
               type="button"
               className={gatewaySubsection === item.key ? 'is-active' : ''}
-              onClick={() => setGatewaySubsection(item.key)}
+              onClick={() => switchSubsection(gatewaySubsection, item.key, setGatewaySubsection)}
             >
               {item.label}
             </button>
@@ -3112,7 +3129,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
               key={item.key}
               type="button"
               className={growthSubsection === item.key ? 'is-active' : ''}
-              onClick={() => setGrowthSubsection(item.key)}
+              onClick={() => switchSubsection(growthSubsection, item.key, setGrowthSubsection)}
             >
               {item.label}
             </button>
@@ -3123,6 +3140,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
       <div className="admin-data-layout">
         <div className="admin-workspace-column">
           <form
+            key={filterScope}
             className="admin-panel admin-filter-panel"
             onSubmit={(event) => {
               event.preventDefault()
