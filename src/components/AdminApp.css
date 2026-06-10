@@ -576,6 +576,34 @@
   object-fit: cover;
 }
 
+.admin-template-review-preview {
+  min-height: 240px;
+  background:
+    linear-gradient(45deg, #f8fafc 25%, transparent 25%),
+    linear-gradient(-45deg, #f8fafc 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #f8fafc 75%),
+    linear-gradient(-45deg, transparent 75%, #f8fafc 75%);
+  background-color: #eef3f8;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-size: 16px 16px;
+}
+
+.admin-template-review-preview img {
+  object-fit: contain;
+}
+
+.admin-template-review-missing {
+  margin: 0;
+  border: 1px dashed #d6deea;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 18px;
+  color: #b42318;
+  font-size: 13px;
+  font-weight: 720;
+  line-height: 1.5;
+}
+
 .admin-table th[data-field='points'],
 .admin-table td[data-field='points'],
 .admin-table th[data-field='balance'],

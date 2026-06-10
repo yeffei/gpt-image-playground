@@ -1774,6 +1774,7 @@ function AdminActionPanel(props: {
           disabled={disabledBySubmit}
           selectedId={props.selectedId}
           selectedLabel={props.selectedLabel}
+          selectedRecord={props.selectedRecord}
           onRun={runAction}
           token={props.token}
         />
@@ -2737,6 +2738,7 @@ function CandidateReviewActions(props: {
   disabled: boolean
   selectedId: string
   selectedLabel: string
+  selectedRecord: Record<string, unknown> | null
   token: string
   onRun: (actionName: string, action: () => Promise<void>) => Promise<void>
 }) {
@@ -2755,6 +2757,7 @@ function CandidateReviewActions(props: {
   const disabled = props.disabled || !props.selectedId
   return (
     <div className="admin-action-grid">
+      <CandidateReviewPreview selectedRecord={props.selectedRecord} />
       <form
         className="admin-action-form"
         onSubmit={(event) => {
@@ -2804,6 +2807,47 @@ function CandidateReviewActions(props: {
         <button type="submit" disabled={disabled}>拒绝候选</button>
       </form>
     </div>
+  )
+}
+
+function CandidateReviewPreview(props: { selectedRecord: Record<string, unknown> | null }) {
+  const previewUrl = props.selectedRecord ? getTemplatePreviewUrl(props.selectedRecord) : null
+  const [failedUrl, setFailedUrl] = useState('')
+
+  useEffect(() => {
+    setFailedUrl('')
+  }, [previewUrl])
+
+  if (!props.selectedRecord) {
+    return (
+      <section className="admin-action-form admin-action-form-wide">
+        <h3>候选预览</h3>
+        <p className="admin-empty">先在左侧候选列表选择一条记录，再查看图片、标题、分类和来源。</p>
+      </section>
+    )
+  }
+
+  const title = getValueByPath(props.selectedRecord, 'title')
+  const category = getValueByPath(props.selectedRecord, 'category')
+  const sourceUrl = getValueByPath(props.selectedRecord, 'sourceUrl')
+  const hasUsablePreview = previewUrl && failedUrl !== previewUrl
+
+  return (
+    <section className="admin-action-form admin-action-form-wide">
+      <h3>候选预览</h3>
+      {hasUsablePreview ? (
+        <div className="admin-template-action-preview admin-template-review-preview">
+          <img src={previewUrl} alt={typeof title === 'string' ? title : '候选图片预览'} onError={() => setFailedUrl(previewUrl)} />
+        </div>
+      ) : (
+        <p className="admin-template-review-missing">{previewUrl ? '图片加载失败，请核对本地图片或来源链接。' : '这条候选没有可预览图片。'}</p>
+      )}
+      <div className="admin-strategy-list">
+        <div><span>标题</span><strong>{formatAdminValue(title)}</strong></div>
+        <div><span>分类</span><strong>{formatAdminValue(category)}</strong></div>
+        <div><span>来源</span><strong>{formatAdminValue(sourceUrl)}</strong></div>
+      </div>
+    </section>
   )
 }
 
