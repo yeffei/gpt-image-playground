@@ -1,0 +1,74 @@
+name: Live Verify Regression
+
+on:
+  workflow_call:
+  push:
+    paths:
+      - '.github/workflows/live-verify.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'scripts/live-verify-image-gateway.mjs'
+      - 'scripts/live-verify-image-gateway.integration.test.ts'
+      - 'scripts/verify-gateway-failure-ux.mjs'
+      - 'scripts/verify-gateway-failure-ux.test.ts'
+      - 'scripts/mock-image-api.mjs'
+      - 'scripts/mock-live-verify-gateway.mjs'
+      - 'src/lib/gatewayFailure.ts'
+      - 'src/lib/liveVerifyImageGateway.ts'
+      - 'src/lib/liveVerifyImageGateway.test.ts'
+      - 'src/types.ts'
+  pull_request:
+    paths:
+      - '.github/workflows/live-verify.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'scripts/live-verify-image-gateway.mjs'
+      - 'scripts/live-verify-image-gateway.integration.test.ts'
+      - 'scripts/verify-gateway-failure-ux.mjs'
+      - 'scripts/verify-gateway-failure-ux.test.ts'
+      - 'scripts/mock-image-api.mjs'
+      - 'scripts/mock-live-verify-gateway.mjs'
+      - 'src/lib/gatewayFailure.ts'
+      - 'src/lib/liveVerifyImageGateway.ts'
+      - 'src/lib/liveVerifyImageGateway.test.ts'
+      - 'src/types.ts'
+  workflow_dispatch:
+
+jobs:
+  verify-live-compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+      - run: npm run test:verify:image:gateway:ux
+      - run: npm run test:verify:image:live
+        env:
+          LIVE_VERIFY_TEST_ARTIFACT_DIR: artifacts/live-verify-ci
+
+      - name: Upload live verify comparison artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-verify-comparison-artifacts
+          path: artifacts/live-verify-ci
+          if-no-files-found: ignore
+
+      - name: Publish live verify job summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f artifacts/live-verify-ci/summary.md ]; then
+            cat artifacts/live-verify-ci/summary.md >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Artifact bundle: \`live-verify-comparison-artifacts\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Live verify summary file was not generated." >> "$GITHUB_STEP_SUMMARY"
+          fi

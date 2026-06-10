@@ -1,23 +1,52 @@
-import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect, type ReactNode } from 'react'
+import { Suspense, lazy, useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { useStore, submitTask, submitAgentMessage, stopAgentResponse, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, updateTaskInStore, removeMultipleTasks, getCachedImage, ensureImageCached, getActiveAgentRounds, appendNegativePromptTerms } from '../store'
-import { DEFAULT_PARAMS } from '../types'
+import { useStore, submitTask, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, updateTaskInStore, removeMultipleTasks, ensureImageCached, appendNegativePromptTerms, estimateBillingPoints, getWorkbenchAccessState, mergeNegativePromptValue, isTaskVisibleForAccount } from '../store'
+import { DEFAULT_PARAMS, type TaskParams } from '../types'
 import { getActiveApiProfile, normalizeSettings } from '../lib/apiProfiles'
+import { normalizeParamsForModelSku } from '../lib/modelSkus'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
-import { getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers } from '../lib/promptImageMentions'
+import { getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers } from '../lib/promptImageMentions'
 import { formatImageRatio, normalizeImageSize } from '../lib/size'
-import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import { getSafeBoundingClientRect } from '../lib/domRect'
-import { collectAgentRoundOutputImageSlots } from '../lib/agentImageReferences'
-import { optimizePrompt, type PromptOptimizerResult } from '../lib/promptOptimizer'
+import type { PromptOptimizerResult } from '../lib/promptOptimizer'
+import { isServerImageGatewayEnabled } from '../lib/serverImageGatewayConfig'
 import { useHintTooltip } from '../hooks/useHintTooltip'
-import { downloadImageIds, formatExportFileTime } from '../lib/downloadImages'
 import Select from './Select'
-import PromptOptimizerModal from './PromptOptimizerModal'
-import SizePickerModal from './SizePickerModal'
 import ViewportTooltip from './ViewportTooltip'
 import { CloseIcon } from './icons'
+import { LazyModalFallback } from './LazyLoadFallback'
+import {
+  GUEST_SUBMIT_GENERATION_LABEL,
+  GUEST_WORKBENCH_SUBMIT_TOOLTIP_COPY,
+} from '../lib/accessCopy'
+
+const PromptOptimizerModal = lazy(() => import('./PromptOptimizerModal'))
+const SizePickerModal = lazy(() => import('./SizePickerModal'))
+
+const QUALITY_LABELS: Record<TaskParams['quality'], string> = {
+  auto: '自动',
+  low: '低',
+  medium: '中',
+  high: '高',
+}
+const PRODUCT_QUALITY_OPTIONS: Array<{ label: string; value: TaskParams['quality'] }> = [
+  { label: QUALITY_LABELS.low, value: 'low' },
+  { label: QUALITY_LABELS.medium, value: 'medium' },
+  { label: QUALITY_LABELS.high, value: 'high' },
+]
+const WILDCARD_QUALITY_OPTIONS: Array<{ label: string; value: TaskParams['quality'] }> = [
+  { label: QUALITY_LABELS.auto, value: 'auto' },
+  { label: QUALITY_LABELS.low, value: 'low' },
+  { label: QUALITY_LABELS.medium, value: 'medium' },
+  { label: QUALITY_LABELS.high, value: 'high' },
+]
+
+function isSpecificQuality(value: TaskParams['quality'] | '*'): value is TaskParams['quality'] {
+  return value !== '*'
+}
+
+const PRODUCT_GATEWAY_OUTPUT_LIMIT = 4
 
 
 function getMentionTagTextLength(el: Element) {
@@ -338,19 +367,13 @@ function ButtonTooltip({ visible, text }: { visible: boolean; text: ReactNode })
 
 /** API 支持的最大参考图数量 */
 const API_MAX_IMAGES = 16
-const CONSTRAINT_CHIPS = [
-  {
-    title: '风格锁定',
-    items: ['避免风格漂移', '避免过度写实', '避免卡通化'],
-  },
-  {
-    title: '构图限制',
-    items: ['避免裁切主体', '避免多人同框', '避免俯拍视角'],
-  },
-  {
-    title: '禁止元素',
-    items: ['避免水印', '避免文字', '避免畸形手部', '避免低清晰度', '避免背景杂乱'],
-  },
+const QUICK_CONSTRAINT_TERMS = [
+  '避免水印',
+  '避免文字',
+  '避免低清晰度',
+  '避免背景杂乱',
+  '避免畸形手部',
+  '避免裁切主体',
 ] as const
 
 function useIsMobile() {
@@ -364,33 +387,13 @@ function useIsMobile() {
 }
 
 type AtImageOption =
-  | { type: 'input'; key: string; label: string; imageId: string; dataUrl: string; imageIndex: number }
-  | { type: 'agent-output'; key: string; label: string; imageId: string; insertText: string }
-
-function agentImageMentionMatches(query: string, label: string) {
-  const normalized = query.trim().toLowerCase()
-  if (!normalized) return true
-  const normalizedLabel = label.toLowerCase()
-  return normalizedLabel.includes(normalized) || normalizedLabel.replace(/^@/, '').includes(normalized)
-}
+  { type: 'input'; key: string; label: string; imageId: string; dataUrl: string; imageIndex: number }
 
 function AtImageOptionThumb({ option }: { option: AtImageOption }) {
-  const [src, setSrc] = useState(option.type === 'input' ? option.dataUrl : getCachedImage(option.imageId) || '')
+  const [src, setSrc] = useState(option.dataUrl)
 
   useEffect(() => {
-    if (option.type === 'input') {
-      setSrc(option.dataUrl)
-      return
-    }
-
-    let cancelled = false
-    setSrc(getCachedImage(option.imageId) || '')
-    ensureImageCached(option.imageId).then((url) => {
-      if (!cancelled && url) setSrc(url)
-    })
-    return () => {
-      cancelled = true
-    }
+    setSrc(option.dataUrl)
   }, [option])
 
   return (
@@ -405,7 +408,6 @@ export default function InputBar() {
   const negativePrompt = useStore((s) => s.negativePrompt)
   const constraintMemoryTerms = useStore((s) => s.constraintMemoryTerms)
   const pinnedConstraintTerms = useStore((s) => s.pinnedConstraintTerms)
-  const appMode = useStore((s) => s.appMode)
   const setPrompt = useStore((s) => s.setPrompt)
   const setNegativePrompt = useStore((s) => s.setNegativePrompt)
   const clearConstraintMemoryTerms = useStore((s) => s.clearConstraintMemoryTerms)
@@ -417,10 +419,16 @@ export default function InputBar() {
   const clearInputImages = useStore((s) => s.clearInputImages)
   const params = useStore((s) => s.params)
   const setParams = useStore((s) => s.setParams)
+  const selectedModelSkuId = useStore((s) => s.selectedModelSkuId)
+  const setSelectedModelSkuId = useStore((s) => s.setSelectedModelSkuId)
+  const modelSkus = useStore((s) => s.modelSkus)
+  const loadModelSkus = useStore((s) => s.loadModelSkus)
   const settings = useStore((s) => s.settings)
   const setSettings = useStore((s) => s.setSettings)
+  const account = useStore((s) => s.account)
+  const openLoginDialog = useStore((s) => s.openLoginDialog)
+  const openPlanDialog = useStore((s) => s.openPlanDialog)
   const reusedTaskApiProfileId = useStore((s) => s.reusedTaskApiProfileId)
-  const setShowSettings = useStore((s) => s.setShowSettings)
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
   const showToast = useStore((s) => s.showToast)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
@@ -428,17 +436,20 @@ export default function InputBar() {
   const setSelectedTaskIds = useStore((s) => s.setSelectedTaskIds)
   const clearSelection = useStore((s) => s.clearSelection)
   const tasks = useStore((s) => s.tasks)
-  const agentConversations = useStore((s) => s.agentConversations)
-  const activeAgentConversationId = useStore((s) => s.activeAgentConversationId)
   const filterStatus = useStore((s) => s.filterStatus)
   const filterFavorite = useStore((s) => s.filterFavorite)
   const searchQuery = useStore((s) => s.searchQuery)
 
+  useEffect(() => {
+    void loadModelSkus()
+  }, [loadModelSkus])
+
+  const selectedTaskIdSet = useMemo(() => new Set(selectedTaskIds), [selectedTaskIds])
   const filteredTasks = useMemo(() => {
-    const sorted = [...tasks].sort((a, b) => b.createdAt - a.createdAt)
     const q = searchQuery.trim().toLowerCase()
     
-    return sorted.filter((t) => {
+    return tasks.filter((t) => {
+      if (!isTaskVisibleForAccount(t, account)) return false
       if (filterFavorite && !t.isFavorite) return false
       const matchStatus = filterStatus === 'all' || t.status === filterStatus
       if (!matchStatus) return false
@@ -447,48 +458,57 @@ export default function InputBar() {
       const prompt = (t.prompt || '').toLowerCase()
       const paramStr = JSON.stringify(t.params).toLowerCase()
       return prompt.includes(q) || paramStr.includes(q)
-    })
-  }, [tasks, searchQuery, filterStatus, filterFavorite])
+    }).sort((a, b) => b.createdAt - a.createdAt)
+  }, [account, tasks, searchQuery, filterStatus, filterFavorite])
+  const visibleSelectedTasks = useMemo(
+    () => {
+      if (selectedTaskIdSet.size === 0) return []
+      return tasks.filter((t) => selectedTaskIdSet.has(t.id) && isTaskVisibleForAccount(t, account))
+    },
+    [account, tasks, selectedTaskIdSet],
+  )
+  const allVisibleSelectedFavorite = visibleSelectedTasks.length > 0 && visibleSelectedTasks.every((task) => task.isFavorite)
 
   const handleSelectAllToggle = useCallback(() => {
-    if (selectedTaskIds.length === filteredTasks.length && filteredTasks.length > 0) {
+    if (visibleSelectedTasks.length === filteredTasks.length && filteredTasks.length > 0) {
       clearSelection()
     } else {
       setSelectedTaskIds(filteredTasks.map((t) => t.id))
     }
-  }, [selectedTaskIds.length, filteredTasks, clearSelection, setSelectedTaskIds])
+  }, [visibleSelectedTasks.length, filteredTasks, clearSelection, setSelectedTaskIds])
 
   const handleToggleFavorite = useCallback(() => {
-    const selectedTasks = tasks.filter((t) => selectedTaskIds.includes(t.id))
+    const selectedTasks = visibleSelectedTasks
     const allFavorite = selectedTasks.length > 0 && selectedTasks.every((t) => t.isFavorite)
     const newFavoriteState = !allFavorite
     setConfirmDialog({
       title: newFavoriteState ? '批量收藏' : '批量取消收藏',
       message: newFavoriteState
-        ? `确定要收藏选中的 ${selectedTaskIds.length} 条记录吗？`
-        : `确定要取消收藏选中的 ${selectedTaskIds.length} 条记录吗？`,
+        ? `确定要收藏选中的 ${selectedTasks.length} 条记录吗？`
+        : `确定要取消收藏选中的 ${selectedTasks.length} 条记录吗？`,
       confirmText: newFavoriteState ? '确认收藏' : '确认取消',
       action: () => {
-        selectedTaskIds.forEach((id) => {
-          updateTaskInStore(id, { isFavorite: newFavoriteState })
+        selectedTasks.forEach((task) => {
+          updateTaskInStore(task.id, { isFavorite: newFavoriteState })
         })
         clearSelection()
       },
     })
-  }, [tasks, selectedTaskIds, clearSelection, setConfirmDialog])
+  }, [visibleSelectedTasks, clearSelection, setConfirmDialog])
 
   const handleDeleteSelected = useCallback(() => {
+    const visibleSelectedIds = visibleSelectedTasks.map((task) => task.id)
     setConfirmDialog({
       title: '批量删除',
-      message: `确定要删除选中的 ${selectedTaskIds.length} 条记录吗？`,
+      message: `确定要删除选中的 ${visibleSelectedIds.length} 条记录吗？`,
       action: () => {
-        removeMultipleTasks(selectedTaskIds)
+        removeMultipleTasks(visibleSelectedIds)
       },
     })
-  }, [selectedTaskIds, setConfirmDialog])
+  }, [visibleSelectedTasks, setConfirmDialog])
 
   const handleDownloadSelected = useCallback(async () => {
-    const selectedTasks = tasks.filter((t) => selectedTaskIds.includes(t.id))
+    const selectedTasks = visibleSelectedTasks
     const imageIds = selectedTasks.flatMap(t => t.outputImages || [])
     if (imageIds.length === 0) {
       showToast('选中的记录没有图片', 'info')
@@ -496,6 +516,7 @@ export default function InputBar() {
     }
 
     try {
+      const { downloadImageIds, formatExportFileTime } = await import('../lib/downloadImages')
       const timeStr = formatExportFileTime(new Date())
       const { successCount, failCount } = await downloadImageIds(imageIds, `batch-${timeStr}`)
 
@@ -511,10 +532,9 @@ export default function InputBar() {
       showToast('下载失败', 'error')
     }
     clearSelection()
-  }, [tasks, selectedTaskIds, showToast, clearSelection])
+  }, [visibleSelectedTasks, showToast, clearSelection])
 
   const maskDraft = useStore((s) => s.maskDraft)
-  const clearMaskDraft = useStore((s) => s.clearMaskDraft)
   const setMaskEditorImageId = useStore((s) => s.setMaskEditorImageId)
   const moveInputImage = useStore((s) => s.moveInputImage)
 
@@ -592,8 +612,6 @@ export default function InputBar() {
   const [outputCompressionInput, setOutputCompressionInput] = useState(
     params.output_compression == null ? '' : String(params.output_compression),
   )
-  const [nInput, setNInput] = useState(String(params.n))
-  const [nInputFocused, setNInputFocused] = useState(false)
   const [negativePromptOpen, setNegativePromptOpen] = useState(false)
   const dragCounter = useRef(0)
   const isMobile = useIsMobile()
@@ -604,34 +622,65 @@ export default function InputBar() {
       ? settings.profiles.find((profile) => profile.id === reusedTaskApiProfileId) ?? currentActiveProfile
       : currentActiveProfile
   ), [currentActiveProfile, reusedTaskApiProfileId, settings])
-  const activeAgentConversation = appMode === 'agent'
-    ? agentConversations.find((conversation) => conversation.id === activeAgentConversationId) ?? null
-    : null
-  const activeAgentIsRunning = Boolean(activeAgentConversation?.rounds.some((round) => round.status === 'running'))
   const effectiveSettings = useMemo(() => (
     activeProfile.id === currentActiveProfile.id
       ? settings
       : normalizeSettings({ ...settings, activeProfileId: activeProfile.id })
   ), [activeProfile.id, currentActiveProfile.id, settings])
-  const hasSubmitApiConfig = Boolean(activeProfile.apiKey)
-  const canSubmit = Boolean(prompt.trim() && hasSubmitApiConfig && !activeAgentIsRunning)
-  const submitButtonAriaLabel = activeAgentIsRunning
-    ? '停止生成'
-    : hasSubmitApiConfig
+  const workbenchAccessState = useMemo(() => getWorkbenchAccessState(account), [account])
+  const usesProductGateway = isServerImageGatewayEnabled()
+  const activeModelSku = useMemo(
+    () => modelSkus.find((sku) => sku.enabled && sku.id === selectedModelSkuId) ?? null,
+    [modelSkus, selectedModelSkuId],
+  )
+  const productModelOptions = useMemo(
+    () => modelSkus.filter((sku) => sku.enabled).map((sku) => ({ label: sku.label, value: sku.id })),
+    [modelSkus],
+  )
+  const productGatewayUnavailableMessage = '暂无可用模型，请先在后台配置模型和线路。'
+  const hasSubmitRoute = usesProductGateway ? Boolean(activeModelSku) : Boolean(activeProfile.apiKey)
+  const isSubmitAccessBlocked = workbenchAccessState !== 'ready'
+  const hasPromptContent = Boolean(prompt.trim())
+  const canSubmit = Boolean(hasPromptContent && hasSubmitRoute && !isSubmitAccessBlocked)
+  const submitButtonAriaLabel = workbenchAccessState === 'guest'
+    ? GUEST_SUBMIT_GENERATION_LABEL
+    : workbenchAccessState === 'no_balance'
+    ? '充值后生成'
+    : hasSubmitRoute
     ? maskDraft ? '遮罩编辑' : '生成图像'
-    : '请先配置 API'
-  const submitTooltipText = activeAgentIsRunning ? '停止生成' : '尚未完成 API 配置，请在右上角设置中进行'
+    : '当前生成服务不可用'
+  const submitTooltipText = workbenchAccessState === 'guest'
+    ? GUEST_WORKBENCH_SUBMIT_TOOLTIP_COPY
+    : workbenchAccessState === 'no_balance'
+    ? '当前账号余额不足，请先进入计划与额度补充额度'
+    : !hasSubmitRoute
+    ? usesProductGateway ? productGatewayUnavailableMessage : '当前生成服务暂不可用，请稍后重试。'
+    : !hasPromptContent
+    ? '请输入提示词'
+    : ''
   const promptPlaceholder = '描述你想生成的图片，可输入 @ 来指定参考图...'
-  const submitCurrentMode = useCallback(() => {
-    if (appMode === 'agent') {
-      void submitAgentMessage()
-    } else {
-      void submitTask()
+  const submitButtonLabel = workbenchAccessState === 'guest'
+    ? GUEST_SUBMIT_GENERATION_LABEL
+    : workbenchAccessState === 'no_balance'
+    ? '充值后生成'
+    : hasSubmitRoute
+    ? (maskDraft ? '提交遮罩编辑' : '开始生成')
+    : '服务未就绪'
+  const handleSubmitButtonClick = useCallback(() => {
+    if (workbenchAccessState === 'guest') {
+      openLoginDialog()
+      return
     }
-  }, [appMode])
-  const stopActiveAgentResponse = useCallback(() => {
-    stopAgentResponse(activeAgentConversationId)
-  }, [activeAgentConversationId])
+    if (workbenchAccessState === 'no_balance') {
+      openPlanDialog()
+      return
+    }
+    if (!hasSubmitRoute) {
+      showToast(usesProductGateway ? productGatewayUnavailableMessage : '当前生成服务暂不可用，请稍后重试。', 'error')
+      return
+    }
+    void submitTask()
+  }, [hasSubmitRoute, openLoginDialog, openPlanDialog, showToast, usesProductGateway, workbenchAccessState])
   const syncPromptFromContentEditable = useCallback(() => {
     const el = textareaRef.current
     if (!el) return
@@ -643,19 +692,11 @@ export default function InputBar() {
   }, [setPrompt])
   const activeProvider = activeProfile.provider
   const isFalProvider = activeProvider === 'fal'
-  const negativePromptModeLabel = isFalProvider ? '独立发送' : '兼容附加到主提示词'
-  const agentAutoImageCount = appMode === 'agent' && activeProfile.provider === 'openai' && activeProfile.apiMode === 'responses'
+  const negativePromptModeLabel = isFalProvider ? '独立发送' : '附加到主提示词'
   const compressionDisabled = params.output_format === 'png' || isFalProvider
-  const outputImageLimit = getOutputImageLimitForSettings(effectiveSettings)
+  const outputImageLimit = usesProductGateway ? PRODUCT_GATEWAY_OUTPUT_LIMIT : getOutputImageLimitForSettings(effectiveSettings)
   const isFalTextToImage = isFalProvider && inputImages.length === 0
-  const nDraftValue = Number(nInput)
-  const effectiveNValue = Number.isNaN(nDraftValue) ? params.n : nDraftValue
-  const streamConcurrentByN = activeProfile.provider === 'openai' && activeProfile.streamImages === true && !agentAutoImageCount && effectiveNValue > 1
-  const nLimitHintText = agentAutoImageCount
-    ? '连续创作模式下数量由模型根据提示词自动决定'
-    : isFalProvider
-    ? `fal.ai 最大请求数量为 ${outputImageLimit}`
-    : `OpenAI 最大请求数量为 ${outputImageLimit}`
+  const effectiveNValue = params.n
   const displaySize = isFalTextToImage && params.size === 'auto'
     ? DEFAULT_FAL_IMAGE_SIZE
     : normalizeImageSize(params.size) || DEFAULT_PARAMS.size
@@ -672,25 +713,62 @@ export default function InputBar() {
     if (!match) return '已固定分辨率'
     return isFalTextToImage && params.size === 'auto' ? 'fal.ai 自动规整' : '已固定画幅'
   }, [displaySize, isFalTextToImage, params.size])
+  const submitBillingHint = useMemo(() => {
+    if (workbenchAccessState !== 'ready') return ''
+    if (!displaySize || displaySize === 'auto') {
+      return '成功出图后扣点'
+    }
 
-  const qualityOptions = isFalProvider
+    const billing = estimateBillingPoints({
+      size: displaySize,
+      quality: params.quality,
+      n: effectiveNValue,
+    })
+    return `预计 ${billing.totalPoints} 点`
+  }, [displaySize, effectiveNValue, params.quality, workbenchAccessState])
+  const submitFooterHint = workbenchAccessState === 'guest'
+    ? '登录后可生成'
+    : workbenchAccessState === 'no_balance'
+    ? '余额不足'
+    : !hasSubmitRoute
+    ? '服务未就绪'
+    : submitBillingHint
+  const negativePromptTerms = useMemo(
+    () => negativePrompt.split(/[\n,，]+/).map((item) => item.trim()).filter(Boolean),
+    [negativePrompt],
+  )
+  const negativePromptStateLabel = negativePromptTerms.length > 0 ? `${negativePromptTerms.length} 项` : '可选'
+  const negativePromptPreview = negativePromptTerms.length > 0
+    ? negativePromptTerms.slice(0, 2).join(' / ')
+    : '水印、错字、低清晰度'
+  const visibleQuickConstraintTerms = useMemo(
+    () => QUICK_CONSTRAINT_TERMS.filter((item) => !negativePromptTerms.includes(item)),
+    [negativePromptTerms],
+  )
+
+  const qualityOptions = usesProductGateway && activeModelSku
+    ? activeModelSku.supportedQualities.includes('*')
+      ? PRODUCT_QUALITY_OPTIONS
+      : activeModelSku.supportedQualities
+        .filter(isSpecificQuality)
+        .map((quality) => ({ label: QUALITY_LABELS[quality] ?? quality, value: quality }))
+    : isFalProvider
     ? [
-        { label: 'low', value: 'low' },
-        { label: 'medium', value: 'medium' },
-        { label: 'high', value: 'high' },
+        { label: QUALITY_LABELS.low, value: 'low' },
+        { label: QUALITY_LABELS.medium, value: 'medium' },
+        { label: QUALITY_LABELS.high, value: 'high' },
       ]
     : [
-        { label: 'auto', value: 'auto' },
-        { label: 'low', value: 'low' },
-        { label: 'medium', value: 'medium' },
-        { label: 'high', value: 'high' },
+        { label: QUALITY_LABELS.auto, value: 'auto' },
+        { label: QUALITY_LABELS.low, value: 'low' },
+        { label: QUALITY_LABELS.medium, value: 'medium' },
+        { label: QUALITY_LABELS.high, value: 'high' },
       ]
   const atImageLimit = inputImages.length >= API_MAX_IMAGES
   const uploadImageTooltipText = atImageLimit ? `参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加` : '上传图片'
   const compressionHint = useHintTooltip({ enabled: () => compressionDisabled })
   const sizeHint = useHintTooltip({ enabled: () => isFalTextToImage })
   const qualityHint = useHintTooltip({ enabled: () => settings.codexCli || isFalProvider })
-  const nLimitHint = useHintTooltip({ autoHideMs: 2000 })
   const maskTargetImage = maskDraft
     ? inputImages.find((img) => img.id === maskDraft.targetImageId) ?? null
     : null
@@ -700,23 +778,7 @@ export default function InputBar() {
   const cursorPosition = cursorPos
   const visiblePrompt = stripImageMentionMarkers(prompt)
   const promptOptimizerModeLabel = inputImages.length > 0 || maskDraft ? '图生图优化' : '文生图优化'
-  const agentOutputImageOptions = useMemo<AtImageOption[]>(() => {
-    if (!activeAgentConversation) return []
-    return getActiveAgentRounds(activeAgentConversation).flatMap((round) =>
-      collectAgentRoundOutputImageSlots(round, tasks).flatMap((imageId, imageIndex) => {
-        if (!imageId) return []
-        const label = `@第${round.index}轮图${imageIndex + 1}`
-        return {
-          type: 'agent-output' as const,
-          key: `agent-output:${round.id}:${imageIndex}:${imageId}`,
-          label,
-          imageId,
-          insertText: label,
-        }
-      }),
-    )
-  }, [activeAgentConversation, tasks])
-  const atImageSourceCount = inputImages.length + agentOutputImageOptions.length
+  const atImageSourceCount = inputImages.length
   const atImageQuery = isCursorInSelectedImageMention(prompt, cursorPosition)
     ? null
     : getAtImageQuery(visiblePrompt, cursorPosition, { length: atImageSourceCount })
@@ -732,7 +794,6 @@ export default function InputBar() {
             imageIndex: index,
           } satisfies AtImageOption))
           .filter((option) => imageMentionMatches(atImageQuery.query, option.imageIndex)),
-        ...agentOutputImageOptions.filter((option) => agentImageMentionMatches(atImageQuery.query, option.label)),
       ]
     : []
   const showAtImageMenu = !atImageMenuDismissed && atImageOptions.length > 0
@@ -749,7 +810,7 @@ export default function InputBar() {
     setAtImageMenuIndex(0)
     if (!query) return
 
-    const mentionText = option.type === 'input' ? getImageMentionLabel(option.imageIndex) : option.insertText
+    const mentionText = getImageMentionLabel(option.imageIndex)
     const nextCursor = query.start + mentionText.length
     if (el) {
       el.focus()
@@ -761,9 +822,7 @@ export default function InputBar() {
       }
     }
 
-    const next = option.type === 'input'
-      ? insertImageMentionAtVisibleRange(prompt, query.start, cursor, option.imageIndex)
-      : insertTextMentionAtVisibleRange(prompt, query.start, cursor, option.insertText)
+    const next = insertImageMentionAtVisibleRange(prompt, query.start, cursor, option.imageIndex)
     isUserInputRef.current = false
     setPrompt(next.prompt)
     window.setTimeout(() => {
@@ -811,7 +870,7 @@ export default function InputBar() {
     }
   }, [setNegativePrompt, setPrompt])
 
-  const handleOpenPromptOptimizer = useCallback(() => {
+  const handleOpenPromptOptimizer = useCallback(async () => {
     const livePrompt = textareaRef.current
       ? stripImageMentionMarkers(getContentEditablePlainText(textareaRef.current))
       : visiblePrompt
@@ -821,6 +880,7 @@ export default function InputBar() {
       return
     }
 
+    const { optimizePrompt } = await import('../lib/promptOptimizer')
     setPromptOptimizerResult(optimizePrompt({
       prompt: livePrompt,
       negativePrompt,
@@ -838,8 +898,9 @@ export default function InputBar() {
     if (!promptOptimizerResult) return
 
     isUserInputRef.current = false
+    const mergedNegativePrompt = mergeNegativePromptValue(negativePrompt, promptOptimizerResult.negativePrompt)
     setPrompt(promptOptimizerResult.optimizedPrompt)
-    setNegativePrompt(promptOptimizerResult.negativePrompt)
+    setNegativePrompt(mergedNegativePrompt)
     setPromptOptimizerResult(null)
     showToast('已应用优化结果', 'success')
     window.setTimeout(() => {
@@ -847,20 +908,28 @@ export default function InputBar() {
         textareaRef.current.focus()
       }
     }, 0)
-  }, [promptOptimizerResult, setNegativePrompt, setPrompt, showToast])
+  }, [negativePrompt, promptOptimizerResult, setNegativePrompt, setPrompt, showToast])
 
   const handleCopyPromptOptimizer = useCallback(async () => {
     if (!promptOptimizerResult) return
 
+    const copiedModeLabel = promptOptimizerResult.mode === 'image-to-image'
+      ? '图生图'
+      : '文生图'
+
     const payload = [
-      `模式：${promptOptimizerResult.mode === 'image-to-image' ? '图生图' : '文生图'}`,
+      `模式：${copiedModeLabel}`,
+      '使用边界：',
+      '- 只整理主提示词和负面提示词',
+      '- 不承担审核、拦截或是否允许提交的判断',
+      '',
       '优化说明：',
       ...promptOptimizerResult.explanation.map((line) => `- ${line}`),
       '',
       '优化后的主提示词：',
       promptOptimizerResult.optimizedPrompt,
       '',
-      'Negative Prompt：',
+      '负面提示词：',
       promptOptimizerResult.negativePrompt,
       '',
       `推荐比例：${promptOptimizerResult.recommendedRatio}`,
@@ -884,20 +953,18 @@ export default function InputBar() {
   }, [params.output_compression])
 
   useEffect(() => {
-    setNInput(agentAutoImageCount ? 'auto' : String(params.n))
-  }, [agentAutoImageCount, params.n])
-
-  useEffect(() => {
     setPromptOptimizerResult(null)
   }, [prompt, negativePrompt, inputImages.length, maskDraft?.targetImageId, maskDraft?.updatedAt])
 
   useEffect(() => {
-    const normalizedParams = normalizeParamsForSettings(params, effectiveSettings, { hasInputImages: inputImages.length > 0 })
+    const normalizedParams = usesProductGateway && selectedModelSkuId
+      ? normalizeParamsForModelSku(params, selectedModelSkuId, modelSkus)
+      : normalizeParamsForSettings(params, effectiveSettings, { hasInputImages: inputImages.length > 0 })
     const patch = getChangedParams(params, normalizedParams)
     if (Object.keys(patch).length) {
       setParams(patch)
     }
-  }, [inputImages.length, params, effectiveSettings, setParams])
+  }, [effectiveSettings, inputImages.length, modelSkus, params, selectedModelSkuId, setParams, usesProductGateway])
 
   useEffect(() => () => {
     if (imageHintTimerRef.current != null) {
@@ -913,7 +980,8 @@ export default function InputBar() {
       return
     }
 
-    createMaskPreviewDataUrl(maskTargetImage.dataUrl, maskDraft.maskDataUrl)
+    import('../lib/canvasImage')
+      .then(({ createMaskPreviewDataUrl }) => createMaskPreviewDataUrl(maskTargetImage.dataUrl, maskDraft.maskDataUrl))
       .then((url) => {
         if (!cancelled) setMaskPreviewUrl(url)
       })
@@ -943,68 +1011,14 @@ export default function InputBar() {
     setParams({ output_compression: nextValue })
   }, [outputCompressionInput, params.output_compression, setParams])
 
-  const commitN = useCallback(() => {
-    nLimitHint.hide()
-    if (agentAutoImageCount) {
-      setNInput('auto')
-      return
-    }
-    const nextValue = Number(nInput)
-    const normalizedValue =
-      nInput.trim() === '' ? DEFAULT_PARAMS.n : Number.isNaN(nextValue) ? params.n : nextValue
-    const clampedValue = Math.min(outputImageLimit, Math.max(1, normalizedValue))
-    setNInput(String(clampedValue))
-    setParams({ n: clampedValue })
-  }, [agentAutoImageCount, nInput, nLimitHint, outputImageLimit, params.n, setParams])
+  const handleQuantitySelect = useCallback((value: number) => {
+    setParams({ n: Math.min(outputImageLimit, value) })
+  }, [outputImageLimit, setParams])
 
-  const showNLimitHint = useCallback(() => {
-    nLimitHint.show()
-  }, [nLimitHint])
-
-  const hideNLimitHint = useCallback(() => {
-    nLimitHint.hide()
-  }, [nLimitHint])
-
-  const showAgentNHint = useCallback(() => {
-    if (agentAutoImageCount) showNLimitHint()
-  }, [agentAutoImageCount, showNLimitHint])
-
-  const clearAgentNHintTouchTimer = useCallback(() => {
-    nLimitHint.clearTimer()
-  }, [nLimitHint])
-
-  const startAgentNHintTouch = useCallback(() => {
-    if (!agentAutoImageCount) return
-    nLimitHint.startTouch()
-  }, [agentAutoImageCount, nLimitHint])
-
-  const handleNInputChange = useCallback((value: string) => {
-    if (agentAutoImageCount) {
-      setNInput('auto')
-      return
-    }
-    setNInput(value)
-    const nextValue = Number(value)
-    if (!Number.isNaN(nextValue) && nextValue > outputImageLimit) {
-      showNLimitHint()
-    } else {
-      hideNLimitHint()
-    }
-  }, [agentAutoImageCount, hideNLimitHint, outputImageLimit, showNLimitHint])
-
-  const handleNLimitIncreaseAttempt = useCallback((preventDefault: () => void) => {
-    if (agentAutoImageCount) {
-      preventDefault()
-      showNLimitHint()
-      return
-    }
-    const currentValue = Number(nInput)
-    const effectiveValue = Number.isNaN(currentValue) ? params.n : currentValue
-    if (!nInputFocused || effectiveValue < outputImageLimit) return
-
-    preventDefault()
-    showNLimitHint()
-  }, [agentAutoImageCount, nInput, nInputFocused, outputImageLimit, params.n, showNLimitHint])
+  const handleQualitySelect = useCallback((value: TaskParams['quality']) => {
+    if (settings.codexCli) return
+    setParams({ quality: value })
+  }, [setParams, settings.codexCli])
 
   const clearImageHintTimer = () => {
     if (imageHintTimerRef.current != null) {
@@ -1219,11 +1233,11 @@ export default function InputBar() {
         if (e.shiftKey) {
           insertPromptTextAtSelection('\n')
         } else if (!isModifier) {
-          if (canSubmit) submitCurrentMode()
+          handleSubmitButtonClick()
         }
       } else {
         if (isModifier) {
-          if (canSubmit) submitCurrentMode()
+          handleSubmitButtonClick()
         } else {
           insertPromptTextAtSelection('\n')
         }
@@ -1885,70 +1899,68 @@ export default function InputBar() {
         onClick={qualityHint.show}
       >
         <span className="prototype-param-compact-label ml-1 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-gray-500">质量</span>
-        <Select
-          value={settings.codexCli ? 'auto' : isFalProvider && params.quality === 'auto' ? 'high' : params.quality}
-          onChange={(val) => {
-            if (!settings.codexCli) setParams({ quality: val as any })
-          }}
-          options={qualityOptions}
-          disabled={settings.codexCli}
-          ariaLabel="质量"
-          className={settings.codexCli
-            ? 'min-h-[2.5rem] px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed text-xs text-slate-500 dark:text-gray-400 transition-all duration-200 shadow-sm'
-            : selectClass}
-        />
+        {usesProductGateway ? (
+          <div className="prototype-quality-segment" role="radiogroup" aria-label="质量">
+            {qualityOptions.map((option) => {
+              const active = params.quality === option.value
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  disabled={settings.codexCli}
+                  onClick={() => handleQualitySelect(option.value as TaskParams['quality'])}
+                  className={`prototype-quality-option ${active ? 'is-active' : ''}`}
+                >
+                  {option.label}
+                </button>
+              )
+            })}
+          </div>
+        ) : (
+          <Select
+            value={settings.codexCli ? 'auto' : isFalProvider && params.quality === 'auto' ? 'high' : params.quality}
+            onChange={(val) => {
+              if (!settings.codexCli) setParams({ quality: val as any })
+            }}
+            options={qualityOptions}
+            disabled={settings.codexCli}
+            ariaLabel="质量"
+            className={settings.codexCli
+              ? 'min-h-[2.5rem] px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed text-xs text-slate-500 dark:text-gray-400 transition-all duration-200 shadow-sm'
+              : selectClass}
+          />
+        )}
         <ButtonTooltip
-          visible={(settings.codexCli || isFalProvider) && qualityHint.visible}
+          visible={!usesProductGateway && (settings.codexCli || isFalProvider) && qualityHint.visible}
           text={isFalProvider ? <>fal.ai 不支持 <code className="rounded bg-white/10 px-1 py-0.5 font-mono">auto</code> 质量参数</> : 'Codex CLI 不支持质量参数'}
         />
       </label>
     )
 
     const quantityField = (
-      <label
-        className="prototype-param-quantity-field prototype-param-compact-field relative flex flex-col gap-1"
-        onMouseEnter={showAgentNHint}
-        onMouseLeave={hideNLimitHint}
-        onTouchStart={startAgentNHintTouch}
-        onTouchEnd={clearAgentNHintTouchTimer}
-        onTouchCancel={() => {
-          clearAgentNHintTouchTimer()
-          hideNLimitHint()
-        }}
-        onClick={showAgentNHint}
-      >
+      <label className="prototype-param-quantity-field prototype-param-compact-field relative flex flex-col gap-1">
         <span className="prototype-param-compact-label ml-1 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-gray-500">数量</span>
-        <input
-          value={nInput}
-          onChange={(e) => handleNInputChange(e.target.value)}
-          onFocus={() => setNInputFocused(true)}
-          onBlur={() => {
-            setNInputFocused(false)
-            commitN()
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'ArrowUp') {
-              handleNLimitIncreaseAttempt(() => e.preventDefault())
-            }
-          }}
-          onWheel={(e) => {
-            if (e.deltaY < 0) {
-              handleNLimitIncreaseAttempt(() => e.preventDefault())
-            }
-          }}
-          disabled={agentAutoImageCount}
-          type={agentAutoImageCount ? 'text' : 'number'}
-          min={agentAutoImageCount ? undefined : 1}
-          max={agentAutoImageCount ? undefined : outputImageLimit}
-          aria-label="数量"
-          className={`prototype-input-control min-h-[2.5rem] rounded-xl border border-gray-200/60 px-3 py-1.5 text-xs text-slate-700 shadow-sm transition-all duration-200 focus:outline-none dark:border-white/[0.08] dark:text-gray-200 ${
-            agentAutoImageCount
-              ? 'bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed'
-              : 'bg-white/50 dark:bg-white/[0.03]'
-          }`}
-        />
-        <ButtonTooltip visible={nLimitHint.visible} text={nLimitHintText} />
-        <ButtonTooltip visible={streamConcurrentByN && !nLimitHint.visible} text="数量大于 1 时会将多图生成拆分为并发单图" />
+        <div className="prototype-quantity-segment" role="radiogroup" aria-label="数量">
+          {[1, 2, 4].map((value) => {
+            const disabled = value > outputImageLimit
+            const active = params.n === value
+            return (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                disabled={disabled}
+                onClick={() => handleQuantitySelect(value)}
+                className={`prototype-quantity-option ${active ? 'is-active' : ''}`}
+              >
+                {value}
+              </button>
+            )
+          })}
+        </div>
       </label>
     )
 
@@ -1972,6 +1984,62 @@ export default function InputBar() {
       </div>
     )
   }
+
+  const renderModelSelector = () => (
+    <div className="prototype-model-picker">
+      <label className="prototype-param-model-field relative flex flex-col gap-1">
+        <span className="prototype-field-label ml-1 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-gray-500">模型</span>
+        <div className="prototype-model-radio-group" role="radiogroup" aria-label="模型选择">
+          {productModelOptions.length ? productModelOptions.map((option) => {
+            const active = option.value === selectedModelSkuId
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                title={option.label}
+                onClick={() => setSelectedModelSkuId(String(option.value))}
+                className={`prototype-model-radio-button ${active ? 'is-active' : ''}`}
+              >
+                <span>{option.label}</span>
+              </button>
+            )
+          }) : (
+            <button
+              type="button"
+              role="radio"
+              aria-checked="false"
+              disabled
+              className="prototype-model-radio-button is-empty"
+            >
+              <span>暂无可用模型</span>
+            </button>
+          )}
+        </div>
+      </label>
+    </div>
+  )
+
+  const renderPromptOptimizerButton = () => (
+    <button
+      type="button"
+      onClick={handleOpenPromptOptimizer}
+      className="prototype-optimizer-card prototype-optimizer-inline group inline-flex w-full items-center justify-between gap-3 rounded-[1rem] border border-cyan-200/75 bg-[linear-gradient(135deg,rgba(236,254,255,0.95),rgba(239,246,255,0.95))] px-3.5 py-3 text-left shadow-[0_10px_24px_rgba(14,116,144,0.08)] transition hover:-translate-y-[1px] hover:border-cyan-300 hover:shadow-[0_14px_30px_rgba(14,116,144,0.12)] dark:border-cyan-500/20 dark:bg-[linear-gradient(135deg,rgba(8,145,178,0.12),rgba(37,99,235,0.12))] dark:hover:border-cyan-400/35"
+    >
+      <div className="prototype-optimizer-copy min-w-0">
+        <div className="prototype-optimizer-title text-[13px] font-semibold leading-snug text-slate-800 dark:text-gray-100">提示词优化</div>
+        <div className="prototype-optimizer-body mt-0.5 text-[10px] leading-relaxed text-slate-500 dark:text-gray-400">
+          {promptOptimizerModeLabel}
+        </div>
+      </div>
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white/80 text-cyan-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] transition group-hover:bg-white dark:bg-white/[0.08] dark:text-cyan-200 dark:group-hover:bg-white/[0.12]">
+        <svg className="h-4.5 w-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 3l1.9 5.3L19 10l-5.1 1.7L12 17l-1.9-5.3L5 10l5.1-1.7L12 3z" />
+        </svg>
+      </div>
+    </button>
+  )
 
   const renderOutputParams = (cols: string, singleFieldCols = 'grid-cols-1') => (
     <div className={`prototype-param-grid grid ${compressionDisabled ? singleFieldCols : cols} gap-2 text-xs flex-1`}>
@@ -2018,6 +2086,13 @@ export default function InputBar() {
     </div>
   )
 
+  const renderSubmitButtonCopy = () => (
+    <span className="prototype-submit-copy">
+      <span>{submitButtonLabel}</span>
+      {submitFooterHint ? <small>{submitFooterHint}</small> : null}
+    </span>
+  )
+
   return (
     <>
       {/* 全屏拖拽遮罩 */}
@@ -2055,16 +2130,18 @@ export default function InputBar() {
       )}
 
       {showSizePicker && (
-        <SizePickerModal
-          currentSize={isFalTextToImage && params.size === 'auto' ? DEFAULT_FAL_IMAGE_SIZE : params.size}
-          onSelect={(size) => setParams({ size })}
-          onClose={() => setShowSizePicker(false)}
-          allowAuto={!isFalTextToImage}
-        />
+        <Suspense fallback={<LazyModalFallback title="正在加载尺寸面板..." description="首次打开时会短暂准备尺寸与比例选项。" />}>
+          <SizePickerModal
+            currentSize={isFalTextToImage && params.size === 'auto' ? DEFAULT_FAL_IMAGE_SIZE : params.size}
+            onSelect={(size) => setParams({ size })}
+            onClose={() => setShowSizePicker(false)}
+            allowAuto={!isFalTextToImage}
+          />
+        </Suspense>
       )}
 
         <div data-input-bar className="studio-input-bar-frame fixed bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-30 box-border w-full max-w-6xl px-3 sm:px-4 transition-all duration-300 lg:right-auto lg:top-[5rem] lg:bottom-6 lg:w-[24.25rem] lg:max-w-none lg:translate-x-0 lg:px-0 xl:w-[25.75rem]">
-        {selectedTaskIds.length > 0 && (
+        {visibleSelectedTasks.length > 0 && (
           <div className="flex justify-center mb-3">
             <div className="bg-white/90 dark:bg-gray-800/90 backdrop-blur shadow-[0_8px_30px_rgb(0,0,0,0.12)] dark:shadow-lg rounded-full flex items-center p-1 border border-gray-200/50 dark:border-white/10 pointer-events-auto">
               <button
@@ -2080,9 +2157,9 @@ export default function InputBar() {
               <button
                 onClick={handleSelectAllToggle}
                 className="p-2 text-blue-500 dark:text-blue-400 hover:text-blue-600 dark:hover:text-blue-300 transition-colors"
-                title={selectedTaskIds.length === filteredTasks.length && filteredTasks.length > 0 ? "取消全选" : "全选当前可见"}
+                title={visibleSelectedTasks.length === filteredTasks.length && filteredTasks.length > 0 ? "取消全选" : "全选当前可见"}
               >
-                {selectedTaskIds.length === filteredTasks.length && filteredTasks.length > 0 ? (
+                {visibleSelectedTasks.length === filteredTasks.length && filteredTasks.length > 0 ? (
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
                     <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
                     <path d="M9 12l2 2 4-4" />
@@ -2099,7 +2176,7 @@ export default function InputBar() {
                 className="p-2 text-yellow-500 dark:text-yellow-400 hover:text-yellow-600 dark:hover:text-yellow-300 transition-colors"
                 title="收藏/取消收藏"
               >
-                {selectedTaskIds.length > 0 && selectedTaskIds.every((id) => tasks.find((t) => t.id === id)?.isFavorite) ? (
+                {allVisibleSelectedFavorite ? (
                   <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
                   </svg>
@@ -2132,7 +2209,7 @@ export default function InputBar() {
             </div>
           </div>
         )}
-        <div ref={cardRef} className="studio-dock prototype-input-dock p-3 sm:p-4 lg:flex lg:h-full lg:flex-col lg:overflow-y-auto custom-scrollbar">
+        <div ref={cardRef} className="studio-dock prototype-input-dock prototype-input-dock-compact p-3 sm:p-4 lg:flex lg:h-full lg:flex-col lg:overflow-y-auto custom-scrollbar">
           {/* 移动端拖动条 */}
           <div
             ref={handleRef}
@@ -2168,44 +2245,14 @@ export default function InputBar() {
             )
           )}
 
-          <div className="mb-2.5 px-1">
-            {!isMobile && (
-              <div className="prototype-composer-brief flex items-start justify-between gap-2.5">
-                <div className="prototype-composer-brief-copy min-w-0">
-                  <div className="text-[12px] font-medium leading-snug text-slate-700 dark:text-gray-200">
-                    {maskDraft ? '已进入遮罩编辑，提交后会保留主体结构。' : inputImages.length > 0 ? `已载入 ${inputImages.length} 张参考图，可继续压风格或构图。` : '先写主体和画面，再补参考图。'}
-                  </div>
-                </div>
-                <div className="prototype-composer-brief-action hidden lg:flex max-w-[12rem] flex-wrap justify-end gap-1.5 text-[10px] text-slate-500 dark:text-gray-400">
-                  <span className="studio-inline-tip">@ 引用</span>
-                </div>
-              </div>
-            )}
-
-            <div className={`${isMobile ? '' : 'mt-2'} flex items-center gap-2`}>
-              <button
-                type="button"
-                onClick={handleOpenPromptOptimizer}
-                className="prototype-optimizer-card group inline-flex w-full items-center justify-between gap-3 rounded-[1rem] border border-cyan-200/75 bg-[linear-gradient(135deg,rgba(236,254,255,0.95),rgba(239,246,255,0.95))] px-3.5 py-3 text-left shadow-[0_10px_24px_rgba(14,116,144,0.08)] transition hover:-translate-y-[1px] hover:border-cyan-300 hover:shadow-[0_14px_30px_rgba(14,116,144,0.12)] dark:border-cyan-500/20 dark:bg-[linear-gradient(135deg,rgba(8,145,178,0.12),rgba(37,99,235,0.12))] dark:hover:border-cyan-400/35"
-              >
-                <div className="prototype-optimizer-copy min-w-0">
-                  <div className="prototype-optimizer-kicker text-[10px] font-medium uppercase tracking-[0.18em] text-cyan-600/80 dark:text-cyan-300/80">Prompt Optimizer</div>
-                  <div className="prototype-optimizer-title mt-1 text-[14px] font-semibold leading-snug text-slate-800 dark:text-gray-100">优化提示词</div>
-                  <div className="prototype-optimizer-body mt-1 text-[11px] leading-relaxed text-slate-500 dark:text-gray-400">
-                    当前为 {promptOptimizerModeLabel}，整理表达并补充更稳的 negative prompt。
-                  </div>
-                </div>
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white/80 text-cyan-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] transition group-hover:bg-white dark:bg-white/[0.08] dark:text-cyan-200 dark:group-hover:bg-white/[0.12]">
-                  <svg className="h-4.5 w-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 3l1.9 5.3L19 10l-5.1 1.7L12 17l-1.9-5.3L5 10l5.1-1.7L12 3z" />
-                  </svg>
-                </div>
-              </button>
+          <div className="prototype-composer-block mb-2.5">
+            <div className="space-y-2">
+              {renderModelSelector()}
             </div>
           </div>
 
           {/* 输入框 */}
-          <div className="relative grid prototype-prompt-editor-shell">
+          <div className="prototype-composer-block relative grid prototype-prompt-editor-shell">
             {showAtImageMenu && (
               <div style={{ left: `${menuLeft}px` }} className="absolute bottom-full z-50 mb-2 w-64 overflow-hidden rounded-2xl border border-gray-200/70 bg-white/95 p-1.5 shadow-xl ring-1 ring-black/5 backdrop-blur-xl dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10">
                 <div className="px-2 pb-1 pt-0.5 text-[11px] text-gray-400 dark:text-gray-500">选择图片引用</div>
@@ -2227,7 +2274,6 @@ export default function InputBar() {
                     >
                       <AtImageOptionThumb option={option} />
                       <span className="min-w-0 flex-1 truncate font-medium">{option.label}</span>
-                      {option.type === 'agent-output' && <span className="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-white/[0.06] dark:text-gray-400">历史</span>}
                     </button>
                   ))}
                 </div>
@@ -2299,6 +2345,10 @@ export default function InputBar() {
             )}
           </div>
 
+          <div className="prototype-prompt-tools mt-2">
+            {renderPromptOptimizerButton()}
+          </div>
+
           {!isMobile && (
             <div className="prototype-negative-panel mt-2.5 rounded-[1.2rem] border border-[rgba(148,163,184,0.16)] bg-white/60 px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)] dark:border-white/[0.06] dark:bg-white/[0.025]">
               <button
@@ -2308,9 +2358,14 @@ export default function InputBar() {
                 aria-expanded={negativePromptOpen}
               >
                 <div className="prototype-negative-summary min-w-0">
-                  <span className="prototype-negative-title">负面提示</span>
-                  <span className={`prototype-negative-state ${negativePrompt.trim() ? 'is-filled' : ''}`}>
-                    {negativePrompt.trim() ? '已填写' : '可选'}
+                  <div className="min-w-0">
+                    <span className="prototype-negative-title">负面提示</span>
+                    <span className={`prototype-negative-state ${negativePrompt.trim() ? 'is-filled' : ''}`}>
+                      {negativePromptStateLabel}
+                    </span>
+                  </div>
+                  <span className="prototype-negative-preview truncate">
+                    {negativePromptPreview}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -2325,109 +2380,81 @@ export default function InputBar() {
                   <textarea
                     value={negativePrompt}
                     onChange={(e) => setNegativePrompt(e.target.value)}
-                    rows={3}
-                    placeholder="例如：多余手指、模糊文字、低清晰度、畸形结构、杂乱背景"
+                    rows={2}
+                    placeholder="水印、错字、低清晰度、杂乱背景"
                     className="prototype-input-control w-full resize-none rounded-[1rem] border border-[rgba(148,163,184,0.2)] bg-white/80 px-3 py-2.5 text-sm leading-relaxed text-slate-700 outline-none transition-[border-color,box-shadow] duration-200 placeholder:text-slate-400 focus:border-cyan-300 focus:ring-2 focus:ring-cyan-300/20 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-100 dark:placeholder:text-gray-500"
                   />
-                  <div className="flex items-start justify-between gap-3">
-                    <p className="text-[11px] leading-relaxed text-slate-500 dark:text-gray-400">
-                      写不想出现的元素、质感问题或构图缺陷，直接列名词或短语即可。
-                    </p>
-                    <span className="shrink-0 rounded-full border border-[rgba(148,163,184,0.18)] bg-white/55 px-2 py-1 text-[10px] text-slate-500 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-400">
-                      {negativePromptModeLabel}
-                    </span>
-                  </div>
-                  <div className="space-y-1.5 pt-1">
+                  <div className="flex flex-wrap gap-1.5 pt-1">
                     {pinnedConstraintTerms.length > 0 && (
-                      <div className="space-y-1.5">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-amber-500/80 dark:text-amber-300/80">固定约束</div>
-                          <div className="text-[10px] text-slate-400 dark:text-gray-500">长期保留</div>
+                      pinnedConstraintTerms.map((item) => (
+                        <div
+                          key={`pinned-${item}`}
+                          className="prototype-chip prototype-chip-pinned inline-flex items-center gap-1 rounded-full border border-amber-200/80 bg-amber-50/85 px-1.5 py-[0.3125rem] dark:border-amber-400/25 dark:bg-amber-500/10"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => appendNegativePromptTerms([item], `已复用固定约束：${item}`)}
+                            className="rounded-full px-1 text-[11px] text-amber-700 transition-colors hover:text-amber-800 dark:text-amber-200 dark:hover:text-amber-100"
+                          >
+                            {item}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => togglePinnedConstraintTerm(item)}
+                            className="rounded-full px-1 text-[10px] text-amber-500 transition-colors hover:text-rose-500 dark:text-amber-300/80 dark:hover:text-rose-300"
+                            aria-label={`取消固定约束 ${item}`}
+                          >
+                            取消
+                          </button>
                         </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {pinnedConstraintTerms.map((item) => (
-                            <div
-                              key={`pinned-${item}`}
-                              className="prototype-chip prototype-chip-pinned inline-flex items-center gap-1 rounded-full border border-amber-200/80 bg-amber-50/85 px-1.5 py-[0.3125rem] dark:border-amber-400/25 dark:bg-amber-500/10"
-                            >
-                              <button
-                                type="button"
-                                onClick={() => appendNegativePromptTerms([item], `已复用固定约束：${item}`)}
-                                className="rounded-full px-1 text-[11px] text-amber-700 transition-colors hover:text-amber-800 dark:text-amber-200 dark:hover:text-amber-100"
-                              >
-                                {item}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => togglePinnedConstraintTerm(item)}
-                                className="rounded-full px-1 text-[10px] text-amber-500 transition-colors hover:text-rose-500 dark:text-amber-300/80 dark:hover:text-rose-300"
-                                aria-label={`取消固定约束 ${item}`}
-                              >
-                                取消固定
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
+                      ))
                     )}
                     {constraintMemoryTerms.length > 0 && (
-                      <div className="space-y-1.5">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-gray-500">约束记忆</div>
-                          <div className="flex items-center gap-2">
-                            <div className="text-[10px] text-slate-400 dark:text-gray-500">最近常用</div>
+                      <>
+                        {constraintMemoryTerms.map((item) => (
+                          <div
+                            key={`memory-${item}`}
+                            className="prototype-chip prototype-chip-memory inline-flex items-center gap-1 rounded-full border border-cyan-200/70 bg-cyan-50/80 px-1.5 py-[0.3125rem] dark:border-cyan-500/25 dark:bg-cyan-500/10"
+                          >
                             <button
                               type="button"
-                              onClick={clearConstraintMemoryTerms}
-                              className="text-[10px] text-slate-400 transition-colors hover:text-slate-600 dark:text-gray-500 dark:hover:text-gray-300"
-                            >
-                              清空记忆
-                            </button>
-                          </div>
-                        </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {constraintMemoryTerms.map((item) => (
-                            <div
-                              key={`memory-${item}`}
-                              className="prototype-chip prototype-chip-memory inline-flex items-center gap-1 rounded-full border border-cyan-200/70 bg-cyan-50/80 px-1.5 py-[0.3125rem] dark:border-cyan-500/25 dark:bg-cyan-500/10"
-                            >
-                              <button
-                                type="button"
-                                onClick={() => appendNegativePromptTerms([item], `已复用约束：${item}`)}
-                                className="rounded-full px-1 text-[11px] text-cyan-700 transition-colors hover:text-cyan-800 dark:text-cyan-200 dark:hover:text-cyan-100"
-                              >
-                                {item}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => togglePinnedConstraintTerm(item)}
-                                className="rounded-full px-1 text-[10px] text-cyan-500 transition-colors hover:text-amber-500 dark:text-cyan-300/80 dark:hover:text-amber-300"
-                                aria-label={`固定约束 ${item}`}
-                              >
-                                固定
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    {CONSTRAINT_CHIPS.map((group) => (
-                      <div key={group.title} className="space-y-1.5">
-                        <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-gray-500">{group.title}</div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {group.items.map((item) => (
-                            <button
-                              key={item}
-                              type="button"
-                              onClick={() => appendNegativePromptTerms([item], `已添加约束：${item}`)}
-                              className="prototype-chip rounded-full border border-[rgba(148,163,184,0.18)] bg-white/70 px-2.5 py-[0.3125rem] text-[11px] text-slate-600 transition-colors hover:border-cyan-300 hover:text-cyan-700 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300 dark:hover:border-cyan-500/40 dark:hover:text-cyan-300"
+                              onClick={() => appendNegativePromptTerms([item], `已复用约束：${item}`)}
+                              className="rounded-full px-1 text-[11px] text-cyan-700 transition-colors hover:text-cyan-800 dark:text-cyan-200 dark:hover:text-cyan-100"
                             >
                               {item}
                             </button>
-                          ))}
-                        </div>
-                      </div>
+                            <button
+                              type="button"
+                              onClick={() => togglePinnedConstraintTerm(item)}
+                              className="rounded-full px-1 text-[10px] text-cyan-500 transition-colors hover:text-amber-500 dark:text-cyan-300/80 dark:hover:text-amber-300"
+                              aria-label={`固定约束 ${item}`}
+                            >
+                              固定
+                            </button>
+                          </div>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={clearConstraintMemoryTerms}
+                          className="prototype-chip rounded-full border border-[rgba(148,163,184,0.18)] bg-white/55 px-2 py-[0.3125rem] text-[10px] text-slate-500 transition-colors hover:text-slate-700 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-400 dark:hover:text-gray-200"
+                        >
+                          清空最近
+                        </button>
+                      </>
+                    )}
+                    {visibleQuickConstraintTerms.map((item) => (
+                      <button
+                        key={item}
+                        type="button"
+                        onClick={() => appendNegativePromptTerms([item], `已添加约束：${item}`)}
+                        className="prototype-chip rounded-full border border-[rgba(148,163,184,0.18)] bg-white/70 px-2.5 py-[0.3125rem] text-[11px] text-slate-600 transition-colors hover:border-cyan-300 hover:text-cyan-700 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300 dark:hover:border-cyan-500/40 dark:hover:text-cyan-300"
+                      >
+                        {item}
+                      </button>
                     ))}
+                    <span className="shrink-0 rounded-full border border-[rgba(148,163,184,0.18)] bg-white/55 px-2 py-[0.3125rem] text-[10px] text-slate-500 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-400">
+                      {negativePromptModeLabel}
+                    </span>
                   </div>
                 </div>
               )}
@@ -2437,16 +2464,10 @@ export default function InputBar() {
           {/* 参数 + 按钮 */}
           <div className="prototype-control-stack mt-2.5">
             {/* 桌面端布局 */}
-            <div className="hidden lg:flex flex-col gap-2.5">
-              <div className="prototype-param-panel">
-                <div className="prototype-param-section-head mb-1.5 px-1">
-                  <span className="text-[10px] font-medium uppercase tracking-[0.2em] text-slate-400 dark:text-gray-500">创作控制</span>
-                </div>
+            <div className="hidden lg:flex flex-col gap-2">
+              <div className="prototype-param-panel prototype-param-panel-compact">
                 {renderPrimaryParams('grid-cols-2', 'desktop-stacked')}
-                <div className="prototype-output-section mt-2.5 pt-2.5">
-                  <div className="prototype-param-section-head mb-1.5 px-1">
-                    <span className="text-[10px] font-medium uppercase tracking-[0.2em] text-slate-400 dark:text-gray-500">输出偏好</span>
-                  </div>
+                <div className="prototype-output-section mt-2 pt-2">
                   {renderOutputParams('grid-cols-2')}
                 </div>
               </div>
@@ -2477,42 +2498,35 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig) && submitHover} text={submitTooltipText} />
+                  <ButtonTooltip visible={Boolean(submitTooltipText) && submitHover} text={submitTooltipText} />
                   <button
-                    onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
-                    disabled={activeAgentIsRunning ? false : hasSubmitApiConfig ? !canSubmit : false}
+                    onClick={handleSubmitButtonClick}
+                    disabled={hasSubmitRoute && workbenchAccessState === 'ready' ? !canSubmit : false}
                     className={`prototype-submit-button inline-flex h-11 w-full items-center justify-center gap-2 rounded-[1rem] px-4 text-[13px] font-semibold transition-all ${
-                      activeAgentIsRunning
-                        ? 'bg-red-500 text-white hover:bg-red-600'
-                        : !hasSubmitApiConfig
-                        ? 'bg-slate-300 dark:bg-white/[0.06] text-white cursor-pointer'
+                      workbenchAccessState === 'guest'
+                        ? 'bg-[linear-gradient(135deg,#1d4ed8,#2563eb)] text-white hover:brightness-105'
+                        : workbenchAccessState === 'no_balance'
+                        ? 'bg-[linear-gradient(135deg,#d97706,#f59e0b)] text-white hover:brightness-105'
+                        : !hasSubmitRoute
+                        ? 'bg-slate-300 dark:bg-white/[0.06] text-slate-600 dark:text-gray-300 cursor-pointer'
                         : 'bg-[linear-gradient(135deg,#0891b2,#2563eb)] text-white hover:brightness-105 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed'
                     }`}
                     aria-label={submitButtonAriaLabel}
                   >
-                    {activeAgentIsRunning ? (
-                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                        <rect x="7" y="7" width="10" height="10" rx="1.5" />
-                      </svg>
-                    ) : (
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                      </svg>
-                    )}
-                    <span>{activeAgentIsRunning ? '停止生成' : hasSubmitApiConfig ? (maskDraft ? '提交遮罩编辑' : '开始生成') : '先配置 API'}</span>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                    </svg>
+                    {renderSubmitButtonCopy()}
                   </button>
                 </div>
               </div>
             </div>
 
             <div className="hidden sm:flex lg:hidden items-stretch justify-between gap-4">
-              <div className="flex-1 rounded-[1.4rem] border border-[rgba(148,163,184,0.18)] bg-[linear-gradient(180deg,rgba(248,250,252,0.94),rgba(241,245,249,0.9))] dark:bg-white/[0.02] px-3 py-3">
-                <div className="mb-2 px-1">
-                  <span className="text-[11px] tracking-[0.18em] text-slate-400 dark:text-gray-500">创作控制</span>
-                </div>
-                {renderPrimaryParams('grid-cols-3')}
-                <div className="mt-3 border-t border-[rgba(148,163,184,0.14)] pt-3 dark:border-white/[0.06]">
-                  {renderOutputParams('grid-cols-3')}
+              <div className="prototype-param-panel prototype-param-panel-compact flex-1 rounded-[1.4rem] border border-[rgba(148,163,184,0.18)] bg-[linear-gradient(180deg,rgba(248,250,252,0.94),rgba(241,245,249,0.9))] dark:bg-white/[0.02] px-3 py-3">
+                {renderPrimaryParams('grid-cols-2')}
+                <div className="prototype-output-section mt-2 border-t border-[rgba(148,163,184,0.14)] pt-2 dark:border-white/[0.06]">
+                  {renderOutputParams('grid-cols-2')}
                 </div>
               </div>
 
@@ -2542,29 +2556,25 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig) && submitHover} text={submitTooltipText} />
+                  <ButtonTooltip visible={Boolean(submitTooltipText) && submitHover} text={submitTooltipText} />
                   <button
-                    onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
-                    disabled={activeAgentIsRunning ? false : hasSubmitApiConfig ? !canSubmit : false}
+                    onClick={handleSubmitButtonClick}
+                    disabled={hasSubmitRoute && workbenchAccessState === 'ready' ? !canSubmit : false}
                     className={`prototype-submit-button min-w-[152px] h-12 px-4 rounded-2xl transition-all shadow-sm hover:shadow inline-flex items-center justify-center gap-2 text-sm font-semibold ${
-                      activeAgentIsRunning
-                        ? 'bg-red-500 text-white hover:bg-red-600'
-                        : !hasSubmitApiConfig
-                        ? 'bg-slate-300 dark:bg-white/[0.06] text-white cursor-pointer'
+                      workbenchAccessState === 'guest'
+                        ? 'bg-[linear-gradient(135deg,#1d4ed8,#2563eb)] text-white hover:brightness-105'
+                        : workbenchAccessState === 'no_balance'
+                        ? 'bg-[linear-gradient(135deg,#d97706,#f59e0b)] text-white hover:brightness-105'
+                        : !hasSubmitRoute
+                        ? 'bg-slate-300 dark:bg-white/[0.06] text-slate-600 dark:text-gray-300 cursor-pointer'
                         : 'bg-[linear-gradient(135deg,#0891b2,#2563eb)] text-white hover:brightness-105 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed'
                     }`}
                     aria-label={submitButtonAriaLabel}
                   >
-                    {activeAgentIsRunning ? (
-                      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                        <rect x="7" y="7" width="10" height="10" rx="1.5" />
-                      </svg>
-                    ) : (
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                      </svg>
-                    )}
-                    <span>{activeAgentIsRunning ? '停止生成' : hasSubmitApiConfig ? (maskDraft ? '提交遮罩编辑' : '开始生成') : '先配置 API'}</span>
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                    </svg>
+                    {renderSubmitButtonCopy()}
                   </button>
                 </div>
               </div>
@@ -2654,29 +2664,25 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig) && submitHover} text={submitTooltipText} />
+                  <ButtonTooltip visible={Boolean(submitTooltipText) && submitHover} text={submitTooltipText} />
                   <button
-                    onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
-                    disabled={activeAgentIsRunning ? false : hasSubmitApiConfig ? !canSubmit : false}
+                    onClick={handleSubmitButtonClick}
+                    disabled={hasSubmitRoute && workbenchAccessState === 'ready' ? !canSubmit : false}
                     aria-label={submitButtonAriaLabel}
-                    className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-all shadow-sm ${
-                      activeAgentIsRunning
-                        ? 'bg-red-500 text-white hover:bg-red-600'
-                        : !hasSubmitApiConfig
-                        ? 'bg-gray-300 dark:bg-white/[0.06] text-white cursor-pointer'
+                    className={`prototype-submit-button w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-all shadow-sm ${
+                      workbenchAccessState === 'guest'
+                        ? 'bg-blue-600 text-white hover:bg-blue-700'
+                        : workbenchAccessState === 'no_balance'
+                        ? 'bg-amber-500 text-white hover:bg-amber-600'
+                        : !hasSubmitRoute
+                        ? 'bg-gray-300 dark:bg-white/[0.06] text-slate-600 dark:text-gray-300 cursor-pointer'
                         : 'bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed'
                     }`}
                   >
-                    {activeAgentIsRunning ? (
-                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                        <rect x="7" y="7" width="10" height="10" rx="1.5" />
-                      </svg>
-                    ) : (
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                      </svg>
-                    )}
-                    {activeAgentIsRunning ? '停止生成' : maskDraft ? '遮罩编辑' : '生成图像'}
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                    </svg>
+                    {renderSubmitButtonCopy()}
                   </button>
                 </div>
               </div>
@@ -2708,12 +2714,14 @@ export default function InputBar() {
           />
 
           {promptOptimizerResult && createPortal(
-            <PromptOptimizerModal
-              result={promptOptimizerResult}
-              onClose={handleClosePromptOptimizer}
-              onApply={handleApplyPromptOptimizer}
-              onCopy={handleCopyPromptOptimizer}
-            />,
+            <Suspense fallback={<LazyModalFallback title="正在生成优化面板..." description="首次打开时会短暂载入优化结果视图。" />}>
+              <PromptOptimizerModal
+                result={promptOptimizerResult}
+                onClose={handleClosePromptOptimizer}
+                onApply={handleApplyPromptOptimizer}
+                onCopy={handleCopyPromptOptimizer}
+              />
+            </Suspense>,
             document.body,
           )}
         </div>

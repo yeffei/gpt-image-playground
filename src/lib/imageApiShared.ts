@@ -1,4 +1,5 @@
 import type { AppSettings, TaskParams } from '../types'
+import type { ImageRequestCompatibilityStrategy } from '../types'
 
 export const MIME_MAP: Record<string, string> = {
   png: 'image/png',
@@ -13,6 +14,7 @@ export interface CallApiOptions {
   settings: AppSettings
   prompt: string
   negativePrompt?: string
+  compatibilityStrategy?: ImageRequestCompatibilityStrategy
   params: TaskParams
   /** 输入图片的 data URL 列表 */
   inputImageDataUrls: string[]
@@ -20,10 +22,11 @@ export interface CallApiOptions {
   onFalRequestEnqueued?: (request: { requestId: string; endpoint: string }) => void
   onCustomTaskEnqueued?: (task: { taskId: string }) => void
   onPartialImage?: (partial: { image: string; partialImageIndex?: number; requestIndex?: number }) => void
+  disableRetry?: boolean
 }
 
 export interface CallApiResult {
-  /** base64 data URL 列表 */
+  /** 图片 URL 列表；本地/浏览器直连时通常是 data URL，服务端网关可返回持久化 URL */
   images: string[]
   /** API 返回的实际生效参数 */
   actualParams?: Partial<TaskParams>
@@ -149,7 +152,12 @@ export async function getApiErrorMessage(response: Response): Promise<string> {
   let errorMsg = `HTTP ${response.status}`
   try {
     const errJson = await response.json()
-    if (errJson.error?.message) errorMsg = errJson.error.message
+    if (errJson.error?.message) {
+      const code = typeof errJson.error?.code === 'string' ? errJson.error.code.trim() : ''
+      const type = typeof errJson.error?.type === 'string' ? errJson.error.type.trim() : ''
+      const suffix = [code, type].filter(Boolean).join(' ')
+      errorMsg = suffix ? `${errJson.error.message} [${suffix}]` : errJson.error.message
+    }
     else if (typeof errJson.detail === 'string') errorMsg = errJson.detail
     else if (Array.isArray(errJson.detail)) errorMsg = errJson.detail.map((item: unknown) => typeof item === 'string' ? item : JSON.stringify(item)).join('\n')
     else if (typeof errJson.error === 'string') errorMsg = errJson.error

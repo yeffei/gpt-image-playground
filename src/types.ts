@@ -2,12 +2,223 @@
 
 export type ApiMode = 'images' | 'responses'
 export type AppMode = 'gallery' | 'agent'
+export type GalleryView = 'workbench' | 'plan' | 'auth' | 'recharge' | 'library' | 'promptLibrary'
+export type WorkbenchReturnSource = Exclude<GalleryView, 'workbench'>
+export type AuthRedirectView = 'workbench' | 'plan' | 'library' | 'promptLibrary'
+export type AuthReturnSource = Exclude<AuthRedirectView, 'workbench'>
+export type AuthViewMode = 'login' | 'register' | 'recover'
+export type RechargeReturnView = 'workbench' | 'plan'
+export type RechargePaymentMethod = 'wechat' | 'alipay' | 'card'
+export type RechargeFlowStatus = 'idle' | 'processing' | 'success' | 'failed' | 'cancelled'
+export type LibraryViewMode = 'all' | 'favorites'
+export type WorkbenchAccessState = 'guest' | 'no_balance' | 'ready'
+export type RechargeResultStatus = 'idle' | 'success' | 'failed' | 'interrupted'
 export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask'
 export type BuiltInApiProvider = 'openai' | 'fal'
 export type ApiProvider = BuiltInApiProvider | string
 export type CustomProviderTemplate = 'http-image'
 export const DEFAULT_STREAM_PARTIAL_IMAGES = 1
 export const DEFAULT_AGENT_MAX_TOOL_ROUNDS = 15
+
+export type ImageGatewayApiMode = Extract<ApiMode, 'images'>
+export type ImageRequestCompatibilityStrategy = 'openai_standard' | 'relay_extended'
+
+export interface ModelSku {
+  id: string
+  label: string
+  description?: string
+  enabled: boolean
+  routeIds: string[]
+  defaultParams: TaskParams
+  supportedSizes: string[]
+  supportedQualities: Array<TaskParams['quality'] | '*'>
+  supportsEdit?: boolean
+  supportsMask?: boolean
+  maxOutputCount: number
+}
+
+export interface BackendRoute {
+  id: string
+  name: string
+  provider: 'openai-compatible'
+  compatibilityStrategy: ImageRequestCompatibilityStrategy
+  baseUrl: string
+  apiKey: string
+  upstreamModelBySku: Record<string, string>
+  apiMode: ImageGatewayApiMode
+  enabled: boolean
+  disabledReason?: string
+  priority: number
+  weight: number
+  timeoutSeconds: number
+  initialLatencyMs?: number
+  exhaustedCooldownSeconds?: number
+  maxConcurrency: number
+  supportsEdit: boolean
+  supportsMask: boolean
+  supportsStreaming: boolean
+}
+
+export interface ImageGatewayAttempt {
+  routeId: string
+  upstreamModel: string
+  success: boolean
+  latencyMs: number
+  errorMessage?: string
+  failureKind?: ImageGatewayFailureKind
+}
+
+export type ImageGatewayFailureKind =
+  | 'no_route'
+  | 'route_exhausted'
+  | 'upstream_timeout'
+  | 'upstream_rate_limited'
+  | 'upstream_server_error'
+  | 'upstream_bad_request'
+  | 'upstream_auth_error'
+  | 'content_policy_violation'
+  | 'unsupported_model'
+  | 'parameter_incompatible'
+  | 'network'
+  | 'unknown'
+
+export type ImageGatewayRouteHealthStatus = 'idle' | 'healthy' | 'degraded' | 'failing'
+
+export interface ImageGatewayRouteHealth {
+  routeId: string
+  upstreamModel: string
+  status: ImageGatewayRouteHealthStatus
+  inFlight: number
+  successCount: number
+  failureCount: number
+  consecutiveFailures: number
+  ewmaLatencyMs?: number
+  lastFailureKind?: ImageGatewayFailureKind
+  lastSuccessAt?: number
+  lastFailureAt?: number
+  cooldownUntil?: number
+}
+
+export interface ImageGatewayRouteHealthSnapshot {
+  requestId?: string
+  modelSku: string
+  capturedAt: number
+  routes: ImageGatewayRouteHealth[]
+}
+
+export type ImageGatewayRouteSelectionState =
+  | 'filtered'
+  | 'available'
+  | 'attempted'
+  | 'selected'
+
+export type ImageGatewayRouteRequestExclusionReason =
+  | GatewayRouteExclusionReason
+  | 'edit_not_supported'
+  | 'mask_not_supported'
+
+export interface ImageGatewayRouteSelection {
+  routeId: string
+  upstreamModel?: string
+  selectionState: ImageGatewayRouteSelectionState
+  exclusionReasons?: ImageGatewayRouteRequestExclusionReason[]
+  cooldownActive?: boolean
+  inFlight: number
+  maxConcurrency: number
+  rank?: number
+  score?: number
+  attemptIndex?: number
+}
+
+export interface ImageGatewayRouteSelectionSnapshot {
+  requestId?: string
+  modelSku: string
+  capturedAt: number
+  requiresEdit: boolean
+  requiresMask: boolean
+  routes: ImageGatewayRouteSelection[]
+}
+
+export type GatewayRouteExclusionReason =
+  | 'static_disabled'
+  | 'operator_disabled'
+  | 'cooldown_active'
+  | 'max_concurrency_reached'
+  | 'missing_model_mapping'
+
+export interface GatewayDiagnosticsRouteInfo {
+  id: string
+  name: string
+  provider: BackendRoute['provider']
+  enabled: boolean
+  disabledReason?: string
+  effectiveEnabled?: boolean
+  exclusionReasons?: GatewayRouteExclusionReason[]
+  priority: number
+  weight: number
+  timeoutSeconds: number
+  initialLatencyMs?: number
+  exhaustedCooldownSeconds?: number
+  maxConcurrency: number
+  currentInFlight?: number
+  supportsEdit: boolean
+  supportsMask: boolean
+  supportsStreaming: boolean
+  compatibilityStrategy: ImageRequestCompatibilityStrategy
+  upstreamModelBySku: Record<string, string>
+  operatorOverride?: RouteOperatorOverride
+  cooldownUntil?: number
+  restoresAt?: number
+}
+
+export interface GatewayDiagnosticsModelSkuInfo {
+  id: string
+  label: string
+  enabled: boolean
+  routeIds: string[]
+  supportedSizes: string[]
+  supportedQualities: Array<TaskParams['quality'] | '*'>
+  maxOutputCount: number
+}
+
+export interface GatewayDiagnosticsLatestRequest {
+  capturedAt: number
+  requestId: string
+  modelSku: string
+  success: boolean
+  routeId?: string
+  upstreamModel?: string
+  failureKind?: ImageGatewayFailureKind
+  errorMessage?: string
+  attempts: ImageGatewayAttempt[]
+  routeHealth?: ImageGatewayRouteHealthSnapshot
+  routeSelection?: ImageGatewayRouteSelectionSnapshot
+  rawImageUrls?: string[]
+}
+
+export interface GatewayDiagnosticsPayload {
+  generatedAt: number
+  routes: GatewayDiagnosticsRouteInfo[]
+  modelSkus: GatewayDiagnosticsModelSkuInfo[]
+  routeHealthByModelSku: ImageGatewayRouteHealthSnapshot[]
+  latestRequest: GatewayDiagnosticsLatestRequest | null
+  activeOverrides?: RouteOperatorOverride[]
+  persistence?: GatewayPersistenceInfo
+}
+
+export interface RouteOperatorOverride {
+  routeId: string
+  disabled: boolean
+  reason?: string
+  updatedAt: number
+  disabledUntil?: number
+}
+
+export interface GatewayPersistenceInfo {
+  available: boolean
+  mode: 'memory' | 'binding'
+  key?: string
+}
 
 export type CustomProviderRequestMethod = 'GET' | 'POST'
 export type CustomProviderContentType = 'json' | 'multipart'
@@ -99,6 +310,63 @@ export interface AppSettings {
   activeProfileId: string
 }
 
+export interface AccountState {
+  userId?: string | null
+  email?: string | null
+  inviteCode?: string | null
+  isLoggedIn: boolean
+  displayName: string
+  balance: number
+  planName: string
+}
+
+export interface BillingState {
+  lastRechargeAmount: number | null
+  lastRechargeStatus: RechargeResultStatus
+  lastRechargeAt: number | null
+  lastRechargeErrorMessage?: string | null
+  pendingRechargeAmount: number | null
+  selectedPaymentMethod: RechargePaymentMethod
+  rechargeFlowStatus: RechargeFlowStatus
+  rechargeReturnView: RechargeReturnView
+  rechargeHistory: Array<{
+    id: string
+    amount: number
+    status: Extract<RechargeFlowStatus, 'success' | 'failed' | 'cancelled'>
+    paymentMethod: RechargePaymentMethod
+    channel?: 'recharge_code' | 'mock_payment'
+    code?: string
+    createdAt: number
+    balanceAfter?: number
+  }>
+  usageHistory: Array<{
+    id: string
+    taskId: string
+    sourceMode: AppMode
+    amount: number
+    outputCount: number
+    quality: 'auto' | 'low' | 'medium' | 'high'
+    createdAt: number
+    balanceAfter: number
+  }>
+}
+
+export interface AccountProfileState {
+  account: AccountState
+  billing: BillingState
+  updatedAt: number
+}
+
+export interface WorkbenchReturnContext {
+  source: WorkbenchReturnSource
+  timestamp: number
+}
+
+export interface AuthReturnContext {
+  source: AuthReturnSource
+  timestamp: number
+}
+
 // ===== 任务参数 =====
 
 export interface TaskParams {
@@ -111,11 +379,11 @@ export interface TaskParams {
 }
 
 export const DEFAULT_PARAMS: TaskParams = {
-  size: 'auto',
-  quality: 'auto',
-  output_format: 'png',
-  output_compression: null,
-  moderation: 'auto',
+  size: '1024x1024',
+  quality: 'medium',
+  output_format: 'jpeg',
+  output_compression: 90,
+  moderation: 'low',
   n: 1,
 }
 
@@ -140,6 +408,7 @@ export type TaskStatus = 'running' | 'done' | 'error'
 
 export interface TaskRecord {
   id: string
+  ownerUserId?: string | null
   prompt: string
   negativePrompt?: string
   params: TaskParams
@@ -153,6 +422,10 @@ export interface TaskRecord {
   apiMode?: ApiMode
   /** 生成时使用的模型 ID */
   apiModel?: string
+  /** 产品层模型 SKU，普通用户只应看到这一层模型名称 */
+  modelSku?: string
+  /** Gateway 失败分类，用于标准化错误文案 */
+  gatewayFailureKind?: ImageGatewayFailureKind
   /** fal.ai 队列请求 ID，用于连接断开后的结果恢复 */
   falRequestId?: string
   /** fal.ai 队列 endpoint，用于连接断开后的状态和结果查询 */
@@ -189,23 +462,23 @@ export interface TaskRecord {
   elapsed: number | null
   /** 是否收藏 */
   isFavorite?: boolean
-  /** 来源模式：画廊 / Agent */
+  /** 来源模式：画廊 / 对话 */
   sourceMode?: AppMode
-  /** Agent 对话 ID */
+  /** 对话 ID */
   agentConversationId?: string
-  /** Agent 轮次 ID */
+  /** 轮次 ID */
   agentRoundId?: string
-  /** Agent 消息 ID */
+  /** 消息 ID */
   agentMessageId?: string
-  /** Agent 图像工具调用 ID */
+  /** 图像工具调用 ID */
   agentToolCallId?: string
-  /** Agent 批量图像工具调用 ID */
+  /** 批量图像工具调用 ID */
   agentBatchCallId?: string
-  /** Agent 图像工具实际动作 */
+  /** 图像工具实际动作 */
   agentToolAction?: 'generate' | 'edit' | 'auto' | string
 }
 
-// ===== Agent 模式 =====
+// ===== 对话模式 =====
 
 export type AgentMessageRole = 'user' | 'assistant'
 export type AgentRoundStatus = 'running' | 'done' | 'error'
@@ -256,6 +529,8 @@ export interface AgentConversation {
 export interface StoredImage {
   id: string
   dataUrl: string
+  /** 服务端生成图片的公开访问地址，用于走带文件名的下载响应 */
+  publicUrl?: string
   /** 图片首次存储时间（ms） */
   createdAt?: number
   /** 图片来源：用户上传 / API 生成 / 遮罩 */

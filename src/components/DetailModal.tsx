@@ -1,28 +1,27 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
-import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey, retryTask } from '../store'
+import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey, retryTask, isTaskVisibleForAccount } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useTooltip } from '../hooks/useTooltip'
 import { formatImageRatio } from '../lib/size'
 import { ActualValueBadge, DetailParamValue } from '../lib/paramDisplay'
-import { copyImageSourceToClipboard, copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
-import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
-import { downloadImageIds } from '../lib/downloadImages'
+import { getModelSku } from '../lib/modelSkus'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
 
 import ViewportTooltip from './ViewportTooltip'
 
 export default function DetailModal() {
+  const account = useStore((s) => s.account)
   const tasks = useStore((s) => s.tasks)
   const detailTaskId = useStore((s) => s.detailTaskId)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
-  const setMaskEditorImageId = useStore((s) => s.setMaskEditorImageId)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const showToast = useStore((s) => s.showToast)
   const settings = useStore((s) => s.settings)
+  const modelSkus = useStore((s) => s.modelSkus)
   const dismissedCodexCliPrompts = useStore((s) => s.dismissedCodexCliPrompts)
   const streamPreviewSrc = useStore((s) => detailTaskId ? s.streamPreviews[detailTaskId] || '' : '')
   const streamPreviewSlots = useStore((s) => detailTaskId ? s.streamPreviewSlots[detailTaskId] : undefined)
@@ -37,6 +36,7 @@ export default function DetailModal() {
   const [showRawUrlsModal, setShowRawUrlsModal] = useState(false)
   const [showRawResponseModal, setShowRawResponseModal] = useState(false)
   const [streamPreviewLoaded, setStreamPreviewLoaded] = useState(false)
+  const [promptExpanded, setPromptExpanded] = useState(false)
   const modalRef = useRef<HTMLDivElement>(null)
   const rawUrlsModalRef = useRef<HTMLDivElement>(null)
   const rawResponseModalRef = useRef<HTMLDivElement>(null)
@@ -58,8 +58,8 @@ export default function DetailModal() {
   }
 
   const task = useMemo(
-    () => tasks.find((t) => t.id === detailTaskId) ?? null,
-    [tasks, detailTaskId],
+    () => tasks.find((t) => t.id === detailTaskId && isTaskVisibleForAccount(t, account)) ?? null,
+    [account, tasks, detailTaskId],
   )
   const streamPreviewItems = useMemo(() => {
     const slotEntries = streamPreviewSlots
@@ -98,7 +98,14 @@ export default function DetailModal() {
   // Reset index when task changes
   useEffect(() => {
     setImageIndex(0)
+    setPromptExpanded(false)
   }, [detailTaskId])
+
+  useEffect(() => {
+    if (detailTaskId && (!account.isLoggedIn || !task)) {
+      setDetailTaskId(null)
+    }
+  }, [account.isLoggedIn, detailTaskId, setDetailTaskId, task])
 
   useEffect(() => {
     if (task?.status !== 'running' && !(task?.status === 'error' && (task.falRecoverable || task.customRecoverable))) return
@@ -182,7 +189,8 @@ export default function DetailModal() {
     setMaskPreviewSrc('')
     if (!maskTargetSrc || !maskSrc) return
 
-    createMaskPreviewDataUrl(maskTargetSrc, maskSrc)
+    import('../lib/canvasImage')
+      .then(({ createMaskPreviewDataUrl }) => createMaskPreviewDataUrl(maskTargetSrc, maskSrc))
       .then((url) => {
         if (!cancelled) setMaskPreviewSrc(url)
       })
@@ -195,7 +203,7 @@ export default function DetailModal() {
     }
   }, [maskTargetSrc, maskSrc])
 
-  if (!task) return null
+  if (!account.isLoggedIn || !task) return null
 
   const isAgentTask = task.sourceMode === 'agent' || Boolean(task.agentConversationId || task.agentRoundId)
   const showPendingPrompt = isAgentTaskPromptPending(task)
@@ -208,15 +216,18 @@ export default function DetailModal() {
   const currentActualParams = currentOutputImageId ? task.actualParamsByImage?.[currentOutputImageId] : undefined
   const currentRevisedPrompt = currentOutputImageId ? task.revisedPromptByImage?.[currentOutputImageId]?.trim() : ''
   const showRevisedPrompt = Boolean(currentRevisedPrompt && currentRevisedPrompt !== task.prompt.trim())
+  const shouldCollapsePrompt = task.prompt.trim().length > 520 || task.prompt.split(/\r?\n/).length > 10
   const codexCliPromptKey = getCodexCliPromptKey(settings)
   const hasHandledPromptWarning = settings.codexCli || dismissedCodexCliPrompts.includes(codexCliPromptKey)
   const taskProvider = task.apiProvider
   const isOpenAiTask = (taskProvider ?? 'openai') === 'openai'
   const showPromptWarning = Boolean(isOpenAiTask && task.apiMode === 'responses' && currentOutputImageId && (!currentRevisedPrompt || showRevisedPrompt) && !hasHandledPromptWarning)
-  const taskProviderName = taskProvider === 'fal' ? 'fal.ai' : taskProvider ? 'OpenAI' : '未知'
-  const taskProfileName = task.apiProfileName || '未知'
-  const taskModel = task.apiModel || '未知'
-  const showSourceInfo = Boolean(task.apiProvider || task.apiProfileName || task.apiModel)
+  const taskModelSku = task.modelSku ? getModelSku(task.modelSku, modelSkus) : null
+  const taskUsesModelSku = Boolean(task.modelSku)
+  const taskProviderName = taskUsesModelSku ? '系统线路' : taskProvider === 'fal' ? 'fal.ai' : taskProvider ? 'OpenAI' : '未知'
+  const taskProfileName = taskModelSku?.label ?? task.modelSku ?? task.apiProfileName ?? '未知'
+  const taskModel = taskUsesModelSku ? '' : task.apiModel || '未知'
+  const showSourceInfo = Boolean(task.modelSku || task.apiProvider || task.apiProfileName || task.apiModel)
   const isFalReconnecting = task.status === 'error' && task.falRecoverable
   const isCustomReconnecting = task.status === 'error' && task.customRecoverable
   const rawImageUrls = task.rawImageUrls ?? []
@@ -253,13 +264,6 @@ export default function DetailModal() {
     setDetailTaskId(null)
   }
 
-  const handleMaskEditCurrentOutput = () => {
-    const imgId = task.outputImages?.[imageIndex]
-    if (!imgId) return
-    setMaskEditorImageId(imgId)
-    setDetailTaskId(null)
-  }
-
   const handleDelete = () => {
     setDetailTaskId(null)
     setConfirmDialog({
@@ -276,9 +280,11 @@ export default function DetailModal() {
   const handleCopyError = async () => {
     const errorText = task.error || '生成失败'
     try {
+      const { copyTextToClipboard } = await import('../lib/clipboard')
       await copyTextToClipboard(errorText)
       showToast('完整报错已复制', 'success')
     } catch (err) {
+      const { getClipboardFailureMessage } = await import('../lib/clipboard')
       showToast(getClipboardFailureMessage('复制报错失败', err), 'error')
     }
   }
@@ -286,9 +292,11 @@ export default function DetailModal() {
   const handleCopyPrompt = async () => {
     if (!task.prompt) return
     try {
+      const { copyTextToClipboard } = await import('../lib/clipboard')
       await copyTextToClipboard(task.prompt)
       showToast('提示词已复制', 'success')
     } catch (err) {
+      const { getClipboardFailureMessage } = await import('../lib/clipboard')
       showToast(getClipboardFailureMessage('复制提示词失败', err), 'error')
     }
   }
@@ -305,10 +313,12 @@ export default function DetailModal() {
     const src = imgId ? imageSrcs[imgId] : ''
     if (!src) return
     try {
+      const { copyImageSourceToClipboard } = await import('../lib/clipboard')
       await copyImageSourceToClipboard(src)
       showToast('参考图已复制', 'success')
     } catch (err) {
       console.error(err)
+      const { getClipboardFailureMessage } = await import('../lib/clipboard')
       showToast(getClipboardFailureMessage('复制参考图失败', err), 'error')
     }
   }
@@ -318,6 +328,7 @@ export default function DetailModal() {
     if (!currentOutputImageId || !task) return
 
     try {
+      const { downloadImageIds } = await import('../lib/downloadImages')
       const result = await downloadImageIds([currentOutputImageId], `task-${task.id}`)
       if (result.successCount === 0) {
         showToast('下载失败', 'error')
@@ -335,6 +346,7 @@ export default function DetailModal() {
     if (!task?.outputImages?.length) return
 
     try {
+      const { downloadImageIds } = await import('../lib/downloadImages')
       const result = await downloadImageIds(task.outputImages, `task-${task.id}`)
       if (result.successCount === 0) {
         showToast('下载失败', 'error')
@@ -353,6 +365,7 @@ export default function DetailModal() {
     if (!task || !streamPartialImageIds.length) return
 
     try {
+      const { downloadImageIds } = await import('../lib/downloadImages')
       const result = await downloadImageIds(streamPartialImageIds, `task-${task.id}-partial`)
       if (result.successCount === 0) {
         showToast('下载失败', 'error')
@@ -604,7 +617,7 @@ export default function DetailModal() {
                   <button
                     type="button"
                     {...copyErrorTooltip.handlers}
-                    onClick={(e) => {
+                    onClick={() => {
                       copyErrorTooltip.handlers.onClick()
                       handleCopyError()
                     }}
@@ -622,7 +635,7 @@ export default function DetailModal() {
                     <button
                       type="button"
                       {...viewRawResponseTooltip.handlers}
-                      onClick={(e) => {
+                      onClick={() => {
                         dismissAllTooltips()
                         setShowRawResponseModal(true)
                       }}
@@ -641,13 +654,15 @@ export default function DetailModal() {
                     <button
                       type="button"
                       {...copyRawUrlsTooltip.handlers}
-                      onClick={async (e) => {
+                      onClick={async () => {
                         if (task.rawImageUrls!.length === 1) {
                           copyRawUrlsTooltip.handlers.onClick()
                           try {
+                            const { copyTextToClipboard } = await import('../lib/clipboard')
                             await copyTextToClipboard(task.rawImageUrls![0])
                             showToast('图片链接已复制', 'success')
                           } catch (err) {
+                            const { getClipboardFailureMessage } = await import('../lib/clipboard')
                             showToast(getClipboardFailureMessage('复制链接失败', err), 'error')
                           }
                         } else {
@@ -670,7 +685,7 @@ export default function DetailModal() {
                     <button
                       type="button"
                       {...downloadPartialImagesTooltip.handlers}
-                      onClick={(e) => {
+                      onClick={() => {
                         downloadPartialImagesTooltip.handlers.onClick()
                         void handleDownloadPartialImages()
                       }}
@@ -688,7 +703,7 @@ export default function DetailModal() {
                   <button
                     type="button"
                     {...retryTooltip.handlers}
-                    onClick={(e) => {
+                    onClick={() => {
                       retryTooltip.handlers.onClick()
                       handleRetry()
                     }}
@@ -753,9 +768,27 @@ export default function DetailModal() {
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">输入内容将在响应完成时接收</p>
               </div>
             ) : (
-              <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-wrap mb-4">
-                {task.prompt || '(无提示词)'}
-              </p>
+              <div className="mb-4">
+                <div className="relative">
+                  <p className={`text-sm text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-wrap ${
+                    shouldCollapsePrompt && !promptExpanded ? 'max-h-[15rem] overflow-hidden' : ''
+                  }`}>
+                    {task.prompt || '(无提示词)'}
+                  </p>
+                  {shouldCollapsePrompt && !promptExpanded && (
+                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-b from-white/0 to-white dark:to-gray-900" />
+                  )}
+                </div>
+                {shouldCollapsePrompt && (
+                  <button
+                    type="button"
+                    onClick={() => setPromptExpanded((current) => !current)}
+                    className="mt-2 text-xs font-medium text-blue-600 transition hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200"
+                  >
+                    {promptExpanded ? '收起内容' : '展开全部'}
+                  </button>
+                )}
+              </div>
             )}
             {showRevisedPrompt && currentRevisedPrompt && (
               <div className="mb-4">
@@ -838,7 +871,7 @@ export default function DetailModal() {
                 <span className="text-gray-400 dark:text-gray-500">来源</span>
                 <br />
                 <span className="font-medium text-gray-700 dark:text-gray-200">{taskProviderName}</span>
-                <span className="text-gray-400 dark:text-gray-500"> · {taskProfileName} · {taskModel}</span>
+                <span className="text-gray-400 dark:text-gray-500"> · {taskProfileName}{taskModel ? ` · ${taskModel}` : ''}</span>
               </div>
             )}
             <div className="grid grid-cols-2 gap-2 text-xs mb-4">
@@ -948,9 +981,11 @@ export default function DetailModal() {
                   type="button"
                   onClick={async () => {
                     try {
+                      const { copyTextToClipboard } = await import('../lib/clipboard')
                       await copyTextToClipboard(rawImageUrls.join('\n'))
                       showToast('复制成功', 'success')
                     } catch (err) {
+                      const { getClipboardFailureMessage } = await import('../lib/clipboard')
                       showToast(getClipboardFailureMessage('复制失败', err), 'error')
                     }
                   }}
@@ -984,9 +1019,11 @@ export default function DetailModal() {
                       type="button"
                       onClick={async () => {
                         try {
+                          const { copyTextToClipboard } = await import('../lib/clipboard')
                           await copyTextToClipboard(url)
                           showToast('复制成功', 'success')
                         } catch (err) {
+                          const { getClipboardFailureMessage } = await import('../lib/clipboard')
                           showToast(getClipboardFailureMessage('复制失败', err), 'error')
                         }
                       }}
@@ -1031,9 +1068,11 @@ export default function DetailModal() {
                   type="button"
                   onClick={async () => {
                     try {
+                      const { copyTextToClipboard } = await import('../lib/clipboard')
                       await copyTextToClipboard(task.rawResponsePayload!)
                       showToast('复制成功', 'success')
                     } catch (err) {
+                      const { getClipboardFailureMessage } = await import('../lib/clipboard')
                       showToast(getClipboardFailureMessage('复制失败', err), 'error')
                     }
                   }}

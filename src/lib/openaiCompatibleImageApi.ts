@@ -1,6 +1,7 @@
-import { DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type ApiProvider, type CustomProviderDefinition, type CustomProviderPollMapping, type CustomProviderResultMapping, type CustomProviderSubmitMapping, type ImageApiResponse, type ImageResponseItem, type ResponsesApiResponse, type ResponsesOutputItem, type TaskParams } from '../types'
+import { DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type CustomProviderDefinition, type CustomProviderPollMapping, type CustomProviderResultMapping, type CustomProviderSubmitMapping, type ImageApiResponse, type ImageResponseItem, type ResponsesApiResponse, type ResponsesOutputItem, type TaskParams } from '../types'
 import { dataUrlToBlob, imageDataUrlToPngBlob, maskDataUrlToPngBlob } from './canvasImage'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
+import { buildImageRequestCompatibilityFields } from './imageRequestCompatibility'
 import {
   assertImageInputPayloadSize,
   assertMaskEditFileSize,
@@ -20,14 +21,6 @@ import {
 
 const PROMPT_REWRITE_GUARD_PREFIX = 'Use the following text as the complete prompt. Do not rewrite it:'
 
-function buildPromptWithNegative(prompt: string, negativePrompt?: string, provider: ApiProvider = 'openai') {
-  const trimmedPrompt = prompt.trim()
-  const trimmedNegativePrompt = negativePrompt?.trim()
-  if (!trimmedNegativePrompt) return trimmedPrompt
-  if (provider === 'openai') return `${trimmedPrompt}\n\nAvoid: ${trimmedNegativePrompt}`
-  return trimmedPrompt
-}
-
 function getStreamPartialImages(profile: ApiProfile): number {
   return profile.streamPartialImages ?? DEFAULT_STREAM_PARTIAL_IMAGES
 }
@@ -39,7 +32,39 @@ function appendQuery(path: string, query?: Record<string, string>): string {
   return `${path}${path.includes('?') ? '&' : '?'}${params.toString()}`
 }
 
-function createOpenAICompatiblePaths(customProvider?: CustomProviderDefinition | null) {
+function sleepForRetry(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function isAbortLikeError(err: unknown) {
+  return typeof DOMException !== 'undefined' && err instanceof DOMException && err.name === 'AbortError'
+}
+
+function isRetryableStatus(status: number) {
+  return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500
+}
+
+function isRetryableErrorMessage(message: string) {
+  return /timeout|timed out|network|failed to fetch|fetch failed|load failed|connection|reset|econnreset|socket hang up|temporarily unavailable|overloaded|rate limit|too many requests|429|502|503|504|408/i.test(message)
+}
+
+async function withSingleRetry<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation()
+  } catch (error) {
+    if (isAbortLikeError(error)) throw error
+    const message = error instanceof Error ? error.message : String(error)
+    if (!isRetryableErrorMessage(message)) throw error
+    await sleepForRetry(1200)
+    return operation()
+  }
+}
+
+async function maybeWithSingleRetry<T>(disableRetry: boolean | undefined, operation: () => Promise<T>): Promise<T> {
+  return disableRetry ? operation() : withSingleRetry(operation)
+}
+
+function createOpenAICompatiblePaths() {
   return {
     generationPath: 'images/generations',
     editPath: 'images/edits',
@@ -486,16 +511,16 @@ export async function callOpenAICompatibleImageApi(opts: CallApiOptions, profile
     : callImagesApi(opts, profile)
 }
 
-async function callImagesApi(opts: CallApiOptions, profile: ApiProfile, customProvider?: CustomProviderDefinition | null): Promise<CallApiResult> {
+async function callImagesApi(opts: CallApiOptions, profile: ApiProfile): Promise<CallApiResult> {
   const n = opts.params.n > 0 ? opts.params.n : 1
   if ((profile.codexCli || (profile.streamImages && n > 1)) && n > 1) {
-    return callImagesApiConcurrent(opts, profile, n, customProvider)
+    return callImagesApiConcurrent(opts, profile, n)
   }
 
-  return callImagesApiSingle(opts, profile, customProvider)
+  return callImagesApiSingle(opts, profile)
 }
 
-async function callImagesApiConcurrent(opts: CallApiOptions, profile: ApiProfile, n: number, customProvider?: CustomProviderDefinition | null): Promise<CallApiResult> {
+async function callImagesApiConcurrent(opts: CallApiOptions, profile: ApiProfile, n: number): Promise<CallApiResult> {
   const singleOpts = {
     ...opts,
     params: {
@@ -510,7 +535,7 @@ async function callImagesApiConcurrent(opts: CallApiOptions, profile: ApiProfile
       onPartialImage: opts.onPartialImage
         ? (partial) => opts.onPartialImage?.({ ...partial, requestIndex })
         : undefined,
-    }, profile, customProvider)),
+    }, profile)),
   )
 
   const successfulResults = results
@@ -539,18 +564,25 @@ async function callImagesApiConcurrent(opts: CallApiOptions, profile: ApiProfile
   return { images, actualParams, actualParamsList, revisedPrompts, ...(rawImageUrls.length ? { rawImageUrls } : {}) }
 }
 
-async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile, customProvider?: CustomProviderDefinition | null): Promise<CallApiResult> {
+async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile): Promise<CallApiResult> {
   const { prompt: originalPrompt, negativePrompt, params, inputImageDataUrls } = opts
-  const promptWithNegative = buildPromptWithNegative(originalPrompt, negativePrompt, profile.provider)
-  const prompt = profile.codexCli
-    ? `${PROMPT_REWRITE_GUARD_PREFIX}\n${promptWithNegative}`
-    : promptWithNegative
+  const compatibility = buildImageRequestCompatibilityFields(
+    opts.compatibilityStrategy ?? (profile.provider === 'openai' ? 'openai_standard' : 'relay_extended'),
+    {
+      prompt: originalPrompt,
+      negativePrompt,
+      params,
+      responseFormatB64Json: profile.responseFormatB64Json,
+      stream: profile.streamImages,
+      partialImages: getStreamPartialImages(profile),
+    },
+  )
   const isEdit = inputImageDataUrls.length > 0
   const mime = MIME_MAP[params.output_format] || 'image/png'
   const proxyConfig = readClientDevProxyConfig()
   const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
   const requestHeaders = createRequestHeaders(profile)
-  const paths = createOpenAICompatiblePaths(customProvider)
+  const paths = createOpenAICompatiblePaths()
 
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), profile.timeout * 1000)
@@ -561,30 +593,9 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile, cu
     if (isEdit) {
       const formData = new FormData()
       formData.append('model', profile.model)
-      formData.append('prompt', prompt)
-      if (negativePrompt?.trim() && profile.provider !== 'openai') {
-        formData.append('negative_prompt', negativePrompt.trim())
-      }
-      formData.append('size', params.size)
-      formData.append('output_format', params.output_format)
-      formData.append('moderation', params.moderation)
-
-      if (!profile.codexCli) {
-        formData.append('quality', params.quality)
-      }
-
-      if (params.output_format !== 'png' && params.output_compression != null) {
-        formData.append('output_compression', String(params.output_compression))
-      }
-      if (params.n > 1) {
-        formData.append('n', String(params.n))
-      }
-      if (profile.responseFormatB64Json) {
-        formData.append('response_format', 'b64_json')
-      }
-      if (profile.streamImages) {
-        formData.append('stream', 'true')
-        formData.append('partial_images', String(getStreamPartialImages(profile)))
+      for (const [key, value] of compatibility.formFields) {
+        if (key === 'quality' && profile.codexCli) continue
+        formData.append(key, value)
       }
 
       const imageBlobs: Blob[] = []
@@ -615,52 +626,41 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile, cu
         formData.append('mask', maskBlob, 'mask.png')
       }
 
-      response = await fetch(buildApiUrl(profile.baseUrl, paths.editPath, proxyConfig, useApiProxy), {
-        method: 'POST',
-        headers: requestHeaders,
-        cache: 'no-store',
-        body: formData,
-        signal: controller.signal,
+      response = await maybeWithSingleRetry(opts.disableRetry, async () => {
+        const nextResponse = await fetch(buildApiUrl(profile.baseUrl, paths.editPath, proxyConfig, useApiProxy), {
+          method: 'POST',
+          headers: requestHeaders,
+          cache: 'no-store',
+          body: formData,
+          signal: controller.signal,
+        })
+        if (!nextResponse.ok && isRetryableStatus(nextResponse.status)) {
+          throw new Error(await getApiErrorMessage(nextResponse))
+        }
+        return nextResponse
       })
     } else {
       const body: Record<string, unknown> = {
         model: profile.model,
-        prompt,
-        size: params.size,
-        output_format: params.output_format,
-        moderation: params.moderation,
+        ...compatibility.body,
       }
-      if (negativePrompt?.trim() && profile.provider !== 'openai') {
-        body.negative_prompt = negativePrompt.trim()
-      }
+      if (profile.codexCli) delete body.quality
 
-      if (!profile.codexCli) {
-        body.quality = params.quality
-      }
-
-      if (params.output_format !== 'png' && params.output_compression != null) {
-        body.output_compression = params.output_compression
-      }
-      if (params.n > 1) {
-        body.n = params.n
-      }
-      if (profile.responseFormatB64Json) {
-        body.response_format = 'b64_json'
-      }
-      if (profile.streamImages) {
-        body.stream = true
-        body.partial_images = getStreamPartialImages(profile)
-      }
-
-      response = await fetch(buildApiUrl(profile.baseUrl, paths.generationPath, proxyConfig, useApiProxy), {
-        method: 'POST',
-        headers: {
-          ...requestHeaders,
-          'Content-Type': 'application/json',
-        },
-        cache: 'no-store',
-        body: JSON.stringify(body),
-        signal: controller.signal,
+      response = await maybeWithSingleRetry(opts.disableRetry, async () => {
+        const nextResponse = await fetch(buildApiUrl(profile.baseUrl, paths.generationPath, proxyConfig, useApiProxy), {
+          method: 'POST',
+          headers: {
+            ...requestHeaders,
+            'Content-Type': 'application/json',
+          },
+          cache: 'no-store',
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        })
+        if (!nextResponse.ok && isRetryableStatus(nextResponse.status)) {
+          throw new Error(await getApiErrorMessage(nextResponse))
+        }
+        return nextResponse
       })
     }
 
@@ -1022,7 +1022,17 @@ async function callResponsesImageApi(opts: CallApiOptions, profile: ApiProfile):
 
 async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiProfile): Promise<CallApiResult> {
   const { prompt, negativePrompt, params, inputImageDataUrls } = opts
-  const resolvedPrompt = buildPromptWithNegative(prompt, negativePrompt, profile.provider)
+  const compatibility = buildImageRequestCompatibilityFields(
+    opts.compatibilityStrategy ?? 'openai_standard',
+    {
+      prompt,
+      negativePrompt,
+      params,
+      stream: profile.streamImages,
+      partialImages: getStreamPartialImages(profile),
+    },
+  )
+  const resolvedPrompt = compatibility.prompt
   const mime = MIME_MAP[params.output_format] || 'image/png'
   const proxyConfig = readClientDevProxyConfig()
   const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
@@ -1050,15 +1060,21 @@ async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiPro
       body.stream = true
     }
 
-    const response = await fetch(buildApiUrl(profile.baseUrl, 'responses', proxyConfig, useApiProxy), {
-      method: 'POST',
-      headers: {
-        ...requestHeaders,
-        'Content-Type': 'application/json',
-      },
-      cache: 'no-store',
-      body: JSON.stringify(body),
-      signal: controller.signal,
+    const response = await maybeWithSingleRetry(opts.disableRetry, async () => {
+      const nextResponse = await fetch(buildApiUrl(profile.baseUrl, 'responses', proxyConfig, useApiProxy), {
+        method: 'POST',
+        headers: {
+          ...requestHeaders,
+          'Content-Type': 'application/json',
+        },
+        cache: 'no-store',
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      })
+      if (!nextResponse.ok && isRetryableStatus(nextResponse.status)) {
+        throw new Error(await getApiErrorMessage(nextResponse))
+      }
+      return nextResponse
     })
 
     if (!response.ok) {

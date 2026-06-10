@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import { readFileSync } from 'fs'
 import { normalizeDevProxyConfig } from './src/lib/devProxy'
@@ -18,7 +18,9 @@ function loadDevProxyConfig() {
   }
 }
 
-export default defineConfig(({ command }) => {
+
+export default defineConfig(({ command, mode }) => {
+  const loadedEnv = loadEnv(mode, process.cwd(), '')
   const devProxyConfig = command === 'serve' ? loadDevProxyConfig() : null
 
   return {
@@ -33,36 +35,74 @@ export default defineConfig(({ command }) => {
     build: {
       target: process.env.TAURI_ENV_PLATFORM === 'windows' ? 'chrome105' : 'safari13',
       minify: process.env.TAURI_ENV_DEBUG ? false : 'esbuild',
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return
+
+            if (
+              id.includes('/react/') ||
+              id.includes('/react-dom/') ||
+              id.includes('/scheduler/') ||
+              id.includes('/zustand/')
+            ) {
+              return 'framework'
+            }
+
+            if (id.includes('/@fal-ai/')) return 'fal'
+            if (id.includes('/fflate/')) return 'compression'
+            if (id.includes('/core-js/')) return 'polyfills'
+
+            return 'vendor'
+          },
+        },
+      },
     },
     server: {
       host: tauriDevHost || true,
-      port: 4173,
+      port: 4175,
       strictPort: true,
       hmr: tauriDevHost
         ? {
             protocol: 'ws',
             host: tauriDevHost,
-            port: 4174,
+            port: 4175,
           }
         : undefined,
       watch: {
-        ignored: ['**/src-tauri/**'],
+        ignored: [
+          '**/src-tauri/**',
+          '**/*.test.ts',
+          '**/*.test.tsx',
+          '**/dist/**',
+          '**/artifacts/**',
+          '**/output/**',
+          '**/temp/**',
+          '**/thread handoff detail/**',
+          '**/*.log',
+        ],
       },
-      proxy:
-        devProxyConfig?.enabled
+      proxy: {
+        '/api': {
+          target: loadedEnv.VITE_POSTGRES_API_BASE_URL || loadedEnv.VITE_ADMIN_API_BASE_URL || 'http://127.0.0.1:3001',
+          changeOrigin: true,
+          secure: false,
+        },
+        ...(devProxyConfig?.enabled
           ? {
               [devProxyConfig.prefix]: {
                 target: devProxyConfig.target,
                 changeOrigin: devProxyConfig.changeOrigin,
                 secure: devProxyConfig.secure,
-                rewrite: (path) =>
+                rewrite: (path: string) =>
                   path.replace(
                     new RegExp(`^${devProxyConfig.prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
                     '',
                   ),
               },
             }
-          : undefined,
+          : {}),
+      },
     },
   }
 })
