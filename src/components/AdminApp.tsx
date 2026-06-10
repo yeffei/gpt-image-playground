@@ -684,11 +684,13 @@ function getTemplatePreviewUrl(row: Record<string, unknown>) {
   return getTemplatePreviewUrls(row)[0] ?? null
 }
 
-function getOfficialTemplateAdminPayload(limit: number, offset: number, filters: Record<string, string>) {
+function getOfficialTemplateAdminPayload(limit: number, offset: number, filters: Record<string, string>, hiddenTemplateIds: string[] = []) {
   const search = filters.search?.trim().toLowerCase() ?? ''
   const category = filters.category?.trim() ?? ''
   const status = filters.status?.trim() ?? ''
+  const hiddenIds = new Set(hiddenTemplateIds)
   const templates = PROMPT_LIBRARY_TEMPLATES
+    .filter((template) => !hiddenIds.has(template.id))
     .filter((template) => (!status || status === 'published'))
     .filter((template) => (!category || template.category === category))
     .filter((template) => {
@@ -720,6 +722,12 @@ function getOfficialTemplateAdminPayload(limit: number, offset: number, filters:
     templates: templates.slice(offset, offset + limit),
     pagination: { limit, offset, total: templates.length },
   }
+}
+
+function getHiddenOfficialTemplateIds(payload: unknown) {
+  if (!payload || typeof payload !== 'object' || !('hiddenTemplateIds' in payload)) return []
+  const ids = (payload as { hiddenTemplateIds?: unknown }).hiddenTemplateIds
+  return Array.isArray(ids) ? ids.filter((item): item is string => typeof item === 'string') : []
 }
 
 function getRecordReadableLabel(row: Record<string, unknown>, config: AdminModuleConfig) {
@@ -1783,7 +1791,13 @@ function AdminActionPanel(props: {
         />
       ) : null}
       {actionScope === 'templates' ? (
-        <OfficialTemplateActions selectedRecord={props.selectedRecord} />
+        <OfficialTemplateActions
+          disabled={disabledBySubmit}
+          selectedId={props.selectedId}
+          selectedRecord={props.selectedRecord}
+          onRun={runAction}
+          token={props.token}
+        />
       ) : null}
       {actionScope === 'candidates' ? (
         <CandidateReviewActions
@@ -2549,7 +2563,13 @@ function GatewayStrategyActions(props: {
   )
 }
 
-function OfficialTemplateActions(props: { selectedRecord: Record<string, unknown> | null }) {
+function OfficialTemplateActions(props: {
+  disabled: boolean
+  selectedId: string
+  selectedRecord: Record<string, unknown> | null
+  token: string
+  onRun: (actionName: string, action: () => Promise<void>) => Promise<void>
+}) {
   if (!props.selectedRecord) {
     return (
       <section className="admin-action-form admin-action-form-wide">
@@ -2561,25 +2581,37 @@ function OfficialTemplateActions(props: { selectedRecord: Record<string, unknown
 
   const previewUrl = getTemplatePreviewUrl(props.selectedRecord)
   return (
-    <section className="admin-action-form admin-action-form-wide">
-      <h3>前台官方模板详情</h3>
-      {previewUrl ? (
-        <div className="admin-template-action-preview">
-          <img src={previewUrl} alt="" />
+    <div className="admin-action-grid">
+      <section className="admin-action-form admin-action-form-wide">
+        <h3>前台官方模板详情</h3>
+        {previewUrl ? (
+          <div className="admin-template-action-preview">
+            <img src={previewUrl} alt="" />
+          </div>
+        ) : null}
+        <div className="admin-strategy-list">
+          <div><span>标题</span><strong>{formatAdminValue(getValueByPath(props.selectedRecord, 'title'))}</strong></div>
+          <div><span>分类</span><strong>{formatAdminValue(getValueByPath(props.selectedRecord, 'category'))}</strong></div>
+          <div><span>图片</span><strong>{formatAdminValue(getValueByPath(props.selectedRecord, 'imagePath'))}</strong></div>
+          <div><span>来源</span><strong>{formatAdminValue(getValueByPath(props.selectedRecord, 'sourceName') ?? getValueByPath(props.selectedRecord, 'sourceUrl'))}</strong></div>
         </div>
-      ) : null}
-      <div className="admin-strategy-list">
-        <div><span>标题</span><strong>{formatAdminValue(getValueByPath(props.selectedRecord, 'title'))}</strong></div>
-        <div><span>分类</span><strong>{formatAdminValue(getValueByPath(props.selectedRecord, 'category'))}</strong></div>
-        <div><span>图片</span><strong>{formatAdminValue(getValueByPath(props.selectedRecord, 'imagePath'))}</strong></div>
-        <div><span>来源</span><strong>{formatAdminValue(getValueByPath(props.selectedRecord, 'sourceName') ?? getValueByPath(props.selectedRecord, 'sourceUrl'))}</strong></div>
-      </div>
-      <label>
-        <span>提示词</span>
-        <textarea className="admin-textarea-tall" value={String(getValueByPath(props.selectedRecord, 'prompt') ?? '')} readOnly />
-      </label>
-      <p className="admin-form-hint">这批模板来自前台静态官方模板库，不是 PostgreSQL 导入候选表；编辑需要改前台模板源文件或后续做正式同步入库。</p>
-    </section>
+        <label>
+          <span>提示词</span>
+          <textarea className="admin-textarea-tall" value={String(getValueByPath(props.selectedRecord, 'prompt') ?? '')} readOnly />
+        </label>
+        <p className="admin-form-hint">这批模板来自前台静态官方模板库。删除会从后台官方列表隐藏这条模板，不会物理删除源码里的模板定义。</p>
+      </section>
+      <DeleteRecordAction
+        disabled={props.disabled}
+        selectedId={props.selectedId}
+        label="删除选中官方模板"
+        hint="删除后这条官方模板会从后台官方模板列表隐藏；前台静态模板源文件不会被物理改写。"
+        confirmText="删除官方模板"
+        actionName="删除官方模板"
+        onRun={props.onRun}
+        onDelete={() => adminDelete(`/api/admin/content/official-templates/${encodeURIComponent(props.selectedId)}`, props.token)}
+      />
+    </div>
   )
 }
 
@@ -2960,8 +2992,10 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
     }
   }, [config.detailBasePath, props.token])
 
-  const loadOfficialTemplateData = useCallback((keepSelectedId = '') => {
-    const payload = getOfficialTemplateAdminPayload(pageLimit, pageOffset, filters)
+  const loadOfficialTemplateData = useCallback(async (keepSelectedId = '') => {
+    const overrides = await adminGet('/api/admin/content/official-template-overrides', props.token)
+    const hiddenIds = getHiddenOfficialTemplateIds(overrides)
+    const payload = getOfficialTemplateAdminPayload(pageLimit, pageOffset, filters, hiddenIds)
     setSummary({
       ok: true,
       total: payload.pagination.total,
@@ -2982,7 +3016,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
         setDetail(null)
       }
     }
-  }, [config, filters, pageLimit, pageOffset])
+  }, [config, filters, pageLimit, pageOffset, props.token])
 
   const loadModuleData = useCallback(async (options?: { keepSelectedId?: string }) => {
     setLoading(true)
@@ -2996,7 +3030,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
     }
     try {
       if (isOfficialTemplateView) {
-        loadOfficialTemplateData(keepSelectedId)
+        await loadOfficialTemplateData(keepSelectedId)
         return
       }
       const summaryPayload = config.summaryPath ? await adminGet(config.summaryPath, props.token) : null
@@ -3039,7 +3073,9 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
     const load = async () => {
       try {
         if (isOfficialTemplateView) {
-          const payload = getOfficialTemplateAdminPayload(pageLimit, pageOffset, filters)
+          const overrides = await adminGet('/api/admin/content/official-template-overrides', props.token)
+          const hiddenIds = getHiddenOfficialTemplateIds(overrides)
+          const payload = getOfficialTemplateAdminPayload(pageLimit, pageOffset, filters, hiddenIds)
           if (cancelled) return
           setSummary({
             ok: true,

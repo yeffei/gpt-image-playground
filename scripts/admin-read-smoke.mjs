@@ -17,6 +17,7 @@ const endpoints = [
   '/api/admin/model-route-bindings?limit=5&offset=0',
   '/api/admin/gateway-strategy',
   '/api/admin/content/templates?limit=5&offset=0',
+  '/api/admin/content/official-template-overrides',
   '/api/admin/content/template-candidates?limit=5&offset=0',
   '/api/admin/content/template-import-runs?limit=5&offset=0',
   '/api/admin/growth/referrals/summary',

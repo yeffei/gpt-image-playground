@@ -74,6 +74,33 @@ function registerPromptTemplateAssetRoutes(app: FastifyInstance) {
   })
 }
 
+function registerPromptLibrarySourceRoutes(app: FastifyInstance) {
+  const root = normalize(join(process.cwd(), 'public', 'prompt-library-source'))
+  app.get('/prompt-library-source/*', async (request, reply) => {
+    const params = request.params as { '*'?: string }
+    const relativePath = typeof params['*'] === 'string' ? params['*'] : ''
+    const filePath = normalize(join(root, relativePath))
+    if (!filePath.startsWith(`${root}${sep}`)) return reply.status(400).send({ ok: false, error: 'invalid_path' })
+    try {
+      await access(filePath)
+      const mimeType = extname(relativePath).toLowerCase() === '.png'
+        ? 'image/png'
+        : extname(relativePath).toLowerCase() === '.webp'
+          ? 'image/webp'
+          : extname(relativePath).toLowerCase() === '.gif'
+            ? 'image/gif'
+            : extname(relativePath).toLowerCase() === '.jpg' || extname(relativePath).toLowerCase() === '.jpeg'
+              ? 'image/jpeg'
+              : 'application/octet-stream'
+      reply.header('Content-Type', mimeType)
+      reply.header('Cache-Control', 'public, max-age=31536000, immutable')
+      return reply.send(createReadStream(filePath))
+    } catch {
+      return reply.status(404).send({ ok: false, error: 'asset_not_found' })
+    }
+  })
+}
+
 function sanitizeDownloadFilename(value: string) {
   return value
     .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-')
@@ -119,6 +146,7 @@ export function buildApp(db: Pool, env: ServerEnv) {
   registerGatewayModelRoutes(app, db)
   registerGeneratedImageRoutes(app, env)
   registerPromptTemplateAssetRoutes(app)
+  registerPromptLibrarySourceRoutes(app)
   registerImageGatewayRoutes(app, db, env)
   registerPromptTemplateRoutes(app, db)
 

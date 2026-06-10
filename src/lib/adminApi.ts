@@ -119,7 +119,7 @@ export async function adminPatch<T = unknown>(path: string, token: string, paylo
 }
 
 export async function adminDelete<T = unknown>(path: string, token: string, payload?: Record<string, unknown>): Promise<T> {
-  const headers = new Headers({ 'Content-Type': 'application/json' })
+  const headers = payload == null ? new Headers() : new Headers({ 'Content-Type': 'application/json' })
   return await adminFetch(path, {
     method: 'DELETE',
     headers,

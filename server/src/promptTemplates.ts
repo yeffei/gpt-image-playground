@@ -13,6 +13,7 @@ const MAX_IMPORT_FILES = 20
 const MAX_IMPORT_CANDIDATES = 80
 const assetRoot = join(process.cwd(), 'public', 'prompt-template-assets')
 const MIN_IMPORT_PROMPT_LENGTH = 80
+const OFFICIAL_TEMPLATE_HIDDEN_SETTING_KEY = 'prompt_library_hidden_template_ids'
 
 const QUALITY_HINTS = [
   '光',
@@ -419,6 +420,43 @@ function normalizeOriginalImageUrl(imageUrl: string | null) {
   return imageUrl.slice(0, 2000)
 }
 
+function normalizeTemplateId(value: unknown) {
+  const id = typeof value === 'string' ? value.trim() : ''
+  if (!id || !/^[a-z0-9_-]{1,140}$/i.test(id)) throw new ApiError(400, 'invalid_template_id', '模板编号无效')
+  return id
+}
+
+function normalizeHiddenTemplateIds(value: unknown) {
+  const ids = Array.isArray(value)
+    ? value
+    : isRecord(value) && Array.isArray(value.ids)
+      ? value.ids
+      : []
+  return Array.from(new Set(ids.map((item) => (typeof item === 'string' ? item.trim() : '')).filter((item) => /^[a-z0-9_-]{1,140}$/i.test(item)))).sort()
+}
+
+async function getHiddenOfficialTemplateIds(db: Db) {
+  const row = (await db.query<{ value_json: unknown }>(`
+    SELECT value_json
+    FROM system_settings
+    WHERE key = $1
+    LIMIT 1
+  `, [OFFICIAL_TEMPLATE_HIDDEN_SETTING_KEY])).rows[0]
+  return normalizeHiddenTemplateIds(row?.value_json)
+}
+
+async function saveHiddenOfficialTemplateIds(db: Db, adminUserId: string, ids: string[]) {
+  const updatedAt = nowIso()
+  await db.query(`
+    INSERT INTO system_settings (key, value_json, updated_by_admin_id, created_at, updated_at)
+    VALUES ($1, $2::jsonb, $3, $4, $4)
+    ON CONFLICT (key)
+    DO UPDATE SET value_json = EXCLUDED.value_json,
+      updated_by_admin_id = EXCLUDED.updated_by_admin_id,
+      updated_at = EXCLUDED.updated_at
+  `, [OFFICIAL_TEMPLATE_HIDDEN_SETTING_KEY, JSON.stringify(ids), adminUserId, updatedAt])
+}
+
 async function filterExistingTemplateDuplicates(db: Db, candidates: CandidateInput[]) {
   if (!candidates.length) return candidates
   const result = await db.query<{ prompt: string }>(`
@@ -497,6 +535,40 @@ async function recalculateRunCounts(db: Db, runId: string, updatedAt = nowIso())
 }
 
 export function registerPromptTemplateRoutes(app: FastifyInstance, db: Pool) {
+  app.get('/api/admin/content/official-template-overrides', async (request, reply) => {
+    try {
+      await requireAdminSession(db, request.headers.authorization)
+      return reply.send({
+        ok: true,
+        hiddenTemplateIds: await getHiddenOfficialTemplateIds(db),
+      })
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
+  app.delete('/api/admin/content/official-templates/:id', async (request, reply) => {
+    try {
+      const admin = await requireAdminSession(db, request.headers.authorization)
+      const params = isRecord(request.params) ? request.params : {}
+      const id = normalizeTemplateId(params.id)
+      const beforeIds = await getHiddenOfficialTemplateIds(db)
+      const nextIds = Array.from(new Set([...beforeIds, id])).sort()
+      await saveHiddenOfficialTemplateIds(db, admin.admin_user_id, nextIds)
+      await writeAuditLog(db, {
+        adminUserId: admin.admin_user_id,
+        action: 'official_prompt_template_hide',
+        targetType: 'system_setting',
+        targetId: id,
+        beforeSnapshot: { hiddenTemplateIds: beforeIds },
+        afterSnapshot: { hiddenTemplateIds: nextIds },
+      })
+      return reply.send({ ok: true, hiddenTemplateIds: nextIds })
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
   app.get('/api/admin/content/templates', async (request, reply) => {
     try {
       await requireAdminSession(db, request.headers.authorization)
