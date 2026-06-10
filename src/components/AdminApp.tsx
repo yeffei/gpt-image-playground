@@ -1721,6 +1721,7 @@ function AdminActionPanel(props: {
           disabled={disabledBySubmit}
           selectedId={props.selectedId}
           selectedLabel={props.selectedLabel}
+          selectedRecord={props.selectedRecord}
           onRun={runAction}
           token={props.token}
         />
@@ -1864,6 +1865,7 @@ function RechargeCodeActions(props: {
   disabled: boolean
   selectedId: string
   selectedLabel: string
+  selectedRecord: Record<string, unknown> | null
   token: string
   onRun: (actionName: string, action: () => Promise<void>) => Promise<void>
 }) {
@@ -1872,7 +1874,9 @@ function RechargeCodeActions(props: {
   const [expiresAt, setExpiresAt] = useState('')
   const [disableReason, setDisableReason] = useState('')
   const [exportBatchNo, setExportBatchNo] = useState('')
-  const selectedDisabled = props.disabled || !props.selectedId
+  const selectedStatus = readRecordString(props.selectedRecord, 'status')
+  const selectedCanBeDisabled = !props.selectedId || selectedStatus === 'active'
+  const selectedDisabled = props.disabled || !props.selectedId || !selectedCanBeDisabled
 
   return (
     <div className="admin-action-grid">
@@ -1926,7 +1930,13 @@ function RechargeCodeActions(props: {
         }}
       >
         <h3>禁用选中的码</h3>
-        <p className="admin-empty">{props.selectedId ? `将禁用：${props.selectedLabel || props.selectedId}` : '先在左侧库存列表选择一条充值码。禁用后这条码不能再被用户兑换。'}</p>
+        <p className="admin-empty">
+          {props.selectedId
+            ? selectedCanBeDisabled
+              ? `将禁用：${props.selectedLabel || props.selectedId}`
+              : '只有启用状态的充值码可以停用。'
+            : '先在左侧库存列表选择一条充值码。禁用后这条码不能再被用户兑换。'}
+        </p>
         <label>
           <span>禁用原因</span>
           <textarea value={disableReason} onChange={(event) => setDisableReason(event.target.value)} required disabled={selectedDisabled} />
