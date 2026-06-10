@@ -2901,9 +2901,16 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
     setListPayload(payload)
     if (keepSelectedId) {
       const nextRecord = payload.templates.find((row) => String(row.id) === keepSelectedId) ?? null
-      setSelectedRecord(nextRecord)
-      setDetail(nextRecord ? { template: nextRecord } : null)
-      if (nextRecord) setSelectedLabel(getRecordReadableLabel(nextRecord, config))
+      if (nextRecord) {
+        setSelectedRecord(nextRecord)
+        setDetail({ template: nextRecord })
+        setSelectedLabel(getRecordReadableLabel(nextRecord, config))
+      } else {
+        setSelectedId('')
+        setSelectedLabel('')
+        setSelectedRecord(null)
+        setDetail(null)
+      }
     }
   }, [config, filters, pageLimit, pageOffset])
 
@@ -2926,13 +2933,22 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
       const list = await adminGet(listPath, props.token)
       setSummary(summaryPayload)
       setListPayload(list)
+      let shouldLoadDetail = Boolean(keepSelectedId && config.detailBasePath)
       if (keepSelectedId) {
         const nextRows = getListRows(list, config.listKey)
         const nextRecord = nextRows.find((row) => String(getValueByPath(row, config.detailIdKey) ?? '') === keepSelectedId) ?? null
-        setSelectedRecord(nextRecord)
-        if (nextRecord) setSelectedLabel(getRecordReadableLabel(nextRecord, config))
+        if (nextRecord) {
+          setSelectedRecord(nextRecord)
+          setSelectedLabel(getRecordReadableLabel(nextRecord, config))
+        } else {
+          setSelectedId('')
+          setSelectedLabel('')
+          setSelectedRecord(null)
+          setDetail(null)
+          shouldLoadDetail = false
+        }
       }
-      if (keepSelectedId && config.detailBasePath) {
+      if (shouldLoadDetail) {
         await loadDetail(keepSelectedId)
       }
     } catch (requestError) {
