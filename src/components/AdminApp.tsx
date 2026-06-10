@@ -2744,6 +2744,14 @@ function CandidateReviewActions(props: {
   const [category, setCategory] = useState('')
   const [tags, setTags] = useState('')
   const [reviewNote, setReviewNote] = useState('')
+
+  useEffect(() => {
+    setTitle('')
+    setCategory('')
+    setTags('')
+    setReviewNote('')
+  }, [props.selectedId])
+
   const disabled = props.disabled || !props.selectedId
   return (
     <div className="admin-action-grid">
