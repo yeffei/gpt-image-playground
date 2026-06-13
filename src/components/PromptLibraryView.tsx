@@ -13,6 +13,7 @@ import {
   type PromptTemplateItem,
   type PromptTemplateSearchableItem,
 } from '../lib/promptLibrary'
+import { buildAdminApiUrl } from '../lib/adminApi'
 
 type PromptLibraryFilterGroup =
   | '全部'
@@ -44,6 +45,39 @@ const PROMPT_LIBRARY_TABS = [
   { key: 'recent', label: '最近使用' },
 ] as const
 const OFFICIAL_TEMPLATE_BY_ID = new Map(PROMPT_LIBRARY_TEMPLATES.map((item) => [item.id, item]))
+const OFFICIAL_TEMPLATE_OVERRIDES_PATH = '/api/prompt-library/official-template-overrides'
+
+function getOfficialTemplateOverridesUrls() {
+  const urls = [buildAdminApiUrl(OFFICIAL_TEMPLATE_OVERRIDES_PATH)]
+  if (
+    typeof window !== 'undefined' &&
+    /^localhost$|^127\.0\.0\.1$/.test(window.location.hostname) &&
+    urls[0] === OFFICIAL_TEMPLATE_OVERRIDES_PATH
+  ) {
+    urls.push(`http://127.0.0.1:3001${OFFICIAL_TEMPLATE_OVERRIDES_PATH}`)
+  }
+  return Array.from(new Set(urls))
+}
+
+async function fetchOfficialTemplateOverrideIds() {
+  let lastError: unknown = null
+  for (const url of getOfficialTemplateOverridesUrls()) {
+    try {
+      const response = await fetch(url)
+      const payload = await response.json() as { ok?: boolean; hiddenTemplateIds?: unknown }
+      if (!response.ok || payload.ok === false) {
+        lastError = new Error(`official_template_overrides_failed:${response.status}`)
+        continue
+      }
+      return Array.isArray(payload.hiddenTemplateIds)
+        ? payload.hiddenTemplateIds.filter((item): item is string => typeof item === 'string')
+        : []
+    } catch (error) {
+      lastError = error
+    }
+  }
+  throw lastError
+}
 
 function getFilterGroup(category: PromptTemplateItem['category']): Exclude<PromptLibraryFilterGroup, '全部'> {
   if (category === '海报插画') return '海报视觉'
@@ -214,6 +248,8 @@ export default function PromptLibraryView() {
   const [previewLightboxUrl, setPreviewLightboxUrl] = useState<string | null>(null)
   const [previewLightboxTemplate, setPreviewLightboxTemplate] = useState<PromptTemplateItem | null>(null)
   const [previewOrientation, setPreviewOrientation] = useState<'landscape' | 'portrait' | 'square'>('landscape')
+  const [hiddenOfficialTemplateIds, setHiddenOfficialTemplateIds] = useState<string[]>([])
+  const [officialTemplateOverridesLoaded, setOfficialTemplateOverridesLoaded] = useState(false)
   const cardGridRef = useRef<HTMLDivElement | null>(null)
   const isGuest = !account.isLoggedIn
   const isLockedPersonalTab = isGuest && promptLibraryTab !== 'official'
@@ -247,11 +283,17 @@ export default function PromptLibraryView() {
     [account.isLoggedIn, recentPromptTemplateIds, searchableMyTemplateById],
   )
 
+  const visibleOfficialTemplates = useMemo(() => {
+    if (!hiddenOfficialTemplateIds.length) return PROMPT_LIBRARY_TEMPLATES
+    const hiddenIds = new Set(hiddenOfficialTemplateIds)
+    return PROMPT_LIBRARY_TEMPLATES.filter((item) => !hiddenIds.has(item.id))
+  }, [hiddenOfficialTemplateIds])
+
   const tabTemplates = useMemo(() => {
     if (promptLibraryTab === 'mine') return account.isLoggedIn ? searchableMyPromptTemplates : []
     if (promptLibraryTab === 'recent') return account.isLoggedIn ? recentTemplates : []
-    return PROMPT_LIBRARY_TEMPLATES
-  }, [account.isLoggedIn, promptLibraryTab, recentTemplates, searchableMyPromptTemplates])
+    return visibleOfficialTemplates
+  }, [account.isLoggedIn, promptLibraryTab, recentTemplates, searchableMyPromptTemplates, visibleOfficialTemplates])
 
   const visibleTemplates = useMemo(() => {
     const query = deferredSearchValue.trim().toLowerCase()
@@ -342,6 +384,36 @@ export default function PromptLibraryView() {
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [previewLightboxUrl])
+
+  useEffect(() => {
+    let cancelled = false
+    const loadHiddenOfficialTemplateIds = async () => {
+      try {
+        const response = await fetch(buildAdminApiUrl('/api/prompt-library/official-template-overrides'))
+        const payload = await response.json() as { ok?: boolean; hiddenTemplateIds?: unknown }
+        if (cancelled) return
+        if (!response.ok || payload.ok === false) {
+          setHiddenOfficialTemplateIds([])
+          setOfficialTemplateOverridesLoaded(true)
+          return
+        }
+        const ids = Array.isArray(payload.hiddenTemplateIds)
+          ? payload.hiddenTemplateIds.filter((item): item is string => typeof item === 'string')
+          : []
+        setHiddenOfficialTemplateIds(ids)
+        setOfficialTemplateOverridesLoaded(true)
+      } catch {
+        if (!cancelled) {
+          setHiddenOfficialTemplateIds([])
+          setOfficialTemplateOverridesLoaded(true)
+        }
+      }
+    }
+    void loadHiddenOfficialTemplateIds()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const hasActiveFilters = activeCategory !== '全部' || searchValue.trim().length > 0
   const resultSummary = isLockedPersonalTab
@@ -486,7 +558,9 @@ export default function PromptLibraryView() {
                   <strong>{tab.label}</strong>
                   <span>
                     {tab.key === 'official'
-                      ? String(PROMPT_LIBRARY_TEMPLATES.length)
+                      ? officialTemplateOverridesLoaded
+                        ? String(visibleOfficialTemplates.length)
+                        : '同步中'
                       : tab.key === 'mine'
                       ? isGuest
                         ? '锁定'

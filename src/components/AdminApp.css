@@ -391,10 +391,14 @@
 
 .admin-data-layout {
   display: grid;
-  grid-template-columns: minmax(700px, 1fr) minmax(420px, 0.62fr);
+  grid-template-columns: minmax(620px, 1fr) minmax(360px, 0.48fr);
   gap: 16px;
   align-items: start;
   min-width: 0;
+}
+
+.admin-content-data-layout {
+  grid-template-columns: minmax(700px, 1fr) minmax(340px, 0.42fr);
 }
 
 .admin-data-layout > * {
@@ -450,12 +454,12 @@
 }
 
 .admin-side-column {
-  position: static;
+  position: sticky;
+  top: 76px;
   align-self: start;
   max-height: none;
   overflow: visible;
   padding-bottom: 4px;
-  scrollbar-gutter: auto;
 }
 
 .admin-data-panel {
@@ -464,6 +468,30 @@
 
 .admin-detail-panel {
   min-height: 220px;
+}
+
+.admin-content-detail-panel {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.admin-content-detail-panel > .admin-panel-head {
+  margin-bottom: 10px;
+}
+
+.admin-detail-image-card {
+  overflow: hidden;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.admin-detail-image-card img {
+  display: block;
+  width: 100%;
+  max-height: 280px;
+  object-fit: contain;
 }
 
 .admin-side-column .admin-action-panel {
@@ -525,11 +553,60 @@
   overflow-wrap: anywhere;
 }
 
-.admin-table td > span:not(.admin-status-badge) {
+.admin-table td > span:not(.admin-status-badge):not(.admin-copyable-value) {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.admin-copyable-value {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.admin-copyable-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #1f2d44;
+  line-height: 1.35;
+}
+
+.admin-table .admin-copyable-text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.admin-copyable-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 30px;
+  border: 1px solid #d6deea;
+  border-radius: 6px;
+  background: #fff;
+  padding: 0 8px;
+  color: #51627a;
+  font-size: 12px;
+  font-weight: 760;
+  cursor: pointer;
+}
+
+.admin-copyable-button:hover {
+  border-color: #9ccfc8;
+  color: #0f766e;
+}
+
+.admin-copyable-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
 }
 
 .admin-table td > .admin-template-preview {
@@ -650,22 +727,35 @@
 
 .admin-table th[data-field='title'],
 .admin-table td[data-field='title'] {
-  width: 205px;
+  width: 250px;
 }
 
 .admin-table th[data-field='category'],
 .admin-table td[data-field='category'] {
-  width: 95px;
+  width: 90px;
 }
 
 .admin-table th[data-field='imagePath'],
 .admin-table td[data-field='imagePath'] {
-  width: 132px;
+  width: 112px;
 }
 
 .admin-table th[data-field='sourceUrl'],
 .admin-table td[data-field='sourceUrl'] {
-  width: 165px;
+  width: 230px;
+}
+
+.admin-content-data-layout .admin-table {
+  min-width: 760px;
+}
+
+.admin-content-data-layout .admin-copyable-value {
+  gap: 6px;
+}
+
+.admin-content-data-layout .admin-copyable-button {
+  min-height: 28px;
+  padding: 0 7px;
 }
 
 .admin-table th {
@@ -846,6 +936,10 @@
   gap: 10px;
 }
 
+.admin-field-grid-compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .admin-field-item {
   display: grid;
   gap: 6px;
@@ -861,6 +955,22 @@
   color: #1f2d44;
   font-size: 13px;
   font-weight: 760;
+}
+
+.admin-readonly-prompt {
+  width: 100%;
+  min-height: 140px;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid #d6deea;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px 12px;
+  color: #1f2d44;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+  resize: vertical;
 }
 
 .admin-record-preview {
@@ -1299,16 +1409,27 @@
 .admin-route-option {
   display: flex !important;
   align-items: center;
+  gap: 8px !important;
   min-height: 38px;
   border: 1px solid #dbe3ef;
   border-radius: 6px;
   background: #fbfdff;
   padding: 8px 10px;
+  color: #66758d;
 }
 
 .admin-route-option.is-selected {
-  border-color: #9dded7;
-  background: #eefbf9;
+  border-color: #0f9f95;
+  background: #e6faf7;
+  color: #0f766e;
+  box-shadow: inset 0 0 0 1px rgba(15, 159, 149, 0.14);
+}
+
+.admin-route-option.is-bound {
+  border-color: #b7c5d8;
+  background: #f1f5f9;
+  color: #475569;
+  box-shadow: inset 0 0 0 1px rgba(71, 85, 105, 0.1);
 }
 
 .admin-route-option input {
@@ -1317,12 +1438,41 @@
   min-height: 16px;
 }
 
-.admin-route-option span {
+.admin-route-option-name {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   color: #25344c;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.admin-route-option.is-selected .admin-route-option-name {
+  color: #0f766e;
+}
+
+.admin-route-option.is-bound .admin-route-option-name {
+  color: #475569;
+}
+
+.admin-route-option small {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #edf2f7;
+  padding: 2px 7px;
+  color: #73839b;
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.admin-route-option.is-selected small {
+  background: #0f9f95;
+  color: #fff;
+}
+
+.admin-route-option.is-bound small {
+  background: #475569;
+  color: #fff;
 }
 
 @media (max-width: 1080px) {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import './AdminApp.css'
 import {
   AdminApiError,
@@ -16,6 +16,7 @@ import {
 } from '../lib/adminApi'
 import { GPT_IMAGE_2_SUPPORTED_SIZES } from '../lib/modelSkus'
 import { PROMPT_LIBRARY_CATEGORIES, PROMPT_LIBRARY_TEMPLATES } from '../lib/promptLibrary'
+import { CopyIcon } from './icons'
 
 type AdminSectionKey =
   | 'dashboard'
@@ -74,6 +75,8 @@ type AdminFilterField = {
   type?: 'text' | 'select' | 'date' | 'checkbox'
   options?: string[]
   placeholder?: string
+  defaultValue?: string
+  hideAllOption?: boolean
 }
 
 const ADMIN_SESSION_STORAGE_KEY = 'sst-admin-session-token'
@@ -330,7 +333,7 @@ const ADMIN_MODULES: Record<Exclude<AdminSectionKey, 'dashboard'>, AdminModuleCo
     detailBasePath: '/api/admin/content/templates',
     detailIdKey: 'id',
     title: '提示词模板',
-    description: '手工添加单条模板，或从 URL/GitHub 导入候选并人工审核。',
+    description: '已发布模板、候选审核和导入任务都在这里管理，候选通过后才会进入前台。',
     columns: [
       { key: 'title', label: '标题' },
       { key: 'category', label: '分类' },
@@ -392,9 +395,9 @@ const ADMIN_MODULES: Record<Exclude<AdminSectionKey, 'dashboard'>, AdminModuleCo
 }
 
 const CONTENT_SUBSECTIONS: Array<{ key: ContentSubsectionKey; label: string }> = [
-  { key: 'templates', label: '已发布模板' },
   { key: 'candidates', label: '候选审核' },
   { key: 'importRuns', label: '导入任务' },
+  { key: 'templates', label: '已发布模板' },
 ]
 
 const USER_SUBSECTIONS: Array<{ key: UserSubsectionKey; label: string }> = [
@@ -594,7 +597,7 @@ const ADMIN_FILTERS: Partial<Record<Exclude<AdminSectionKey, 'dashboard'> | User
     { key: 'status', label: '状态', type: 'select', options: ['published'] },
   ],
   candidates: [
-    { key: 'status', label: '状态', type: 'select', options: ['pending', 'approved', 'rejected'] },
+    { key: 'status', label: '状态', type: 'select', options: ['pending', 'approved', 'rejected'], defaultValue: 'pending', hideAllOption: true },
     { key: 'importRunId', label: '导入任务编号' },
   ],
   growth: [
@@ -1066,10 +1069,48 @@ function AdminValue(props: { fieldKey: string; value: unknown }) {
   if (typeof props.value === 'string' && shouldMaskAdminField(props.fieldKey)) {
     return <span>{maskSecretValue(props.value)}</span>
   }
+  if (shouldRenderAsCopyableValue(props.fieldKey, props.value)) {
+    return <AdminCopyableValue value={String(props.value)} />
+  }
   if (shouldRenderAsBadge(props.fieldKey, props.value)) {
     return <span className={`admin-status-badge is-${getStatusTone(props.value)}`}>{formatAdminValue(props.value)}</span>
   }
   return <span>{formatAdminValue(props.value)}</span>
+}
+
+function shouldRenderAsCopyableValue(fieldKey: string, value: unknown) {
+  if (typeof value !== 'string' || !value.trim()) return false
+  if (['sourceUrl', 'rawSourceUrl', 'publicUrl'].includes(fieldKey)) return true
+  return /^https?:\/\//i.test(value.trim())
+}
+
+function AdminCopyableValue(props: { value: string }) {
+  const text = props.value.trim()
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
+
+  const handleCopy = async (event: ReactMouseEvent<HTMLButtonElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    try {
+      const { copyTextToClipboard } = await import('../lib/clipboard')
+      await copyTextToClipboard(text)
+      setCopyState('copied')
+      window.setTimeout(() => setCopyState('idle'), 1400)
+    } catch {
+      setCopyState('failed')
+      window.setTimeout(() => setCopyState('idle'), 1800)
+    }
+  }
+
+  return (
+    <span className="admin-copyable-value">
+      <span className="admin-copyable-text" title={text}>{formatAdminDate(text)}</span>
+      <button type="button" className="admin-copyable-button" onClick={handleCopy} aria-label="复制完整内容" title="复制完整内容">
+        <CopyIcon className="admin-copyable-icon" />
+        <span>{copyState === 'copied' ? '已复制' : copyState === 'failed' ? '失败' : '复制'}</span>
+      </button>
+    </span>
+  )
 }
 
 function AdminTemplatePreview(props: { row: Record<string, unknown> }) {
@@ -1097,6 +1138,21 @@ function AdminTableCell(props: { row: Record<string, unknown>; column: AdminTabl
     return <AdminTemplatePreview row={props.row} />
   }
   return <AdminValue fieldKey={props.column.key} value={getDisplayValueForColumn(props.row, props.column)} />
+}
+
+function AdminBusinessFieldList(props: { record: Record<string, unknown>; fields: Array<{ key: string; label: string }> }) {
+  return (
+    <div className="admin-field-grid admin-field-grid-compact">
+      {props.fields.map((field) => (
+        <div key={field.key} className="admin-field-item">
+          <span>{field.label}</span>
+          <strong>
+            <AdminValue fieldKey={field.key} value={getDisplayValueForKey(props.record, field.key) ?? getValueByPath(props.record, field.key)} />
+          </strong>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 function AdminFieldGrid(props: { record: Record<string, unknown>; limit?: number }) {
@@ -1166,7 +1222,86 @@ function AdminSummaryView(props: { summary: unknown; fallback: string }) {
   )
 }
 
-function AdminDetailView(props: { detail: unknown; selectedId: string; detailLoading: boolean }) {
+function getContentDetailRecord(detail: Record<string, unknown>, contentSubsection: ContentSubsectionKey) {
+  const key = contentSubsection === 'templates'
+    ? 'template'
+    : contentSubsection === 'candidates'
+      ? 'candidate'
+      : 'importRun'
+  const record = detail[key]
+  if (isRecord(record)) return record
+  return detail
+}
+
+function AdminContentDetailView(props: { detail: Record<string, unknown>; selectedId: string; contentSubsection: ContentSubsectionKey }) {
+  const record = getContentDetailRecord(props.detail, props.contentSubsection)
+  const previewUrl = getTemplatePreviewUrl(record)
+
+  if (props.contentSubsection === 'importRuns') {
+    return (
+      <div className="admin-detail-stack">
+        <section className="admin-detail-block">
+          <div className="admin-detail-title">
+            <span>导入任务详情</span>
+            <strong>{formatCellValue(getValueByPath(record, 'id'))}</strong>
+          </div>
+          <AdminBusinessFieldList
+            record={record}
+            fields={[
+              { key: 'status', label: '状态' },
+              { key: 'sourceType', label: '来源类型' },
+              { key: 'totalCandidates', label: '候选数' },
+              { key: 'approvedCount', label: '已通过' },
+              { key: 'rejectedCount', label: '已拒绝' },
+              { key: 'createdAt', label: '创建时间' },
+              { key: 'updatedAt', label: '更新时间' },
+              { key: 'sourceUrl', label: '来源链接' },
+              { key: 'localAssetRoot', label: '本地图片目录' },
+              { key: 'errorSummary', label: '错误摘要' },
+            ]}
+          />
+        </section>
+        <AdminRawData payload={props.detail} />
+      </div>
+    )
+  }
+
+  return (
+    <div className="admin-detail-stack">
+      {previewUrl ? (
+        <section className="admin-detail-image-card">
+          <img src={previewUrl} alt="" loading="lazy" />
+        </section>
+      ) : null}
+      <section className="admin-detail-block">
+        <div className="admin-detail-title">
+          <span>{props.contentSubsection === 'candidates' ? '候选详情' : '模板详情'}</span>
+          <strong>{props.selectedId || formatCellValue(getValueByPath(record, 'id'))}</strong>
+        </div>
+        <AdminBusinessFieldList
+          record={record}
+          fields={[
+            { key: 'title', label: '标题' },
+            { key: 'category', label: '分类' },
+            { key: 'status', label: '状态' },
+            { key: 'imagePath', label: '图片' },
+            { key: 'sourceUrl', label: '来源' },
+            { key: 'importRunId', label: '导入任务' },
+          ]}
+        />
+      </section>
+      <section className="admin-detail-block">
+        <div className="admin-detail-title">
+          <span>提示词</span>
+        </div>
+        <textarea className="admin-readonly-prompt" value={String(getValueByPath(record, 'prompt') ?? '')} readOnly />
+      </section>
+      <AdminRawData payload={props.detail} />
+    </div>
+  )
+}
+
+function AdminDetailView(props: { detail: unknown; selectedId: string; detailLoading: boolean; contentSubsection?: ContentSubsectionKey }) {
   if (props.detailLoading) return <p className="admin-empty">正在加载详情...</p>
   if (!props.detail) return <p className="admin-empty">从左侧列表选择一条记录查看业务详情。</p>
   if (!isRecord(props.detail)) {
@@ -1176,6 +1311,9 @@ function AdminDetailView(props: { detail: unknown; selectedId: string; detailLoa
         <AdminRawData payload={props.detail} />
       </div>
     )
+  }
+  if (props.contentSubsection) {
+    return <AdminContentDetailView detail={props.detail} selectedId={props.selectedId} contentSubsection={props.contentSubsection} />
   }
 
   const primary = pickPrimaryRecord(props.detail)
@@ -1275,12 +1413,17 @@ function getFilterValues(fields: AdminFilterField[], form: HTMLFormElement) {
   }, {})
 }
 
+function getDefaultFiltersForScope(scope: string): Record<string, string> {
+  if (scope === 'candidates') return { status: 'pending' }
+  return {}
+}
+
 function getSelectedLabel(section: Exclude<AdminSectionKey, 'dashboard'>, selectedId: string, selectedLabel: string, actionScope: string) {
   if (!selectedId) {
     if (actionScope === 'redemptionAttempts') return '查看、筛选和打开详情即可追踪兑换记录。'
     if (section === 'rechargeCodes') return '生成和导出可直接执行；禁用充值码前先在列表选择记录。'
     if (section === 'gateway') return '创建可直接执行；更新线路、模型或绑定前先选中记录。'
-    if (section === 'content') return '新增模板和导入候选可直接执行；候选审核前先选中列表项。'
+    if (section === 'content') return '先选中候选或模板，再执行通过、拒绝、更新或导入任务。'
     return '先在左侧列表选择记录，再执行对应操作。'
   }
   return `已选中：${selectedLabel || selectedId}`
@@ -1301,6 +1444,13 @@ function getModuleWorkflow(config: AdminModuleConfig, section: Exclude<AdminSect
       '选择记录查看详情',
     ]
   }
+  if (config.listKey === 'templates' || config.listKey === 'candidates' || config.listKey === 'importRuns') {
+    return [
+      '导入后进入候选',
+      '人工审核标题、分类、图片',
+      '通过后发布到前台模板库',
+    ]
+  }
   if (section === 'rechargeCodes') {
     return [
       '查看充值码库存',
@@ -1308,11 +1458,18 @@ function getModuleWorkflow(config: AdminModuleConfig, section: Exclude<AdminSect
       '右侧生成、导出或禁用',
     ]
   }
-  if (['rechargeCodes', 'gateway', 'content'].includes(section)) {
+  if (section === 'content') {
     return [
       `查看和筛选 ${config.title}`,
       '选择记录查看详情',
-      section === 'content' ? '在右侧新增、导入或审核' : '在右侧执行创建或更新',
+      '在右侧新增、导入或审核',
+    ]
+  }
+  if (['rechargeCodes', 'gateway'].includes(section)) {
+    return [
+      `查看和筛选 ${config.title}`,
+      '选择记录查看详情',
+      '在右侧执行创建或更新',
     ]
   }
   return [
@@ -1347,6 +1504,8 @@ function getActionPanelTitle(actionScope: string) {
   if (actionScope === 'codes') return '制码 / 导出 / 禁用'
   if (actionScope === 'redemptionAttempts') return '兑换记录'
   if (actionScope === 'tasks') return '任务记录'
+  if (actionScope === 'candidates') return '候选审核 / 发布'
+  if (actionScope === 'importRuns') return '导入任务'
   return '主要操作'
 }
 
@@ -1725,7 +1884,7 @@ function AdminActionPanel(props: {
   onActionComplete: (message: string) => Promise<void>
 }) {
   const actionScope = props.section === 'content'
-    ? props.contentSubsection ?? 'templates'
+    ? props.contentSubsection ?? 'candidates'
     : props.section === 'users'
       ? props.userSubsection ?? 'users'
     : props.section === 'rechargeCodes'
@@ -2395,6 +2554,8 @@ function ModelRouteBindingActions(props: {
   const [enabled, setEnabled] = useState(true)
   const [modelOptions, setModelOptions] = useState<Array<{ id: string; label: string }>>([])
   const [routeOptions, setRouteOptions] = useState<Array<{ id: string; label: string }>>([])
+  const [boundRouteIds, setBoundRouteIds] = useState<string[]>([])
+  const [bindingLookupLoading, setBindingLookupLoading] = useState(false)
   const [optionsError, setOptionsError] = useState('')
 
   useEffect(() => {
@@ -2446,6 +2607,48 @@ function ModelRouteBindingActions(props: {
     }
   }, [props.token])
 
+  useEffect(() => {
+    if (props.selectedId || !modelSkuId.trim()) {
+      setBoundRouteIds([])
+      return
+    }
+    let cancelled = false
+    const loadExistingBindings = async () => {
+      setBindingLookupLoading(true)
+      setOptionsError('')
+      try {
+        const normalizedModelSkuId = modelSkuId.trim()
+        const payload = await adminGet(`/api/admin/model-route-bindings?modelSkuId=${encodeURIComponent(normalizedModelSkuId)}&limit=200&offset=0`, props.token)
+        if (cancelled) return
+        const routeIds = getListRows(payload, 'bindings')
+          .filter((binding) => String(binding.modelSkuId ?? '') === normalizedModelSkuId)
+          .map((binding) => String(binding.routeId ?? ''))
+          .filter(Boolean)
+        setBoundRouteIds(Array.from(new Set(routeIds)))
+      } catch (error) {
+        if (!cancelled) {
+          setBoundRouteIds([])
+          setOptionsError(getErrorMessage(error))
+        }
+      } finally {
+        if (!cancelled) setBindingLookupLoading(false)
+      }
+    }
+    void loadExistingBindings()
+    return () => {
+      cancelled = true
+    }
+  }, [modelSkuId, props.selectedId, props.token])
+
+  useEffect(() => {
+    if (!boundRouteIds.length) return
+    setSelectedRouteIds((current) => current.filter((routeId) => !boundRouteIds.includes(routeId)))
+  }, [boundRouteIds])
+
+  const boundRouteIdSet = useMemo(() => new Set(boundRouteIds), [boundRouteIds])
+  const newBindingCount = selectedRouteIds.length
+  const addableRouteCount = Math.max(0, routeOptions.length - boundRouteIds.length)
+
   return (
     <div className="admin-action-grid">
       <form
@@ -2453,7 +2656,8 @@ function ModelRouteBindingActions(props: {
         onSubmit={(event) => {
           event.preventDefault()
           const isEditing = Boolean(props.selectedId)
-          void props.onRun(isEditing ? '更新模型可用线路' : `创建模型可用线路（${selectedRouteIds.length} 条）`, async () => {
+          const routeIdsToCreate = selectedRouteIds.filter((routeId) => !boundRouteIdSet.has(routeId))
+          void props.onRun(isEditing ? '更新模型可用线路' : `创建模型可用线路（${routeIdsToCreate.length} 条）`, async () => {
             const sharedPayload = {
               upstreamModel: readOptionalText(upstreamModel),
               priority: Number(priority),
@@ -2466,8 +2670,8 @@ function ModelRouteBindingActions(props: {
             } else {
               const normalizedModelSkuId = modelSkuId.trim()
               if (!normalizedModelSkuId) throw new Error('请选择模型')
-              if (selectedRouteIds.length === 0) throw new Error('请选择至少一条可用线路')
-              for (const selectedRouteId of selectedRouteIds) {
+              if (routeIdsToCreate.length === 0) throw new Error('请选择至少一条尚未绑定的线路')
+              for (const selectedRouteId of routeIdsToCreate) {
                 await adminPost('/api/admin/model-route-bindings', props.token, {
                   ...sharedPayload,
                   modelSkuId: normalizedModelSkuId,
@@ -2478,13 +2682,25 @@ function ModelRouteBindingActions(props: {
           })
         }}
       >
-        <h3>{props.selectedId ? '更新选中线路设置' : '给模型绑定可用线路'}</h3>
+        <h3>{props.selectedId ? '更新这条模型可用线路' : '新增模型可用线路绑定'}</h3>
         {optionsError ? <p className="admin-form-error">{optionsError}</p> : null}
-        {props.selectedId ? <p className="admin-empty">已选中一条模型可用线路记录，这里只更新顺序、分流、等待时间等参数；要换模型或线路，请新建一条记录。</p> : null}
+        {props.selectedId ? (
+          <p className="admin-empty">当前是更新模式：只修改左侧已选中这条绑定的顺序、分流、等待时间和启用状态；模型和线路不会被替换。</p>
+        ) : (
+          <p className="admin-empty">当前是新增模式：保存后会给所选模型新增下面勾选的线路绑定；每勾选 1 条线路就创建 1 条绑定记录。</p>
+        )}
         <div className="admin-form-row admin-form-row-single">
           <label>
             <span>选择模型</span>
-            <select value={modelSkuId} onChange={(event) => setModelSkuId(event.target.value)} required={!props.selectedId} disabled={props.disabled || Boolean(props.selectedId)}>
+            <select
+              value={modelSkuId}
+              onChange={(event) => {
+                setModelSkuId(event.target.value)
+                setSelectedRouteIds([])
+              }}
+              required={!props.selectedId}
+              disabled={props.disabled || Boolean(props.selectedId)}
+            >
               <option value="">请选择模型</option>
               {modelOptions.map((item) => (
                 <option key={item.id} value={item.id}>{item.label}</option>
@@ -2495,28 +2711,36 @@ function ModelRouteBindingActions(props: {
         {!props.selectedId ? (
           <div className="admin-route-picker">
             <div className="admin-route-picker-head">
-              <span>选择可用线路（可多选）</span>
-              <small>{selectedRouteIds.length > 0 ? `已选 ${selectedRouteIds.length} 条` : '至少选择 1 条'}</small>
+              <span>新增绑定的线路（可多选）</span>
+              <small>{bindingLookupLoading ? '正在检查已有绑定' : newBindingCount > 0 ? `本次新增 ${newBindingCount} 条` : boundRouteIds.length > 0 ? `已绑定 ${boundRouteIds.length} 条，可新增 ${addableRouteCount} 条` : '至少选择 1 条'}</small>
             </div>
             {routeOptions.length > 0 ? (
               <div className="admin-route-checkbox-list">
                 {routeOptions.map((item) => {
                   const checked = selectedRouteIds.includes(item.id)
+                  const alreadyBound = boundRouteIdSet.has(item.id)
+                  const optionClassName = [
+                    'admin-route-option',
+                    alreadyBound ? 'is-bound' : '',
+                    checked ? 'is-selected' : '',
+                  ].filter(Boolean).join(' ')
                   return (
-                    <label key={item.id} className={checked ? 'admin-route-option is-selected' : 'admin-route-option'}>
+                    <label key={item.id} className={optionClassName}>
                       <input
                         type="checkbox"
-                        checked={checked}
+                        checked={alreadyBound || checked}
                         onChange={(event) => {
+                          if (alreadyBound) return
                           setSelectedRouteIds((current) => (
                             event.target.checked
                               ? Array.from(new Set([...current, item.id]))
                               : current.filter((id) => id !== item.id)
                           ))
                         }}
-                        disabled={props.disabled}
+                        disabled={props.disabled || bindingLookupLoading || !modelSkuId || alreadyBound}
                       />
-                      <span>{item.label}</span>
+                      <span className="admin-route-option-name">{item.label}</span>
+                      <small>{alreadyBound ? '已绑定' : checked ? '本次新增' : '可新增'}</small>
                     </label>
                   )
                 })}
@@ -2553,7 +2777,7 @@ function ModelRouteBindingActions(props: {
           <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} disabled={props.disabled} />
           <span>{props.selectedId ? '启用这条可用线路' : '启用这些可用线路'}</span>
         </label>
-        <button type="submit" disabled={props.disabled}>{props.selectedId ? '更新线路设置' : '保存可用线路绑定'}</button>
+        <button type="submit" disabled={props.disabled || (!props.selectedId && (bindingLookupLoading || newBindingCount === 0))}>{props.selectedId ? '更新这条绑定参数' : newBindingCount > 0 ? `新增 ${newBindingCount} 条绑定` : '选择可新增线路'}</button>
       </form>
       <DeleteRecordAction
         disabled={props.disabled}
@@ -2939,7 +3163,7 @@ function CandidateReviewPreview(props: { selectedRecord: Record<string, unknown>
       <div className="admin-strategy-list">
         <div><span>标题</span><strong>{formatAdminValue(title)}</strong></div>
         <div><span>分类</span><strong>{formatAdminValue(category)}</strong></div>
-        <div><span>来源</span><strong>{formatAdminValue(sourceUrl)}</strong></div>
+        <div><span>来源</span><strong><AdminValue fieldKey="sourceUrl" value={sourceUrl} /></strong></div>
       </div>
     </section>
   )
@@ -2979,7 +3203,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
   const [rechargeSubsection, setRechargeSubsection] = useState<RechargeSubsectionKey>('codes')
   const [gatewaySubsection, setGatewaySubsection] = useState<GatewaySubsectionKey>('routes')
   const [growthSubsection, setGrowthSubsection] = useState<GrowthSubsectionKey>('referrals')
-  const [contentSubsection, setContentSubsection] = useState<ContentSubsectionKey>('templates')
+  const [contentSubsection, setContentSubsection] = useState<ContentSubsectionKey>('candidates')
   const config = props.section === 'content'
     ? CONTENT_MODULES[contentSubsection]
     : props.section === 'users'
@@ -3004,6 +3228,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
           : props.section
   const filterFields = ADMIN_FILTERS[filterScope] ?? []
   const isOfficialTemplateView = props.section === 'content' && contentSubsection === 'templates'
+  const isContentModule = props.section === 'content'
   const [filters, setFilters] = useState<Record<string, string>>({})
   const [pageLimit, setPageLimit] = useState(25)
   const [pageOffset, setPageOffset] = useState(0)
@@ -3148,7 +3373,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
   }, [config.summaryPath, filters, isOfficialTemplateView, listPath, pageLimit, pageOffset, props.token])
 
   useEffect(() => {
-    setFilters({})
+    setFilters(getDefaultFiltersForScope(filterScope))
     setPageOffset(0)
     setPageLimit(25)
   }, [filterScope])
@@ -3303,14 +3528,14 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
         </div>
       ) : null}
 
-      <div className="admin-data-layout">
+      <div className={isContentModule ? 'admin-data-layout admin-content-data-layout' : 'admin-data-layout'}>
         <div className="admin-workspace-column">
           <form
             key={filterScope}
             className="admin-panel admin-filter-panel"
             onSubmit={(event) => {
               event.preventDefault()
-              setFilters(getFilterValues(filterFields, event.currentTarget))
+              setFilters({ ...getDefaultFiltersForScope(filterScope), ...getFilterValues(filterFields, event.currentTarget) })
               setPageOffset(0)
             }}
           >
@@ -3323,14 +3548,14 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
                 <label key={field.key}>
                   <span>{field.label}</span>
                   {field.type === 'select' ? (
-                    <select name={field.key} defaultValue="">
-                      <option value="">全部</option>
+                    <select name={field.key} defaultValue={filters[field.key] ?? field.defaultValue ?? ''}>
+                      {field.hideAllOption ? null : <option value="">全部</option>}
                       {field.options?.map((option) => <option key={option} value={option}>{getSelectOptionLabel(option)}</option>)}
                     </select>
                   ) : field.type === 'checkbox' ? (
-                    <input name={field.key} type="checkbox" />
+                    <input name={field.key} type="checkbox" defaultChecked={filters[field.key] === 'true'} />
                   ) : (
-                    <input name={field.key} type={field.type === 'date' ? 'date' : 'text'} placeholder={field.placeholder} />
+                    <input name={field.key} type={field.type === 'date' ? 'date' : 'text'} placeholder={field.placeholder} defaultValue={filters[field.key] ?? ''} />
                   )}
                 </label>
               ))}
@@ -3352,7 +3577,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
                 type="button"
                 onClick={(event) => {
                   event.currentTarget.form?.reset()
-                  setFilters({})
+                  setFilters(getDefaultFiltersForScope(filterScope))
                   setPageOffset(0)
                 }}
               >
@@ -3371,7 +3596,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
                 <thead>
                   <tr>
                     {config.columns.map((column) => <th key={column.key} data-field={column.key}>{column.label}</th>)}
-                    <th data-field="detail">详情</th>
+                    {isContentModule ? null : <th data-field="detail">详情</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -3388,18 +3613,20 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
                               <AdminTableCell row={row} column={column} />
                             </td>
                           ))}
-                        <td data-field="detail">
-                          <button
-                            type="button"
-                            className="admin-link-button"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              void openDetail(row)
-                            }}
-                          >
-                            选择
-                          </button>
-                        </td>
+                        {isContentModule ? null : (
+                          <td data-field="detail">
+                            <button
+                              type="button"
+                              className="admin-link-button"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                void openDetail(row)
+                              }}
+                            >
+                              选择
+                            </button>
+                          </td>
+                        )}
                       </tr>
                     )
                   })}
@@ -3429,7 +3656,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
             onActionComplete={handleActionComplete}
           />
 
-          <section className="admin-panel admin-detail-panel">
+          <section className={isContentModule ? 'admin-detail-panel admin-content-detail-panel' : 'admin-panel admin-detail-panel'}>
             <div className="admin-panel-head">
               <h2>记录详情</h2>
               <span>{detailLoading ? '加载中' : selectedLabel || selectedId || '未选择'}</span>
@@ -3447,7 +3674,12 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
                 </button>
               </div>
             ) : null}
-            <AdminDetailView detail={detail} selectedId={selectedLabel || selectedId} detailLoading={detailLoading} />
+            <AdminDetailView
+              detail={detail}
+              selectedId={selectedLabel || selectedId}
+              detailLoading={detailLoading}
+              contentSubsection={props.section === 'content' ? contentSubsection : undefined}
+            />
           </section>
 
           <section className="admin-panel admin-summary-panel">

@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { extname, join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import type { Pool } from 'pg'
@@ -44,6 +44,24 @@ const LOW_QUALITY_PATTERNS = [
   /lorem ipsum/i,
   /随便/,
   /测试/,
+]
+
+const BLOCKED_IMPORT_PATTERNS = [
+  /\b(?:nike|air\s*jordan|jordan|chanel|coca[-\s]?cola|coke|pepsi|sprite|fanta|kfc|mcdonald'?s?|starbucks|oreo)\b/i,
+  /\b(?:google|android|bugdroid|apple\s+watch|spotify|apple\s+music|bagel\s+labs)\b/i,
+  /\b(?:lionel\s+messi|messi|cristiano\s+ronaldo|ronaldo)\b/i,
+  /\b(?:star\s*wars|rogue\s+one|andor|totoro|my\s+neighbor\s+totoro|iron\s+man|hulk|black\s+panther)\b/i,
+  /\b(?:toy\s+story|dragon\s*ball|charizard|bratz|mona\s+lisa)\b/i,
+  /ultimate[-_\s]*chatgpt[-_\s]*image[-_\s]*and[-_\s]*nano[-_\s]*banana[-_\s]*pro[-_\s]*collection/i,
+  /curated\s+prompt\s+library/i,
+  /copy,\s*paste,\s*create/i,
+  /awesome\.re/i,
+]
+
+const WATERMARK_HINT_PATTERNS = [
+  /\b(?:watermark|logo|signature|stock\s*photo|shutterstock|alamy|getty|dreamstime|depositphotos|freepik|adobe\s*stock)\b/i,
+  /右下角.*(?:水印|标记|logo)/i,
+  /(?:水印|版权标记|平台标记)/i,
 ]
 
 interface PromptTemplateRow {
@@ -205,11 +223,13 @@ function serializeRun(row: ImportRunRow) {
 }
 
 function serializeCandidate(row: CandidateRow) {
+  const localizedTitle = localizeCandidateDisplayTitle(row.title, row.prompt)
+  const localizedCategory = localizeCandidateDisplayCategory(row.title, row.prompt)
   return {
     id: row.id,
     importRunId: row.import_run_id,
-    title: row.title,
-    category: row.category ?? null,
+    title: localizedTitle,
+    category: localizedCategory || row.category || null,
     tags: Array.isArray(row.tags) ? row.tags : [],
     prompt: row.prompt,
     imagePath: row.image_path ?? null,
@@ -320,6 +340,55 @@ function normalizeImportedTitle(title: string, prompt: string, index?: number) {
   return `精选提示词 ${index == null ? '' : index + 1}`.trim()
 }
 
+function localizeCandidateDisplayTitle(title: string, prompt: string) {
+  const trimmed = title.trim()
+  const prefixMatch = trimmed.match(/^((?:\d+(?:\.\d+)*\.)\s*)/)
+  const prefix = prefixMatch?.[1] ?? ''
+  const body = trimmed.replace(/^((?:\d+(?:\.\d+)*\.)\s*)/, '').trim()
+  const normalized = `${body}\n${prompt}`.toLowerCase()
+
+  if (/miniature soccer game on smartphone screen/.test(normalized)) return `${prefix}手机屏幕微缩足球赛`
+  if (/japanese cuisine/.test(normalized) && /okonomiyaki/.test(normalized)) return `${prefix}日式料理：微缩大阪烧与食物历史`
+  if (/delicious burger exploded view|burger exploded-view composition/.test(normalized)) return `${prefix}汉堡拆解图：新鲜食材`
+  if (/cute 3d render character|pink hair girl/.test(normalized)) return `${prefix}可爱 3D 角色：粉发女孩与现代穿搭`
+  if (/midnight spark grape soda can|grape drink|luxury beverage/.test(normalized)) return `${prefix}午夜星芒葡萄汽水罐：清爽产品照`
+  if (/woman posing with red lip gloss|beauty campaign|bagel/.test(normalized)) return `${prefix}红色唇釉美妆拍摄`
+  if (/watercolor portrait|traditional dress/.test(normalized)) return `${prefix}水彩肖像：传统服饰女性`
+  if (/volleyball player clapping|indoor sports action/.test(normalized)) return `${prefix}室内排球赛举手鼓掌`
+  if (/gym selfie|post-workout|hydration|fitness & wellness/.test(normalized)) return `${prefix}健身后镜前自拍`
+  if (/cyberpunk male character portrait/.test(normalized)) return `${prefix}赛博朋克男性角色肖像`
+  if (/doodle art work mode|coffee break/.test(normalized)) return `${prefix}涂鸦工作模式：咖啡休息女孩`
+  if (/paper art|origami|miniature doll/.test(normalized)) return `${prefix}纸艺折纸与迷你人偶`
+  if (/comfort/.test(normalized) && /furniture|catalog/.test(normalized)) return `${prefix}舒适科学：概念家具广告`
+  if (/culinary atlas|food history|chicken, bacon/.test(normalized)) return `${prefix}美食图谱：鸡肉培根全球料理`
+  if (/cookies|milk splash/.test(normalized)) return `${prefix}饼干牛奶飞溅食物摄影`
+  if (/taco/.test(normalized)) return `${prefix}塔可拆解图：食材说明`
+  if (/beauty|lip gloss|makeup/.test(normalized)) return `${prefix}美妆品牌视觉`
+  if (/soda can|beverage|product photo/.test(normalized)) return `${prefix}产品静物：饮料罐广告`
+
+  if (/[\u4e00-\u9fff]/.test(body)) return `${prefix}${body}`.slice(0, 140)
+  return `${prefix}中文候选提示词`.slice(0, 140)
+}
+
+function localizeCandidateDisplayCategory(title: string, prompt: string) {
+  const text = `${title}\n${prompt}`.toLowerCase()
+  if (/exploded view|breakdown|history|atlas|guide|analysis|timeline|annotation|ingredients/.test(text)) return '信息图解'
+  if (/3d render character|character|origami|paper art|samurai|doll|cyberpunk/.test(text)) return '角色设定'
+  if (/smartphone screen|\bui\b|interface|social|screen transformed|phone screen/.test(text)) return 'UI / 社媒视觉'
+  if (/beauty|lip gloss|makeup|campaign|brand|advertising|product shoot/.test(text)) return '品牌广告'
+  if (/burger|taco|cookies|milk splash|food|cuisine|soda can|beverage|still life|product photo/.test(text)) return '产品静物'
+  if (/portrait|selfie|gym|volleyball|woman|man|model/.test(text)) return '人像摄影'
+  return '待审核'
+}
+
+function localizeCandidateDisplay(candidate: CandidateInput): CandidateInput {
+  return {
+    ...candidate,
+    title: localizeCandidateDisplayTitle(candidate.title, candidate.prompt),
+    category: localizeCandidateDisplayCategory(candidate.title, candidate.prompt),
+  }
+}
+
 function normalizePromptText(value: string) {
   return value
     .replace(/!\[[^\]]*]\([^)]+\)/g, '')
@@ -415,6 +484,24 @@ function filterQualityCandidates(candidates: CandidateInput[]) {
   return candidates.filter((candidate) => hasEnoughPromptDetail(candidate.prompt))
 }
 
+function getImportCandidateBlockReason(candidate: CandidateInput) {
+  const text = [
+    candidate.title,
+    candidate.category ?? '',
+    candidate.tags.join(' '),
+    candidate.prompt,
+    candidate.imageUrl ?? '',
+    candidate.sourceUrl,
+  ].join('\n')
+  if (BLOCKED_IMPORT_PATTERNS.some((pattern) => pattern.test(text))) return 'blocked_brand_ip_or_meta'
+  if (WATERMARK_HINT_PATTERNS.some((pattern) => pattern.test(text))) return 'watermark_hint'
+  return null
+}
+
+function filterReviewableCandidates(candidates: CandidateInput[]) {
+  return candidates.filter((candidate) => !getImportCandidateBlockReason(candidate))
+}
+
 function normalizeOriginalImageUrl(imageUrl: string | null) {
   if (!imageUrl || !/^https?:\/\//i.test(imageUrl)) return null
   return imageUrl.slice(0, 2000)
@@ -504,6 +591,17 @@ async function localizeImage(imageUrl: string | null, runId: string, index: numb
   }
 }
 
+async function hasLikelySvgLogoOrWatermark(imagePath: string | null) {
+  if (!imagePath || !imagePath.endsWith('.svg')) return false
+  try {
+    const relativePath = imagePath.replace(/^\/prompt-template-assets\//, '')
+    const content = await readFile(join(assetRoot, relativePath), 'utf8')
+    return /(?:logo|watermark|badge|awesome|github|license|collection|prompt\s+library)/i.test(content)
+  } catch {
+    return true
+  }
+}
+
 async function extractCandidates(sourceUrl: string) {
   const sourceType = detectSourceType(sourceUrl)
   const texts = sourceType === 'github'
@@ -535,6 +633,17 @@ async function recalculateRunCounts(db: Db, runId: string, updatedAt = nowIso())
 }
 
 export function registerPromptTemplateRoutes(app: FastifyInstance, db: Pool) {
+  app.get('/api/prompt-library/official-template-overrides', async (_request, reply) => {
+    try {
+      return reply.send({
+        ok: true,
+        hiddenTemplateIds: await getHiddenOfficialTemplateIds(db),
+      })
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
   app.get('/api/admin/content/official-template-overrides', async (request, reply) => {
     try {
       await requireAdminSession(db, request.headers.authorization)
@@ -774,14 +883,16 @@ export function registerPromptTemplateRoutes(app: FastifyInstance, db: Pool) {
       `, [runId, sourceUrl, sourceType, `/prompt-template-assets/${runId}`, admin.admin_user_id, createdAt])
 
       try {
-        const rawCandidates = await filterExistingTemplateDuplicates(db, filterQualityCandidates(await extractCandidates(sourceUrl)))
+        const rawCandidates = await filterExistingTemplateDuplicates(db, filterReviewableCandidates(filterQualityCandidates(await extractCandidates(sourceUrl))))
         const candidates = []
         for (let index = 0; index < rawCandidates.length; index += 1) {
           const candidate = rawCandidates[index]
+          const localizedCandidate = localizeCandidateDisplay(candidate)
           const imagePath = await localizeImage(candidate.imageUrl, runId, index)
-          if (candidate.imageUrl && !imagePath) continue
+          if (!imagePath) continue
+          if (await hasLikelySvgLogoOrWatermark(imagePath)) continue
           candidates.push({
-            ...candidate,
+            ...localizedCandidate,
             imagePath,
           })
         }
