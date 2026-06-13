@@ -133,14 +133,22 @@ CREATE TABLE IF NOT EXISTS generation_tasks (
   request_id TEXT,
   route_id TEXT,
   upstream_model TEXT,
+  requested_output_count INTEGER NOT NULL DEFAULT 1 CHECK (requested_output_count > 0),
+  reserved_points NUMERIC(14, 2) NOT NULL DEFAULT 0 CHECK (reserved_points >= 0),
   output_count INTEGER NOT NULL DEFAULT 0 CHECK (output_count >= 0),
   charged_points NUMERIC(14, 2) NOT NULL DEFAULT 0 CHECK (charged_points >= 0),
   ledger_id TEXT REFERENCES balance_ledger(id),
   failure_kind TEXT,
   error_summary TEXT,
+  request_json JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   finished_at TIMESTAMPTZ
 );
+
+ALTER TABLE generation_tasks
+  ADD COLUMN IF NOT EXISTS requested_output_count INTEGER NOT NULL DEFAULT 1 CHECK (requested_output_count > 0),
+  ADD COLUMN IF NOT EXISTS reserved_points NUMERIC(14, 2) NOT NULL DEFAULT 0 CHECK (reserved_points >= 0),
+  ADD COLUMN IF NOT EXISTS request_json JSONB;
 
 CREATE TABLE IF NOT EXISTS generation_task_outputs (
   id TEXT PRIMARY KEY,

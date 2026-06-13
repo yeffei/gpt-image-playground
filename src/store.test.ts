@@ -120,6 +120,22 @@ vi.mock('./lib/serverImageGatewayApi', () => ({
         routes: [],
       },
     })),
+  pollServerImageTask: vi.fn(async () => ({
+    images: ['data:image/png;base64,recovered-server-gateway'],
+    actualParams: { size: '2048x2048' },
+    actualParamsList: [{ size: '2048x2048' }],
+    revisedPrompts: ['recovered prompt'],
+    modelSku: 'gpt-image-2-fast',
+    routeId: 'server-route-1',
+    upstreamModel: 'gpt-image-2',
+    attempts: [],
+    billing: {
+      outputCount: 1,
+      chargedPoints: 3,
+      ledgerId: 'ledger-recovered-1',
+    },
+  })),
+  cancelServerImageTask: vi.fn(async () => ({ ok: true, taskId: 'server-task-1', status: 'cancelled', cancelled: true })),
   isServerImageGatewayUnavailableError: vi.fn(() => false),
 }))
 vi.mock('./lib/serverImageGatewayConfig', () => ({
@@ -151,9 +167,9 @@ vi.mock('./lib/rechargeCodeApi', () => {
     redeemRechargeCodeWithApi: vi.fn(),
   }
 })
-import { clearAgentConversations, clearImages, getAllAgentConversations, getAllTasks, putAgentConversation, putImage, putTask as putDbTask } from './lib/db'
+import { clearAgentConversations, clearImages, clearTasks, getAllAgentConversations, getAllTasks, putAgentConversation, putImage, putTask as putDbTask } from './lib/db'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
-import { callServerImageGateway } from './lib/serverImageGatewayApi'
+import { callServerImageGateway, pollServerImageTask } from './lib/serverImageGatewayApi'
 import { isClientImageGatewayFallbackEnabled, isServerImageGatewayEnabled } from './lib/serverImageGatewayConfig'
 import { RechargeCodeApiError, redeemRechargeCodeWithApi } from './lib/rechargeCodeApi'
 import { cleanStaleAgentInputDrafts, deleteAgentRoundFromConversation, editOutputs, estimateBillingPoints, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, isTaskVisibleForAccount, markInterruptedOpenAIRunningTasks, mergeNegativePromptValue, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, retryTask, reuseConfig, submitAgentMessage, submitTask, useStore } from './store'
@@ -231,6 +247,7 @@ describe('mask draft lifecycle in store actions', () => {
     vi.mocked(isServerImageGatewayEnabled).mockReturnValue(false)
     vi.mocked(isClientImageGatewayFallbackEnabled).mockReturnValue(false)
     vi.mocked(callServerImageGateway).mockClear()
+    vi.mocked(pollServerImageTask).mockClear()
     useStore.setState({
       settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key' },
       account: { userId: 'test-user', isLoggedIn: true, displayName: 'Tester', balance: 20, planName: '体验版' },
@@ -351,8 +368,8 @@ describe('mask draft lifecycle in store actions', () => {
     const submittedTask = useStore.getState().tasks[0]
     expect(submittedTask.params).toMatchObject({
       size: '2560x1440',
-      quality: 'medium',
-      n: 1,
+      quality: 'auto',
+      n: 3,
     })
   })
 
@@ -603,10 +620,10 @@ describe('mask draft lifecycle in store actions', () => {
     expect(state.billing.usageHistory[0]).toMatchObject({
       sourceMode: 'gallery',
       outputCount: 1,
-      amount: 2,
-      quality: 'medium',
+      amount: 1,
+      quality: 'auto',
     })
-    expect(state.account.balance).toBe(18)
+    expect(state.account.balance).toBe(19)
   })
 
   it('uses resolution tier billing for gallery generation', async () => {
@@ -621,10 +638,10 @@ describe('mask draft lifecycle in store actions', () => {
     expect(state.billing.usageHistory[0]).toMatchObject({
       sourceMode: 'gallery',
       outputCount: 1,
-      amount: 4,
+      amount: 3,
       quality: 'high',
     })
-    expect(state.account.balance).toBe(16)
+    expect(state.account.balance).toBe(17)
   })
 
   it('preserves selected image mentions when replacing a mask target with an equivalent image id', () => {
@@ -652,11 +669,12 @@ describe('interrupted OpenAI running tasks', () => {
     const openAIRunning = task({ id: 'openai-running', apiProvider: 'openai', status: 'running', createdAt: 2_000, finishedAt: null, elapsed: null })
     const falRunning = task({ id: 'fal-running', apiProvider: 'fal', status: 'running', createdAt: 3_000, finishedAt: null, elapsed: null })
     const customAsyncRunning = task({ id: 'custom-running', apiProvider: 'custom-provider', customTaskId: 'task-1', status: 'running', createdAt: 4_000, finishedAt: null, elapsed: null })
+    const serverRunning = task({ id: 'server-running', apiProvider: 'openai', serverImageTaskId: 'server-task-1', status: 'running', createdAt: 5_000, finishedAt: null, elapsed: null })
     const doneTask = task({ id: 'done-task', apiProvider: 'openai', status: 'done' })
 
-    const result = markInterruptedOpenAIRunningTasks([legacyRunning, openAIRunning, falRunning, customAsyncRunning, doneTask], now)
+    const result = markInterruptedOpenAIRunningTasks([legacyRunning, openAIRunning, falRunning, customAsyncRunning, serverRunning, doneTask], now)
 
-    expect(result.interruptedTasks.map((item) => item.id)).toEqual(['legacy-running', 'openai-running'])
+    expect(result.interruptedTasks.map((item) => item.id)).toEqual(['legacy-running', 'openai-running', 'server-running'])
     expect(result.tasks.find((item) => item.id === 'legacy-running')).toMatchObject({
       status: 'error',
       error: expect.stringContaining('请求中断'),
@@ -671,6 +689,13 @@ describe('interrupted OpenAI running tasks', () => {
     })
     expect(result.tasks.find((item) => item.id === 'fal-running')).toEqual(falRunning)
     expect(result.tasks.find((item) => item.id === 'custom-running')).toEqual(customAsyncRunning)
+    expect(result.tasks.find((item) => item.id === 'server-running')).toMatchObject({
+      status: 'error',
+      error: expect.stringContaining('页面已刷新'),
+      serverImageTaskId: 'server-task-1',
+      finishedAt: now,
+      elapsed: 5_000,
+    })
     expect(result.tasks.find((item) => item.id === 'done-task')).toEqual(doneTask)
   })
 })
@@ -884,7 +909,7 @@ describe('agent conversation persistence', () => {
     }) as { params?: typeof DEFAULT_PARAMS }
 
     expect(migrated.params).toMatchObject({
-      quality: 'medium',
+      quality: 'auto',
       output_format: 'jpeg',
       output_compression: 90,
     })
@@ -2011,10 +2036,10 @@ describe('agent batch reference resolution', () => {
     expect(state.billing.usageHistory[0]).toMatchObject({
       sourceMode: 'agent',
       outputCount: 1,
-      amount: 4,
+      amount: 3,
       quality: 'high',
     })
-    expect(state.account.balance).toBe(16)
+    expect(state.account.balance).toBe(17)
   })
 })
 
@@ -2459,6 +2484,136 @@ describe('workbench return context', () => {
   })
 })
 
+describe('server image task recovery', () => {
+  beforeEach(async () => {
+    await clearTasks()
+    await clearImages()
+    await clearAgentConversations()
+    vi.mocked(callServerImageGateway).mockClear()
+    vi.mocked(pollServerImageTask).mockClear()
+    vi.mocked(isServerImageGatewayEnabled).mockReturnValue(false)
+    useStore.setState({
+      account: { userId: 'test-user', isLoggedIn: true, displayName: 'Tester', balance: 20, planName: '体验版' },
+      billing: {
+        lastRechargeAmount: null,
+        lastRechargeStatus: 'idle',
+        lastRechargeAt: null,
+        pendingRechargeAmount: 30,
+        selectedPaymentMethod: 'wechat',
+        rechargeFlowStatus: 'idle',
+        rechargeReturnView: 'plan',
+        rechargeHistory: [],
+        usageHistory: [],
+      },
+      tasks: [],
+      showToast: vi.fn(),
+    })
+  })
+
+  it('marks a submitted server image task as interrupted when the client connection drops', async () => {
+    vi.mocked(isServerImageGatewayEnabled).mockReturnValue(true)
+    vi.mocked(callServerImageGateway).mockImplementationOnce(async (request) => {
+      request.onServerTaskSubmitted?.({ taskId: 'server-task-interrupted' })
+      throw new TypeError('fetch failed')
+    })
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, apiKey: '' },
+      selectedModelSkuId: 'gpt-image-2-fast',
+    })
+
+    await submitTask()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(callServerImageGateway).toHaveBeenCalled()
+    expect(useStore.getState().tasks[0]).toMatchObject({
+      status: 'error',
+      error: expect.stringContaining('连接中断'),
+      serverImageTaskId: 'server-task-interrupted',
+    })
+    expect(useStore.getState().detailTaskId).not.toBe(useStore.getState().tasks[0].id)
+  })
+
+  it('keeps structured server image task failures instead of marking them as interrupted', async () => {
+    vi.mocked(isServerImageGatewayEnabled).mockReturnValue(true)
+    vi.mocked(callServerImageGateway).mockImplementationOnce(async (request) => {
+      request.onServerTaskSubmitted?.({ taskId: 'server-task-failed' })
+      throw Object.assign(new Error('生成服务请求超时'), {
+        requestId: 'imggw-task-timeout',
+        failureKind: 'upstream_timeout',
+      })
+    })
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, apiKey: '' },
+      selectedModelSkuId: 'gpt-image-2-fast',
+    })
+
+    await submitTask()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const failedTask = useStore.getState().tasks[0]
+    expect(failedTask).toMatchObject({
+      status: 'error',
+      serverImageTaskId: 'server-task-failed',
+      gatewayFailureKind: 'upstream_timeout',
+    })
+    expect(failedTask.error).toContain('生成服务请求超时，请稍后重试。')
+    expect(failedTask.error).toContain('请求编号：imggw-task-timeout')
+    expect(failedTask.error).not.toContain('页面已刷新')
+    expect(useStore.getState().detailTaskId).toBe(failedTask.id)
+  })
+
+  it('marks a persisted running server image task as interrupted on startup', async () => {
+    await putDbTask(task({
+      id: 'server-recovering',
+      apiProvider: 'openai',
+      modelSku: 'gpt-image-2-fast',
+      params: { ...DEFAULT_PARAMS, size: '2048x2048', n: 1 },
+      serverImageTaskId: 'server-task-recovering',
+      status: 'running',
+      createdAt: 1_000,
+      finishedAt: null,
+      elapsed: null,
+    }))
+
+    await initStore()
+    await waitForFirstTaskStatus('error')
+
+    const state = useStore.getState()
+    expect(pollServerImageTask).not.toHaveBeenCalled()
+    expect(state.tasks[0]).toMatchObject({
+      id: 'server-recovering',
+      status: 'error',
+      error: expect.stringContaining('页面已刷新'),
+      serverImageTaskId: 'server-task-recovering',
+    })
+    expect(state.billing.usageHistory).toHaveLength(0)
+  })
+
+  it('does not poll a persisted server image task while auth token is unavailable', async () => {
+    useStore.setState({ authSessionToken: null })
+    await putDbTask(task({
+      id: 'server-waiting-auth',
+      apiProvider: 'openai',
+      modelSku: 'gpt-image-2-fast',
+      serverImageTaskId: 'server-task-waiting-auth',
+      status: 'running',
+      createdAt: 1_000,
+      finishedAt: null,
+      elapsed: null,
+    }))
+
+    await initStore()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(pollServerImageTask).not.toHaveBeenCalled()
+    expect(useStore.getState().tasks[0]).toMatchObject({
+      id: 'server-waiting-auth',
+      status: 'error',
+      error: expect.stringContaining('页面已刷新'),
+    })
+  })
+})
+
 describe('recharge payment method guard', () => {
   beforeEach(() => {
     vi.mocked(redeemRechargeCodeWithApi).mockReset()
@@ -2552,9 +2707,9 @@ describe('retry task', () => {
     const retriedTask = useStore.getState().tasks[0]
     expect(retriedTask.modelSku).toBe('gpt-image-2-quality')
     expect(retriedTask.params).toMatchObject({
-      quality: 'high',
+      quality: 'low',
       size: '2560x1440',
-      n: 1,
+      n: 3,
     })
   })
 })
@@ -2777,9 +2932,9 @@ describe('reused task API profile', () => {
     const state = useStore.getState()
     expect(state.selectedModelSkuId).toBe('gpt-image-2-quality')
     expect(state.params).toMatchObject({
-      quality: 'high',
+      quality: 'low',
       size: '2560x1440',
-      n: 1,
+      n: 3,
     })
   })
 

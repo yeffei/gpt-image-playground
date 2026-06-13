@@ -1694,6 +1694,272 @@ input[type="number"] {
   cursor: default;
 }
 
+.task-output-grid.is-running {
+  background:
+    radial-gradient(circle at 18% 12%, rgba(255, 255, 255, 0.42), transparent 26%),
+    radial-gradient(circle at 82% 18%, rgba(14, 165, 233, 0.18), transparent 30%),
+    rgba(15, 23, 42, 0.08);
+}
+
+.task-output-grid.is-running .task-output-tile {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.68), rgba(226, 232, 240, 0.36)),
+    radial-gradient(circle at 30% 20%, rgba(14, 165, 233, 0.14), transparent 34%);
+}
+
+.task-generating-plate {
+  position: relative;
+  display: grid;
+  width: min(118px, 42%);
+  aspect-ratio: 1;
+  place-items: center;
+  border-radius: 30px;
+  background:
+    radial-gradient(circle at 32% 26%, rgba(255, 255, 255, 0.88), transparent 22%),
+    radial-gradient(circle at 70% 72%, rgba(34, 211, 238, 0.2), transparent 34%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.56), rgba(226, 232, 240, 0.22));
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.62),
+    0 22px 54px rgba(15, 23, 42, 0.14);
+  overflow: hidden;
+}
+
+.task-generating-plate::before {
+  content: '';
+  position: absolute;
+  inset: -26% -46%;
+  background: linear-gradient(100deg, transparent 18%, rgba(255, 255, 255, 0.86) 48%, transparent 76%);
+  transform: translateX(-54%) rotate(8deg);
+  animation: task-develop-scan 2.8s ease-in-out infinite;
+}
+
+.task-generating-plate::after {
+  content: '';
+  position: absolute;
+  inset: 14px;
+  border-radius: 22px;
+  border: 1px solid rgba(14, 165, 233, 0.2);
+  box-shadow: inset 0 0 26px rgba(14, 165, 233, 0.12);
+}
+
+.task-generating-frame {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 58%;
+  gap: 7px;
+}
+
+.task-generating-frame span {
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.14);
+  animation: task-develop-bars 1.8s ease-in-out infinite;
+}
+
+.task-generating-frame span:nth-child(2) {
+  width: 74%;
+  animation-delay: 0.18s;
+}
+
+.task-generating-frame span:nth-child(3) {
+  width: 48%;
+  animation-delay: 0.36s;
+}
+
+.task-generating-dots {
+  position: absolute;
+  right: 18px;
+  bottom: 16px;
+  z-index: 2;
+  display: inline-flex;
+  gap: 4px;
+}
+
+.task-generating-dots span {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(8, 145, 178, 0.66);
+  animation: task-dot-pulse 1.2s ease-in-out infinite;
+}
+
+.task-generating-dots span:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.task-generating-dots span:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+.task-output-developing {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.52);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.58);
+  overflow: hidden;
+}
+
+.task-output-developing::before {
+  content: '';
+  position: absolute;
+  inset: -20%;
+  background: conic-gradient(from 120deg, rgba(14, 165, 233, 0), rgba(14, 165, 233, 0.46), rgba(14, 165, 233, 0));
+  animation: task-orbit 2.2s linear infinite;
+}
+
+.task-output-developing span {
+  position: absolute;
+  inset: 7px;
+  border-radius: 10px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.82), rgba(226, 232, 240, 0.64)),
+    radial-gradient(circle at 35% 30%, rgba(14, 165, 233, 0.24), transparent 42%);
+}
+
+.task-running-overlay {
+  position: absolute;
+  inset: auto 12px 12px auto;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  max-width: min(78%, 300px);
+  color: #0f172a;
+  pointer-events: none;
+  text-align: right;
+  text-shadow: 0 1px 8px rgba(255, 255, 255, 0.88);
+}
+
+.task-running-overlay.is-actionable {
+  pointer-events: auto;
+}
+
+.task-running-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  min-width: 0;
+  gap: 2px;
+}
+
+.task-running-label {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #0e7490;
+  font-size: 9px;
+  font-weight: 760;
+  letter-spacing: 0;
+}
+
+.task-running-label::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: #06b6d4;
+  box-shadow: 0 0 0 4px rgba(6, 182, 212, 0.14);
+  animation: task-status-breathe 1.6s ease-in-out infinite;
+}
+
+.task-running-copy strong {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(15, 23, 42, 0.86);
+  font-size: 12px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-running-copy > span:last-child {
+  overflow: hidden;
+  max-width: 160px;
+  color: rgba(15, 23, 42, 0.46);
+  font-size: 10px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-running-retry {
+  flex: 0 0 auto;
+  pointer-events: auto;
+  border: 0;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(15, 23, 42, 0.82);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 760;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.18);
+  transition: transform 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.task-running-retry:hover {
+  transform: translateY(-1px);
+  background: rgba(15, 23, 42, 0.96);
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.24);
+}
+
+@keyframes task-status-breathe {
+  0%, 100% {
+    opacity: 0.55;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes task-develop-scan {
+  0%, 18% {
+    transform: translateX(-58%) rotate(8deg);
+    opacity: 0;
+  }
+  40%, 62% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(58%) rotate(8deg);
+    opacity: 0;
+  }
+}
+
+@keyframes task-develop-bars {
+  0%, 100% {
+    opacity: 0.36;
+    transform: scaleX(0.82);
+    transform-origin: left center;
+  }
+  50% {
+    opacity: 0.82;
+    transform: scaleX(1);
+  }
+}
+
+@keyframes task-dot-pulse {
+  0%, 100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes task-orbit {
+  to {
+    transform: rotate(1turn);
+  }
+}
 .task-output-tile img {
   display: block;
 }
@@ -3226,5 +3492,13 @@ input[type="number"] {
   .prototype-stage :where(.prototype-nav-toggle, .prototype-nav-item, .prototype-result-card, .task-mini-action) {
     transition-duration: 1ms !important;
     animation-duration: 1ms !important;
+  }
+
+  .task-generating-plate::before,
+  .task-generating-frame span,
+  .task-generating-dots span,
+  .task-output-developing::before {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
   }
 }

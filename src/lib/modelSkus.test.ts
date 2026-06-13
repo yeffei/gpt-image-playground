@@ -10,15 +10,15 @@ describe('modelSkus', () => {
 
   it('keeps balanced defaults for the fast image sku', () => {
     expect(normalizeParamsForModelSku({ ...DEFAULT_PARAMS }, 'gpt-image-2-fast')).toMatchObject({
-      quality: 'medium',
+      quality: 'auto',
       output_format: 'jpeg',
       output_compression: 90,
     })
   })
 
-  it('uses lossless high-quality defaults when switching to the quality sku from defaults', () => {
+  it('uses lossless output defaults when switching to the quality sku from defaults', () => {
     expect(normalizeParamsForModelSku({ ...DEFAULT_PARAMS }, 'gpt-image-2-quality')).toMatchObject({
-      quality: 'high',
+      quality: 'auto',
       output_format: 'png',
       output_compression: null,
     })
@@ -30,7 +30,7 @@ describe('modelSkus', () => {
       output_format: 'webp',
       output_compression: 95,
     }, 'gpt-image-2-quality')).toMatchObject({
-      quality: 'high',
+      quality: 'auto',
       output_format: 'webp',
       output_compression: 95,
     })
@@ -52,7 +52,7 @@ describe('modelSkus', () => {
     })
   })
 
-  it('treats wildcard quality as no frontend restriction', () => {
+  it('fixes product gateway quality to auto even when the sku allows wildcard quality', () => {
     expect(normalizeParamsForModelSku({
       ...DEFAULT_PARAMS,
       quality: 'high',
@@ -66,7 +66,7 @@ describe('modelSkus', () => {
       supportedQualities: ['*'],
       maxOutputCount: 1,
     }])).toMatchObject({
-      quality: 'high',
+      quality: 'auto',
     })
   })
 

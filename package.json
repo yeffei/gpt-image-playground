@@ -48,8 +48,10 @@
     "verify:admin-backend-config": "node scripts/verify-admin-backend-config.mjs",
     "verify:server-deploy-config": "node scripts/verify-server-deployment-config.mjs",
     "verify:prelaunch": "node scripts/verify-prelaunch.mjs",
+    "verify:platform": "node scripts/verify-platform.mjs",
     "test:verify:image:gateway:ux": "vitest run scripts/verify-gateway-failure-ux.test.ts",
     "test:verify:image:live": "vitest run scripts/live-verify-image-gateway.integration.test.ts src/lib/liveVerifyImageGateway.test.ts",
+    "test:verify:platform": "vitest run scripts/verify-platform.test.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "smoke:image-share": "tsx scripts/smoke-image-share-flow.mjs"

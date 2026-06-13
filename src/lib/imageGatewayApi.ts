@@ -1,4 +1,4 @@
-import type { ApiProfile, BackendRoute, ImageGatewayAttempt, ImageGatewayRouteHealthSnapshot, ModelSku, TaskParams } from '../types'
+import type { ApiProfile, BackendRoute, ImageGatewayAttempt, ImageGatewayRouteHealthSnapshot, ModelSku, ServerPersistedImageOutput, TaskParams } from '../types'
 import { callOpenAICompatibleImageApi } from './openaiCompatibleImageApi'
 import type { CallApiResult } from './imageApiShared'
 import { DEFAULT_MODEL_SKU_ID, getModelSku } from './modelSkus'
@@ -25,6 +25,7 @@ export interface ImageGatewayRequest {
   inputImageDataUrls: string[]
   maskDataUrl?: string
   onPartialImage?: (partial: { image: string; partialImageIndex?: number; requestIndex?: number }) => void
+  onServerTaskSubmitted?: (task: { taskId: string }) => void
 }
 
 export interface ImageGatewayResult extends CallApiResult {
@@ -36,6 +37,7 @@ export interface ImageGatewayResult extends CallApiResult {
   outputCount?: number
   partialSuccess?: boolean
   partialFailureMessage?: string
+  persistedImages?: ServerPersistedImageOutput[]
   routeHealth?: ImageGatewayRouteHealthSnapshot
   routeSelection?: import('../types').ImageGatewayRouteSelectionSnapshot
   taskId?: string

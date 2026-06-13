@@ -1,12 +1,12 @@
 import { useEffect, useState, useRef, type ReactNode } from 'react'
-import type { ImageGatewayFailureKind, TaskRecord } from '../types'
-import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, updateTaskInStore, retryTask } from '../store'
+import type { TaskRecord } from '../types'
+import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, updateTaskInStore, retryTask, cancelServerTask } from '../store'
 import { formatImageRatio } from '../lib/size'
 import { getParamDisplay } from '../lib/paramDisplay'
 import { DEFAULT_IMAGES_MODEL, DEFAULT_FAL_MODEL } from '../lib/apiProfiles'
 import { getModelSku } from '../lib/modelSkus'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
-import { CodeIcon } from './icons'
+import { getFailureDisplay, SERVER_IMAGE_INTERRUPTED_MESSAGE, STOPPED_GENERATION_MESSAGE } from '../lib/taskResultDisplay'
 import ViewportTooltip from './ViewportTooltip'
 
 interface Props {
@@ -19,6 +19,55 @@ interface Props {
 }
 
 const EMPTY_STREAM_PREVIEW_SLOTS: Record<string, string> = {}
+
+function formatDuration(seconds: number | null) {
+  if (seconds == null) return '00:00'
+  const safeSeconds = Math.max(0, Math.floor(seconds))
+  const mm = String(Math.floor(safeSeconds / 60)).padStart(2, '0')
+  const ss = String(safeSeconds % 60).padStart(2, '0')
+  return `${mm}:${ss}`
+}
+
+function getRunningDisplay(elapsedSeconds: number, requestedOutputCount: number) {
+  if (elapsedSeconds >= 360) {
+    return {
+      label: '耗时偏长',
+      headline: '可以取消重来',
+      note: '线路仍在等待返回',
+      canRestart: true,
+    }
+  }
+  if (elapsedSeconds >= 180) {
+    return {
+      label: '仍在等待',
+      headline: '继续查询结果',
+      note: '也可以取消重来',
+      canRestart: true,
+    }
+  }
+  if (elapsedSeconds >= 90) {
+    return {
+      label: '线路较忙',
+      headline: '仍在生成',
+      note: '完成后自动展示',
+      canRestart: false,
+    }
+  }
+  if (requestedOutputCount > 1) {
+    return {
+      label: '逐张生成',
+      headline: `${requestedOutputCount} 张排队中`,
+      note: '按顺序返回',
+      canRestart: false,
+    }
+  }
+  return {
+    label: '正在生成',
+    headline: '等待服务端返回',
+    note: '完成后自动展示',
+    canRestart: false,
+  }
+}
 
 function TaskActionButton({
   tooltip,
@@ -59,66 +108,6 @@ function TaskActionButton({
   )
 }
 
-function getFailureDisplay(error: string | null, isInterrupted: boolean, failureKind?: ImageGatewayFailureKind) {
-  if (isInterrupted) {
-    return {
-      headline: '任务已停止',
-      summary: '这次生成已中止，没有产出新的图片结果。',
-      note: '可直接重试这组配置。',
-    }
-  }
-
-  const raw = (error || '').trim()
-  const requestIdMatch = raw.match(/请求编号[:：]\s*([A-Za-z0-9-]+)/i)
-  const requestId = requestIdMatch?.[1] || ''
-
-  let headline = ''
-  let summary = ''
-  if (failureKind === 'route_exhausted') {
-    headline = '生成服务暂时不可用'
-    summary = '当前生成服务额度不足，这次没有成功返回图片。'
-  } else if (failureKind === 'upstream_timeout') {
-    headline = '请求超时'
-    summary = '生成服务响应超时，这次没有成功返回图片。'
-  } else if (failureKind === 'upstream_rate_limited') {
-    headline = '生成服务繁忙'
-    summary = '当前生成服务繁忙或限流，这次没有成功返回图片。'
-  } else if (failureKind === 'upstream_bad_request') {
-    headline = '请求未通过'
-    summary = '这次生成请求未通过，请调整参数后再试。'
-  } else if (failureKind === 'upstream_auth_error') {
-    headline = '生成服务暂时不可用'
-    summary = '当前生成线路鉴权失败，这次没有成功返回图片。'
-  } else if (failureKind === 'content_policy_violation') {
-    headline = '内容未通过审核'
-    summary = '这次内容未通过生成服务审核，请调整提示词后再试。'
-  } else if (failureKind === 'unsupported_model') {
-    headline = '模型暂不可用'
-    summary = '当前生成线路暂不支持这个模型，这次没有成功返回图片。'
-  } else if (failureKind === 'parameter_incompatible') {
-    headline = '参数不兼容'
-    summary = '当前参数组合不被支持，请调整后再试。'
-  } else if (/insufficient account balance/i.test(raw)) {
-    headline = '生成服务暂时不可用'
-    summary = '当前生成服务额度不足，这次没有成功返回图片。'
-  } else if (/无效请求|invalid request/i.test(raw)) {
-    headline = '请求未通过'
-    summary = '这次生成请求未通过，请调整参数后再试。'
-  } else if (/timeout|超时/i.test(raw)) {
-    headline = '请求超时'
-    summary = '生成服务响应超时，这次没有成功返回图片。'
-  } else if (/rate limit|频率/i.test(raw)) {
-    headline = '生成服务繁忙'
-    summary = '当前生成服务繁忙或限流，这次没有成功返回图片。'
-  }
-
-  headline = headline || '未返回可用结果'
-  summary = summary || '这次生成没有成功返回图片，可以直接重试或调整参数后再试。'
-  const note = requestId ? `请求编号 ${requestId}` : '可直接重试，或调整参数后再试。'
-
-  return { headline, summary, note }
-}
-
 export default function TaskCard({
   task,
   onReuse,
@@ -139,6 +128,7 @@ export default function TaskCard({
   const [streamPreviewLoaded, setStreamPreviewLoaded] = useState(false)
   const toggleTaskSelection = useStore((s) => s.toggleTaskSelection)
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
+  const showToast = useStore((s) => s.showToast)
   const settings = useStore((s) => s.settings)
   const modelSkus = useStore((s) => s.modelSkus)
   const streamPreviewSrc = useStore((s) => s.streamPreviews[task.id] || '')
@@ -348,19 +338,14 @@ export default function TaskCard({
     }
   }, [task.outputImages])
 
-  const duration = (() => {
-    let seconds: number
+  const elapsedSeconds = (() => {
     if (task.status === 'running' || task.falRecoverable || task.customRecoverable) {
-      seconds = Math.floor((now - task.createdAt) / 1000)
-    } else if (task.elapsed != null) {
-      seconds = Math.floor(task.elapsed / 1000)
-    } else {
-      return '00:00'
+      return Math.floor((now - task.createdAt) / 1000)
     }
-    const mm = String(Math.floor(seconds / 60)).padStart(2, '0')
-    const ss = String(seconds % 60).padStart(2, '0')
-    return `${mm}:${ss}`
+    if (task.elapsed != null) return Math.floor(task.elapsed / 1000)
+    return null
   })()
+  const duration = formatDuration(elapsedSeconds)
   const showSwipeAction = swipeActionActive
   const isFalReconnecting = task.status === 'error' && task.falRecoverable
   const isCustomReconnecting = task.status === 'error' && task.customRecoverable
@@ -377,32 +362,52 @@ export default function TaskCard({
   const formatDisplay = getParamDisplay(task, 'output_format')
   const showFormat = task.params.output_format !== 'png' || formatDisplay.isMismatch
 
-  const nDisplay = getParamDisplay(task, 'n')
   const isAgentTask = task.sourceMode === 'agent' || Boolean(task.agentConversationId || task.agentRoundId)
   const showPendingPrompt = isAgentTaskPromptPending(task)
-  const showN = !isAgentTask && (task.params.n > 1 || nDisplay.isMismatch)
 
   const modelSku = task.modelSku ? getModelSku(task.modelSku, modelSkus) : null
   const displayProfileName = modelSku?.label ?? (task.modelSku ? '系统线路' : task.apiProfileName ?? task.apiProvider)
   const displayModelName = modelSku || task.modelSku ? '' : task.apiModel
   const defaultModelForProvider = task.apiProvider === 'fal' ? DEFAULT_FAL_MODEL : DEFAULT_IMAGES_MODEL
   const showModel = displayModelName && displayModelName !== defaultModelForProvider
-  const isInterrupted = task.status === 'error' && task.error === '已停止生成。'
+  const isInterrupted = task.status === 'error' && (task.error === STOPPED_GENERATION_MESSAGE || task.error === SERVER_IMAGE_INTERRUPTED_MESSAGE)
+  const interruptedLabel = task.error === SERVER_IMAGE_INTERRUPTED_MESSAGE ? '已刷新' : '已停止'
+  const requestedOutputCount = Math.min(Math.max(Math.trunc(task.params.n || 1), 1), 4)
+  const compactModelName = modelSku?.label ?? (task.modelSku ? displayProfileName : showModel ? displayModelName : displayProfileName)
   const compactParamParts = [
     showQuality ? `质量 ${qualityDisplay.displayValue}` : null,
-    showFormat ? `格式 ${formatDisplay.displayValue}` : null,
-    showN ? `数量 ${nDisplay.displayValue}` : null,
+    task.status === 'done' || showFormat ? formatDisplay.displayValue : null,
+    !isAgentTask ? `${requestedOutputCount}张` : null,
+    task.maskImageId ? '局部重绘' : null,
+    compactModelName,
   ].filter(Boolean)
-  const compactParamLine = compactParamParts.slice(0, 3).join(' · ')
+  const compactParamLine = compactParamParts.join(' · ')
   const isFailedCard = task.status === 'error' && !isFalReconnecting
   const showFavoriteAction = !isFailedCard
   const failureDisplay = getFailureDisplay(task.error, isInterrupted, task.gatewayFailureKind)
-  const requestedOutputCount = Math.min(Math.max(Math.trunc(task.params.n || 1), 1), 4)
   const outputPreviewIds = task.outputImages.slice(0, 4)
   const isMultiOutputTask = outputPreviewIds.length > 1
   const runningPreviewSlots = Array.from({ length: requestedOutputCount }, (_, index) => streamPreviewSlots[String(index)] || (index === 0 ? streamPreviewSrc : ''))
   const outputGridClass = outputPreviewIds.length === 2 ? 'is-two' : outputPreviewIds.length > 2 ? 'is-four' : 'is-one'
   const runningGridClass = requestedOutputCount === 2 ? 'is-two' : requestedOutputCount > 2 ? 'is-four' : 'is-one'
+  const runningDisplay = getRunningDisplay(elapsedSeconds ?? 0, requestedOutputCount)
+  const stopRunningTask = () => {
+    const finishedAt = Date.now()
+    void cancelServerTask(task)
+    updateTaskInStore(task.id, {
+      status: 'error',
+      error: STOPPED_GENERATION_MESSAGE,
+      falRecoverable: false,
+      customRecoverable: false,
+      finishedAt,
+      elapsed: Math.max(0, finishedAt - task.createdAt),
+    })
+    showToast('已停止等待，可重新生成', 'info')
+  }
+  const stopAndRetryTask = () => {
+    stopRunningTask()
+    retryTask(task)
+  }
 
   return (
     <div className="relative rounded-[1.45rem]">
@@ -497,27 +502,17 @@ export default function TaskCard({
                 )}
               </>
             ) : (
-              <div className="flex flex-col items-center gap-2">
-                <svg
-                  className="w-8 h-8 text-blue-400 animate-spin"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                >
-                  <circle
-                    className="opacity-25"
-                    cx="12"
-                    cy="12"
-                    r="10"
-                    stroke="currentColor"
-                    strokeWidth="4"
-                  />
-                  <path
-                    className="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                  />
-                </svg>
-                <span className="text-xs text-gray-400 dark:text-gray-500">生成中...</span>
+              <div className="task-generating-plate" aria-hidden="true">
+                <div className="task-generating-frame">
+                  <span />
+                  <span />
+                  <span />
+                </div>
+                <div className="task-generating-dots">
+                  <span />
+                  <span />
+                  <span />
+                </div>
               </div>
             )
           )}
@@ -529,15 +524,36 @@ export default function TaskCard({
                     <img src={previewSrc} className="h-full w-full object-cover" alt="" />
                   ) : (
                     <div className="task-output-placeholder">
-                      <svg className="w-5 h-5 text-cyan-400 animate-spin" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                      </svg>
+                      <div className="task-output-developing" aria-hidden="true">
+                        <span />
+                      </div>
                     </div>
                   )}
                   <span className="task-output-index">{index + 1}</span>
                 </div>
               ))}
+            </div>
+          )}
+          {task.status === 'running' && (
+            <div className={`task-running-overlay ${runningDisplay.canRestart ? 'is-actionable' : ''}`} onClick={(e) => e.stopPropagation()}>
+              <div className="task-running-copy">
+                <span className="task-running-label">{runningDisplay.label}</span>
+                <strong>{runningDisplay.headline}</strong>
+                <span>{runningDisplay.note}</span>
+              </div>
+              {runningDisplay.canRestart && (
+                <button
+                  type="button"
+                  className="task-running-retry"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    stopAndRetryTask()
+                  }}
+                >
+                  取消重来
+                </button>
+              )}
             </div>
           )}
           {task.status === 'error' && isFalReconnecting && (
@@ -563,7 +579,7 @@ export default function TaskCard({
           {task.status === 'error' && !isFalReconnecting && (
             <div className="task-failure-state px-3">
               <span className={`task-failure-pill ${isInterrupted ? 'is-interrupted' : ''}`}>
-                {isInterrupted ? '已停止' : '生成失败'}
+                {isInterrupted ? interruptedLabel : '生成失败'}
               </span>
               <svg
                 className={`w-7 h-7 ${isInterrupted ? 'text-yellow-500' : 'text-rose-500'}`}
@@ -693,45 +709,9 @@ export default function TaskCard({
         </div>
 
         <div className="prototype-result-body flex-1 p-3 flex flex-col min-w-0 bg-white/92 dark:bg-gray-900/92">
-          <div className="prototype-result-meta mb-3 flex items-center gap-1.5 min-h-[20px] flex-wrap">
-            {task.isFavorite && (
-              <span className="inline-flex items-center justify-center w-5 h-5 text-amber-500 dark:text-amber-400" title="已收藏">
-                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
-                </svg>
-              </span>
-            )}
-            {displayProfileName && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 dark:bg-white/[0.06] px-2.5 py-1 text-[10px] text-slate-600 dark:text-gray-300">
-                <CodeIcon className="w-3 h-3 flex-shrink-0" />
-                <span className="truncate max-w-[8rem]">{displayProfileName}</span>
-              </span>
-            )}
-            {showModel && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 dark:bg-white/[0.06] px-2.5 py-1 text-[10px] text-slate-600 dark:text-gray-300">
-                <span className="truncate max-w-[8rem]">{displayModelName}</span>
-              </span>
-            )}
-            <span
-              data-task-status-badge
-              data-task-status={task.status}
-              className={`inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-medium ${
-              task.status === 'done'
-                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300'
-                : task.status === 'running'
-                ? 'bg-cyan-50 text-cyan-700 dark:bg-cyan-500/10 dark:text-cyan-300'
-                : 'bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300'
-            }`}
-            >
-              {task.status === 'done' ? '已完成' : task.status === 'running' ? '生成中' : isInterrupted ? '已停止' : '失败'}
-            </span>
-            {task.maskImageId && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-cyan-50 px-2.5 py-1 text-[10px] text-cyan-700 dark:bg-cyan-500/10 dark:text-cyan-300">
-                局部重绘
-              </span>
-            )}
-          </div>
-
+          <span data-task-status-badge data-task-status={task.status} className="sr-only">
+            {task.status}
+          </span>
           <div className="prototype-result-copy flex-1 min-h-0 mb-3 overflow-hidden">
             {showPendingPrompt ? (
               <div className="leading-relaxed">
@@ -748,10 +728,10 @@ export default function TaskCard({
           </div>
 
           <div className="mt-auto flex flex-col gap-2">
-            {isFailedCard && (
+            {isFailedCard && failureDisplay.supportingDetail && (
               <div className="task-failure-note">
-                <strong>{failureDisplay.headline}</strong>
-                <span>{failureDisplay.note}</span>
+                <strong>错误信息</strong>
+                <span>{failureDisplay.supportingDetail}</span>
               </div>
             )}
             <div className="prototype-result-footer">

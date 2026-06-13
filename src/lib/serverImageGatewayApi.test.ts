@@ -43,4 +43,90 @@ describe('serverImageGatewayApi', () => {
       rawImageUrls: [rawUrl],
     })
   })
+
+  it('submits a server task and polls until it succeeds', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ok: true,
+        taskId: 'task-server-1',
+        status: 'queued',
+      }), {
+        status: 202,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ok: true,
+        taskId: 'task-server-1',
+        status: 'succeeded',
+        images: ['/api/generated-images/task-server-1/output-1.jpg'],
+        actualParams: { n: 1 },
+        revisedPrompts: [],
+        rawImageUrls: [],
+        modelSku: 'gpt-image-2-fast',
+        routeId: 'route-1',
+        upstreamModel: 'gpt-image-2',
+        attempts: [],
+        billing: { outputCount: 1, chargedPoints: 1, ledgerId: 'ledger-1' },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+
+    const onServerTaskSubmitted = vi.fn()
+    await expect(callServerImageGateway({
+      modelSku: 'gpt-image-2-fast',
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [],
+      onServerTaskSubmitted,
+    })).resolves.toMatchObject({
+      taskId: 'task-server-1',
+      images: ['/api/generated-images/task-server-1/output-1.jpg'],
+      billing: { chargedPoints: 1 },
+    })
+    expect(onServerTaskSubmitted).toHaveBeenCalledWith({ taskId: 'task-server-1' })
+  })
+
+  it('throws the task failure message after polling a failed server task', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ok: true,
+        taskId: 'task-server-failed',
+        status: 'queued',
+        requestId: 'imggw-task-failed',
+      }), {
+        status: 202,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ok: true,
+        taskId: 'task-server-failed',
+        status: 'failed',
+        images: [],
+        modelSku: 'gpt-image-2-fast',
+        routeId: '',
+        upstreamModel: 'gpt-image-2',
+        attempts: [],
+        billing: { outputCount: 0, chargedPoints: 0, ledgerId: null },
+        error: {
+          message: '生图线路请求失败',
+          requestId: 'imggw-task-failed',
+          failureKind: 'upstream_timeout',
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+
+    await expect(callServerImageGateway({
+      modelSku: 'gpt-image-2-fast',
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [],
+    })).rejects.toMatchObject({
+      message: '生图线路请求失败',
+      requestId: 'imggw-task-failed',
+      failureKind: 'upstream_timeout',
+    })
+  })
 })

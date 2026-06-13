@@ -4,10 +4,11 @@ import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useTooltip } from '../hooks/useTooltip'
 import { formatImageRatio } from '../lib/size'
-import { ActualValueBadge, DetailParamValue } from '../lib/paramDisplay'
+import { DetailParamValue } from '../lib/paramDisplay'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import { getModelSku } from '../lib/modelSkus'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
+import { getFailureDisplay, SERVER_IMAGE_INTERRUPTED_MESSAGE, STOPPED_GENERATION_MESSAGE } from '../lib/taskResultDisplay'
 import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
 import type { OwnerImageShare } from '../types'
 
@@ -39,6 +40,7 @@ export default function DetailModal() {
   const [showRawResponseModal, setShowRawResponseModal] = useState(false)
   const [streamPreviewLoaded, setStreamPreviewLoaded] = useState(false)
   const [promptExpanded, setPromptExpanded] = useState(false)
+  const [revisedPromptExpanded, setRevisedPromptExpanded] = useState(false)
   const [sharePanelOpen, setSharePanelOpen] = useState(false)
   const [shareAccessCode, setShareAccessCode] = useState('')
   const [shareExpiresAt, setShareExpiresAt] = useState('')
@@ -108,11 +110,16 @@ export default function DetailModal() {
   useEffect(() => {
     setImageIndex(0)
     setPromptExpanded(false)
+    setRevisedPromptExpanded(false)
     setSharePanelOpen(false)
     setShareAccessCode('')
     setShareExpiresAt('')
     setShareError('')
   }, [detailTaskId])
+
+  useEffect(() => {
+    setRevisedPromptExpanded(false)
+  }, [detailTaskId, imageIndex])
 
   useEffect(() => {
     if (detailTaskId && (!account.isLoggedIn || !task)) {
@@ -224,6 +231,7 @@ export default function DetailModal() {
       cancelled = true
     }
   }, [authSessionToken, currentOutputImageId, currentServerOutput?.outputId, sharesByImageId])
+
   useEffect(() => {
     let cancelled = false
     setMaskPreviewSrc('')
@@ -254,8 +262,9 @@ export default function DetailModal() {
   const currentImageRatio = currentOutputImageId ? imageRatios[currentOutputImageId] : ''
   const currentImageSize = currentOutputImageId ? imageSizes[currentOutputImageId] : ''
   const currentActualParams = currentOutputImageId ? task.actualParamsByImage?.[currentOutputImageId] : undefined
-  const currentRevisedPrompt = currentOutputImageId ? task.revisedPromptByImage?.[currentOutputImageId]?.trim() : ''
+  const currentRevisedPrompt = currentOutputImageId ? task.revisedPromptByImage?.[currentOutputImageId]?.trim() ?? '' : ''
   const showRevisedPrompt = Boolean(currentRevisedPrompt && currentRevisedPrompt !== task.prompt.trim())
+  const shouldCollapseRevisedPrompt = currentRevisedPrompt.length > 180 || currentRevisedPrompt.split(/\r?\n/).length > 3
   const shouldCollapsePrompt = task.prompt.trim().length > 520 || task.prompt.split(/\r?\n/).length > 10
   const codexCliPromptKey = getCodexCliPromptKey(settings)
   const hasHandledPromptWarning = settings.codexCli || dismissedCodexCliPrompts.includes(codexCliPromptKey)
@@ -270,6 +279,13 @@ export default function DetailModal() {
   const showSourceInfo = Boolean(task.modelSku || task.apiProvider || task.apiProfileName || task.apiModel)
   const isFalReconnecting = task.status === 'error' && task.falRecoverable
   const isCustomReconnecting = task.status === 'error' && task.customRecoverable
+  const isInterruptedFailure = task.status === 'error' && (
+    task.error === STOPPED_GENERATION_MESSAGE ||
+    task.error === SERVER_IMAGE_INTERRUPTED_MESSAGE
+  )
+  const failureDisplay = task.status === 'error'
+    ? getFailureDisplay(task.error, isInterruptedFailure, task.gatewayFailureKind)
+    : null
   const rawImageUrls = task.rawImageUrls ?? []
   const streamPreviewLen = streamPreviewItems.length
   const currentStreamPreviewSrc = activeStreamPreviewSrc
@@ -424,6 +440,7 @@ export default function DetailModal() {
     retryTask(task)
     setDetailTaskId(null)
   }
+
   const getAbsoluteShareUrl = (share: OwnerImageShare) => {
     try {
       return new URL(share.shareUrlPath, window.location.origin).toString()
@@ -487,6 +504,7 @@ export default function DetailModal() {
       setShareBusy(false)
     }
   }
+
   return (
     <div
       data-no-drag-select
@@ -704,16 +722,20 @@ export default function DetailModal() {
               <svg className="w-10 h-10 text-red-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-              <p
-                className="overflow-hidden whitespace-pre-line text-sm leading-6 text-red-500 break-words"
+              <div
+                className="overflow-hidden text-sm leading-6 text-red-500 break-words"
                 style={{
                   display: '-webkit-box',
                   WebkitBoxOrient: 'vertical',
                   WebkitLineClamp: 10,
                 }}
               >
-                {task.error || '生成失败'}
-              </p>
+                <strong className="block text-base font-semibold">{failureDisplay?.headline ?? '生成失败'}</strong>
+                <span className="mt-1 block text-red-500/90">{failureDisplay?.summary ?? task.error ?? '生成失败'}</span>
+                {failureDisplay?.supportingDetail && (
+                  <span className="mt-1 block text-xs text-red-400">{failureDisplay.supportingDetail}</span>
+                )}
+              </div>
               <div className="mt-3 flex items-center justify-center gap-2">
                 <div className="relative group">
                   <button
@@ -893,11 +915,29 @@ export default function DetailModal() {
               </div>
             )}
             {showRevisedPrompt && currentRevisedPrompt && (
-              <div className="mb-4">
-                <ActualValueBadge
-                  value={currentRevisedPrompt}
-                  className="max-w-full rounded px-2 py-1 text-left text-xs leading-relaxed whitespace-pre-wrap"
-                />
+              <div className="mb-4 rounded-lg bg-yellow-50 px-3 py-2 text-yellow-900 ring-1 ring-yellow-100 dark:bg-yellow-500/10 dark:text-yellow-200 dark:ring-yellow-500/20">
+                <div className="mb-1 flex items-center justify-between gap-3">
+                  <span className="text-[11px] font-medium text-yellow-700 dark:text-yellow-300">接口改写提示词</span>
+                  {shouldCollapseRevisedPrompt && (
+                    <button
+                      type="button"
+                      onClick={() => setRevisedPromptExpanded((current) => !current)}
+                      className="shrink-0 text-[11px] font-medium text-yellow-700 transition hover:text-yellow-900 dark:text-yellow-300 dark:hover:text-yellow-100"
+                    >
+                      {revisedPromptExpanded ? '收起' : '展开'}
+                    </button>
+                  )}
+                </div>
+                <div className="relative">
+                  <p className={`text-xs leading-relaxed whitespace-pre-wrap ${
+                    shouldCollapseRevisedPrompt && !revisedPromptExpanded ? 'max-h-[4.7rem] overflow-hidden' : ''
+                  }`}>
+                    {currentRevisedPrompt}
+                  </p>
+                  {shouldCollapseRevisedPrompt && !revisedPromptExpanded && (
+                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-b from-yellow-50/0 to-yellow-50 dark:to-[#28220b]" />
+                  )}
+                </div>
               </div>
             )}
 
@@ -1018,6 +1058,7 @@ export default function DetailModal() {
               <span>创建于 {formatTime(task.createdAt)}</span>
               {formatDuration() && <span> · 耗时 {formatDuration()}</span>}
             </div>
+
             {task.status === 'done' && outputLen > 0 && (
               <div className="mb-4 rounded-xl border border-sky-100 bg-sky-50/70 p-3 text-xs dark:border-sky-400/15 dark:bg-sky-400/10">
                 <div className="mb-2 flex items-center justify-between gap-3">

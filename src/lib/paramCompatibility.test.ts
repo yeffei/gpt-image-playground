@@ -51,7 +51,7 @@ describe('parameter compatibility', () => {
     expect(normalizeParamsForSettings({ ...DEFAULT_PARAMS, size: 'auto' }, settings, { hasInputImages: true }).size).toBe('auto')
   })
 
-  it('keeps balanced defaults for OpenAI-compatible image generation', () => {
+  it('keeps platform defaults for OpenAI-compatible image generation', () => {
     const openAIProfile = createDefaultOpenAIProfile({ apiKey: 'test-key', streamImages: true })
     const settings = normalizeSettings({
       ...DEFAULT_SETTINGS,
@@ -62,7 +62,7 @@ describe('parameter compatibility', () => {
     const normalized = normalizeParamsForSettings({ ...DEFAULT_PARAMS }, settings)
     expect(normalized).toMatchObject({
       size: '1024x1024',
-      quality: 'medium',
+      quality: 'auto',
       output_format: 'jpeg',
       output_compression: 90,
       moderation: 'low',

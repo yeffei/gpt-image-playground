@@ -77,6 +77,7 @@ export interface PlatformCapabilities {
         revokeSupported: boolean
       }
 }
+
 export interface BackendRoute {
   id: string
   name: string
@@ -108,6 +109,17 @@ export interface ImageGatewayAttempt {
   failureKind?: ImageGatewayFailureKind
 }
 
+export interface ServerPersistedImageOutput {
+  id: string
+  taskId: string
+  outputIndex: number
+  url?: string
+  storageProvider?: string
+  storageKey?: string
+  mimeType?: string
+  byteSize?: number
+}
+
 export interface OwnerImageShare {
   id: string
   token: string
@@ -135,6 +147,7 @@ export interface PublicImageShare {
   }
   createdAt: string
 }
+
 export type ImageGatewayFailureKind =
   | 'no_route'
   | 'route_exhausted'
@@ -447,7 +460,7 @@ export interface TaskParams {
 
 export const DEFAULT_PARAMS: TaskParams = {
   size: '1024x1024',
-  quality: 'medium',
+  quality: 'auto',
   output_format: 'jpeg',
   output_compression: 90,
   moderation: 'low',
@@ -503,6 +516,8 @@ export interface TaskRecord {
   customTaskId?: string
   /** 自定义异步任务是否等待自动恢复 */
   customRecoverable?: boolean
+  /** 服务端生图任务 ID，用于轮询、取消和恢复 */
+  serverImageTaskId?: string
   /** API 返回的实际生效参数，用于标记与请求值不一致的情况 */
   actualParams?: Partial<TaskParams>
   /** 输出图片对应的实际生效参数，key 为 outputImages 中的图片 id */

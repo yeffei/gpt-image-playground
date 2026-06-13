@@ -29,7 +29,9 @@ import type {
   ResponsesOutputItem,
   WorkbenchAccessState,
   WorkbenchReturnContext,
+  ImageGatewayFailureKind,
   ModelSku,
+  ServerPersistedImageOutput,
 } from './types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
 import type { PromptTemplateItem } from './lib/promptLibrary'
@@ -91,9 +93,24 @@ const agentRoundControllers = new Map<string, AbortController>()
 let agentConversationPersistenceReady = false
 let agentConversationMigrationPending = false
 const OPENAI_INTERRUPTED_ERROR = '请求中断'
+const SERVER_IMAGE_INTERRUPTED_ERROR = '页面已刷新或连接中断，生成状态无法继续跟踪。'
 const AGENT_STOPPED_MESSAGE = '已停止生成。'
 const AGENT_CONVERSATION_TITLE_MAX_LENGTH = 28
 const ERROR_TOAST_MAX_LENGTH = 80
+const IMAGE_GATEWAY_FAILURE_KINDS = new Set<ImageGatewayFailureKind>([
+  'no_route',
+  'route_exhausted',
+  'upstream_timeout',
+  'upstream_rate_limited',
+  'upstream_server_error',
+  'upstream_bad_request',
+  'upstream_auth_error',
+  'content_policy_violation',
+  'unsupported_model',
+  'parameter_incompatible',
+  'network',
+  'unknown',
+])
 type ToastType = 'info' | 'success' | 'error'
 type AgentInputDraft = {
   prompt: string
@@ -312,20 +329,10 @@ function normalizeSelectedRechargePaymentMethod(
   return fallback === 'alipay' ? 'alipay' : 'wechat'
 }
 
-function getBillingUnitPoints(params: Pick<TaskParams, 'size' | 'quality'>) {
+function getBillingUnitPoints(params: Pick<TaskParams, 'size'>) {
   const sizeTier = getSizeTier(params.size)
-  if (sizeTier === '4K') {
-    if (params.quality === 'high') return 6
-    if (params.quality === 'medium') return 5
-    return 4
-  }
-  if (sizeTier === '2K') {
-    if (params.quality === 'high') return 4
-    if (params.quality === 'medium') return 3
-    return 2
-  }
-  if (params.quality === 'high') return 3
-  if (params.quality === 'medium') return 2
+  if (sizeTier === '4K') return 6
+  if (sizeTier === '2K') return 3
   return 1
 }
 
@@ -340,7 +347,7 @@ export function estimateBillingPoints(params: Pick<TaskParams, 'size' | 'quality
   }
 }
 
-function getLocalUsageCharge(params: Pick<TaskParams, 'size' | 'quality'>, outputCount: number) {
+function getLocalUsageCharge(params: Pick<TaskParams, 'size'>, outputCount: number) {
   const unit = getBillingUnitPoints(params)
   return normalizeMoney(unit * Math.max(1, outputCount))
 }
@@ -588,6 +595,24 @@ async function storeGeneratedImageForTask(image: string) {
   return { imgId, dataUrl }
 }
 
+function mapServerOutputsByImageId(
+  imageIds: string[],
+  persistedImages?: ServerPersistedImageOutput[],
+): TaskRecord['serverOutputByImageId'] | undefined {
+  if (!persistedImages?.length) return undefined
+  const refs: NonNullable<TaskRecord['serverOutputByImageId']> = {}
+  for (const output of persistedImages) {
+    const imageId = imageIds[output.outputIndex]
+    if (!imageId || !output.id) continue
+    refs[imageId] = {
+      outputId: output.id,
+      taskId: output.taskId,
+      outputIndex: output.outputIndex,
+    }
+  }
+  return Object.keys(refs).length > 0 ? refs : undefined
+}
+
 async function recordAgentCompletedImageTask(input: {
   taskId: string
   prompt: string
@@ -627,10 +652,23 @@ async function recordAgentCompletedImageTask(input: {
       outputCount: result.outputCount,
       chargedPoints: result.chargedPoints,
       ledgerId: result.ledgerId,
+      persistedImages: result.persistedImages,
     }
   } catch (error) {
     console.warn('记录对话生图任务失败', error)
     return null
+  }
+}
+
+export async function cancelServerTask(task: TaskRecord) {
+  if (!task.serverImageTaskId || !isServerImageGatewayEnabled()) return
+  const state = useStore.getState()
+  if (!state.authSessionToken) return
+  try {
+    const { cancelServerImageTask } = await import('./lib/serverImageGatewayApi')
+    await cancelServerImageTask(task.serverImageTaskId, state.authSessionToken)
+  } catch (err) {
+    console.warn('cancel server image task failed', err)
   }
 }
 
@@ -2852,8 +2890,9 @@ export function markInterruptedOpenAIRunningTasks(tasks: TaskRecord[], now = Dat
     const updated: TaskRecord = {
       ...task,
       status: 'error',
-      error: OPENAI_INTERRUPTED_ERROR,
+      error: task.serverImageTaskId ? SERVER_IMAGE_INTERRUPTED_ERROR : OPENAI_INTERRUPTED_ERROR,
       falRecoverable: false,
+      customRecoverable: false,
       finishedAt: now,
       elapsed: Math.max(0, now - task.createdAt),
     }
@@ -3034,8 +3073,11 @@ function getGatewayErrorPublicInfo(err: unknown): Pick<Partial<TaskRecord>, 'gat
   const requestId = 'requestId' in err && typeof (err as { requestId?: unknown }).requestId === 'string'
     ? (err as { requestId: string }).requestId
     : undefined
-  const gatewayFailureKind = 'failureKind' in err && typeof (err as { failureKind?: unknown }).failureKind === 'string'
-    ? (err as { failureKind: TaskRecord['gatewayFailureKind'] }).failureKind
+  const rawFailureKind = 'failureKind' in err && typeof (err as { failureKind?: unknown }).failureKind === 'string'
+    ? (err as { failureKind: string }).failureKind
+    : undefined
+  const gatewayFailureKind = rawFailureKind && IMAGE_GATEWAY_FAILURE_KINDS.has(rawFailureKind as ImageGatewayFailureKind)
+    ? rawFailureKind as ImageGatewayFailureKind
     : undefined
 
   return {
@@ -4630,9 +4672,11 @@ async function executeAgentRound(
         revisedPrompts: image.revisedPrompt ? [image.revisedPrompt] : undefined,
         mode: image.action === 'edit' ? 'agent_edit' : 'agent',
       })
+      const serverOutputByImageId = mapServerOutputsByImageId([imgId], serverBilling?.persistedImages)
       updateTaskInStore(taskId, {
         prompt,
         outputImages: [imgId],
+        ...(serverOutputByImageId ? { serverOutputByImageId } : {}),
         actualParams,
         actualParamsByImage: { [imgId]: actualParams },
         revisedPromptByImage: image.revisedPrompt ? { [imgId]: image.revisedPrompt } : undefined,
@@ -4931,6 +4975,7 @@ async function executeAgentRound(
           revisedPrompts: image.revisedPrompt ? [image.revisedPrompt] : undefined,
           mode: image.action === 'edit' ? 'agent_edit' : 'agent',
         })
+        const serverOutputByImageId = mapServerOutputsByImageId([imgId], serverBilling?.persistedImages)
         const task: TaskRecord = {
           id: taskId,
           ownerUserId: getCurrentOwnerUserId(),
@@ -4945,6 +4990,7 @@ async function executeAgentRound(
           maskTargetImageId: round?.maskTargetImageId ?? null,
           maskImageId: round?.maskImageId ?? null,
           outputImages: [imgId],
+          ...(serverOutputByImageId ? { serverOutputByImageId } : {}),
           actualParams,
           actualParamsByImage: { [imgId]: actualParams },
           revisedPromptByImage: image.revisedPrompt ? { [imgId]: image.revisedPrompt } : undefined,
@@ -5218,6 +5264,9 @@ async function executeTask(taskId: string) {
           useStore.getState().setTaskStreamPreview(taskId, partial.image, partial.requestIndex)
           void persistTaskStreamPartialImage(taskId, partial.image)
         },
+        onServerTaskSubmitted: (serverTask: { taskId: string }) => {
+          updateTaskInStore(taskId, { serverImageTaskId: serverTask.taskId })
+        },
       }
 
       if (preferServerGateway) {
@@ -5337,6 +5386,7 @@ async function executeTask(taskId: string) {
     const finishedAt = Date.now()
     updateTaskInStore(taskId, {
       outputImages: outputIds,
+      serverOutputByImageId: mapServerOutputsByImageId(outputIds, (result as ImageGatewayResult).persistedImages),
       streamPartialImageIds: undefined,
       rawImageUrls: result.rawImageUrls?.length ? result.rawImageUrls : undefined,
       actualParams,
@@ -5380,6 +5430,7 @@ async function executeTask(taskId: string) {
     const latestTask = useStore.getState().tasks.find((t) => t.id === taskId) ?? task
     if (latestTask.status !== 'running') return
     useStore.getState().setTaskStreamPreview(taskId)
+    const gatewayInfo = getGatewayErrorPublicInfo(err)
     const latestFalRequestInfo = falRequestInfo ?? (latestTask.falRequestId && latestTask.falEndpoint
       ? { requestId: latestTask.falRequestId, endpoint: latestTask.falEndpoint }
       : null)
@@ -5405,9 +5456,18 @@ async function executeTask(taskId: string) {
         elapsed: Date.now() - task.createdAt,
       })
       scheduleCustomRecovery(taskId)
+    } else if (latestTask.serverImageTaskId && !gatewayInfo.gatewayFailureKind && !gatewayInfo.requestId) {
+      updateTaskInStore(taskId, {
+        status: 'error',
+        error: SERVER_IMAGE_INTERRUPTED_ERROR,
+        gatewayFailureKind: undefined,
+        falRecoverable: false,
+        customRecoverable: false,
+        finishedAt: Date.now(),
+        elapsed: Date.now() - task.createdAt,
+      })
     } else {
       let errorMessage = err instanceof Error ? err.message : String(err)
-      const gatewayInfo = getGatewayErrorPublicInfo(err)
       const settings = useStore.getState().settings
       const profile = getTaskApiProfile(settings, latestTask)
       const usesApiProxy = profile?.apiProxy ?? settings.apiProxy

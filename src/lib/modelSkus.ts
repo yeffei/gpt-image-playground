@@ -15,7 +15,7 @@ export const MODEL_SKUS: ModelSku[] = [
     routeIds: [],
     defaultParams: { ...DEFAULT_PARAMS },
     supportedSizes: [ANY_NORMALIZED_SIZE],
-    supportedQualities: ['low', 'medium', 'high'],
+    supportedQualities: ['auto'],
     supportsEdit: true,
     supportsMask: true,
     maxOutputCount: 4,
@@ -26,9 +26,9 @@ export const MODEL_SKUS: ModelSku[] = [
     description: '优先画质，适合最终稿和精修图。',
     enabled: true,
     routeIds: [],
-    defaultParams: { ...DEFAULT_PARAMS, quality: 'high', output_compression: null, output_format: 'png' },
+    defaultParams: { ...DEFAULT_PARAMS, output_compression: null, output_format: 'png' },
     supportedSizes: [ANY_NORMALIZED_SIZE],
-    supportedQualities: ['medium', 'high'],
+    supportedQualities: ['auto'],
     supportsEdit: true,
     supportsMask: true,
     maxOutputCount: 4,
@@ -75,15 +75,6 @@ export function normalizeParamsForModelSku(
     }
   }
 
-  const supportsAnyQuality = modelSku.supportedQualities.includes(ANY_QUALITY)
-  const defaultQuality = supportsAnyQuality || modelSku.supportedQualities.includes(modelSku.defaultParams.quality)
-    ? modelSku.defaultParams.quality
-    : (modelSku.supportedQualities.find((quality): quality is TaskParams['quality'] => quality !== ANY_QUALITY) ?? DEFAULT_PARAMS.quality)
-  const quality = params.quality === DEFAULT_PARAMS.quality
-    ? defaultQuality
-    : supportsAnyQuality || modelSku.supportedQualities.includes(params.quality)
-      ? params.quality
-      : defaultQuality
   const outputFormat = params.output_format === DEFAULT_PARAMS.output_format
     ? modelSku.defaultParams.output_format
     : params.output_format
@@ -94,7 +85,7 @@ export function normalizeParamsForModelSku(
   return {
     ...params,
     size: normalizedSize,
-    quality,
+    quality: 'auto',
     output_format: outputFormat,
     output_compression: outputFormat === 'png' ? null : outputCompression,
     n: Math.min(4, Math.max(1, params.n || modelSku.defaultParams.n || DEFAULT_PARAMS.n)),

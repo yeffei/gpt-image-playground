@@ -51,6 +51,7 @@ interface ModelRouteBindingRow {
   weight: number
   timeout_seconds: number
   enabled: boolean
+  route_enabled?: boolean
   created_at: string
   updated_at: string
   consecutive_failures?: number
@@ -174,7 +175,9 @@ function serializeModel(row: ModelSkuRow) {
 function serializeBinding(row: ModelRouteBindingRow) {
   const consecutiveFailures = Number(row.consecutive_failures ?? 0)
   const cooldownActive = isFutureIso(row.cooldown_until)
-  const healthStatus = !row.enabled ? 'disabled' : cooldownActive ? 'cooling' : consecutiveFailures > 0 ? 'degraded' : 'healthy'
+  const routeEnabled = row.route_enabled ?? true
+  const effectiveEnabled = row.enabled && routeEnabled
+  const healthStatus = !effectiveEnabled ? 'disabled' : cooldownActive ? 'cooling' : consecutiveFailures > 0 ? 'degraded' : 'healthy'
   return {
     id: row.id,
     modelSkuId: row.model_sku_id,
@@ -186,7 +189,9 @@ function serializeBinding(row: ModelRouteBindingRow) {
     priority: row.priority,
     weight: row.weight,
     timeoutSeconds: row.timeout_seconds,
-    enabled: row.enabled,
+    enabled: effectiveEnabled,
+    bindingEnabled: row.enabled,
+    routeEnabled,
     healthStatus,
     cooldownActive,
     cooldownUntil: row.cooldown_until ?? null,
@@ -278,7 +283,7 @@ async function getBinding(db: Db, id: string) {
   return (await db.query<ModelRouteBindingRow>(`
     SELECT b.id, b.model_sku_id, m.name AS model_name, m.display_name AS model_display_name,
       b.route_id, r.name AS route_name, b.upstream_model, b.priority, b.weight,
-      b.timeout_seconds, b.enabled, b.created_at::text, b.updated_at::text,
+      b.timeout_seconds, b.enabled, r.enabled AS route_enabled, b.created_at::text, b.updated_at::text,
       COALESCE(h.consecutive_failures, 0) AS consecutive_failures,
       h.last_success_at::text, h.last_failure_at::text, h.last_failure_kind, h.last_error,
       h.cooldown_until::text
@@ -632,7 +637,7 @@ export function registerGatewayModelRoutes(app: FastifyInstance, db: Db) {
       const result = await db.query<ModelRouteBindingRow>(`
         SELECT b.id, b.model_sku_id, m.name AS model_name, m.display_name AS model_display_name,
           b.route_id, r.name AS route_name, b.upstream_model, b.priority, b.weight,
-          b.timeout_seconds, b.enabled, b.created_at::text, b.updated_at::text,
+          b.timeout_seconds, b.enabled, r.enabled AS route_enabled, b.created_at::text, b.updated_at::text,
           COALESCE(h.consecutive_failures, 0) AS consecutive_failures,
           h.last_success_at::text, h.last_failure_at::text, h.last_failure_kind, h.last_error,
           h.cooldown_until::text

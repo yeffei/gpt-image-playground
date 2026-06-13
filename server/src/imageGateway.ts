@@ -11,6 +11,9 @@ import { requireUserSession } from './userAuth.js'
 const DEFAULT_MODEL_SKU = 'gpt-image-2-fast'
 const MAX_OUTPUT_COUNT = 4
 const MAX_OUTPUT_SLOT_RETRY_ROUNDS = 2
+const UPSTREAM_OUTPUT_COUNT_PER_REQUEST = 1
+const TASK_ABORT_REASON_CANCELLED = 'task_cancelled'
+const activeGenerationTaskControllers = new Map<string, AbortController>()
 
 type TaskParams = {
   size?: string
@@ -75,6 +78,8 @@ type BillingReservation = {
   billingBasis: GenerationBillingBasis
 }
 
+type GenerationTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout'
+
 type GatewayAttempt = {
   routeId: string
   upstreamModel: string
@@ -93,7 +98,7 @@ type PartialGenerationInfo = {
 }
 
 type SizeTier = '1K' | '2K' | '4K'
-type BillingQuality = 'low' | 'medium' | 'high'
+type BillingQuality = 'auto'
 type GatewayFailureKind =
   | 'no_route'
   | 'route_exhausted'
@@ -114,6 +119,15 @@ type GenerationBillingBasis = {
   unitPoints: number
 }
 
+type UpstreamRequestCompatibilityPatch = Partial<TaskParams> & {
+  omitQuality?: boolean
+  omitModeration?: boolean
+  omitOutputCompression?: boolean
+  omitOutputFormat?: boolean
+  omitResponseFormat?: boolean
+  omitN?: boolean
+}
+
 type PersistedOutput = StoredImageOutput & {
   id: string
   taskId: string
@@ -121,6 +135,19 @@ type PersistedOutput = StoredImageOutput & {
   outputIndex: number
   revisedPrompt?: string
   rawSourceUrl?: string
+}
+
+function serializePersistedOutput(output: PersistedOutput) {
+  return {
+    id: output.id,
+    taskId: output.taskId,
+    outputIndex: output.outputIndex,
+    url: output.publicUrl,
+    storageProvider: output.storageProvider,
+    storageKey: output.storageKey,
+    mimeType: output.mimeType,
+    byteSize: output.byteSize,
+  }
 }
 
 class UpstreamRequestError extends Error {
@@ -167,6 +194,39 @@ function nowIso() {
   return new Date().toISOString()
 }
 
+function getTaskAbortError(reason: string) {
+  const error = new Error(reason)
+  error.name = 'AbortError'
+  return error
+}
+
+function registerGenerationTaskController(taskId: string, controller: AbortController) {
+  activeGenerationTaskControllers.set(taskId, controller)
+}
+
+function clearGenerationTaskController(taskId: string, controller?: AbortController) {
+  if (!controller) {
+    activeGenerationTaskControllers.delete(taskId)
+    return
+  }
+  if (activeGenerationTaskControllers.get(taskId) === controller) {
+    activeGenerationTaskControllers.delete(taskId)
+  }
+}
+
+function abortGenerationTaskController(taskId: string, reason = TASK_ABORT_REASON_CANCELLED) {
+  const controller = activeGenerationTaskControllers.get(taskId)
+  if (!controller || controller.signal.aborted) return false
+  controller.abort(getTaskAbortError(reason))
+  return true
+}
+
+function isTaskAbortError(error: unknown, reason?: string) {
+  if (!(error instanceof Error) || error.name !== 'AbortError') return false
+  if (!reason) return true
+  return error.message === reason || error.cause === reason
+}
+
 function addSeconds(date: Date, seconds: number) {
   return new Date(date.getTime() + seconds * 1000).toISOString()
 }
@@ -206,23 +266,12 @@ function normalizeSizeTier(size: unknown): SizeTier {
 }
 
 function normalizeBillingQuality(quality: unknown): BillingQuality {
-  if (quality === 'medium' || quality === 'high') return quality
-  return 'low'
+  return 'auto'
 }
 
-function getBillingUnitPoints(sizeTier: SizeTier, quality: BillingQuality) {
-  if (sizeTier === '4K') {
-    if (quality === 'high') return 6
-    if (quality === 'medium') return 5
-    return 4
-  }
-  if (sizeTier === '2K') {
-    if (quality === 'high') return 4
-    if (quality === 'medium') return 3
-    return 2
-  }
-  if (quality === 'high') return 3
-  if (quality === 'medium') return 2
+function getBillingUnitPoints(sizeTier: SizeTier) {
+  if (sizeTier === '4K') return 6
+  if (sizeTier === '2K') return 3
   return 1
 }
 
@@ -232,7 +281,7 @@ function getGenerationBillingBasis(params?: TaskParams): GenerationBillingBasis 
   return {
     sizeTier,
     quality,
-    unitPoints: getBillingUnitPoints(sizeTier, quality),
+    unitPoints: getBillingUnitPoints(sizeTier),
   }
 }
 
@@ -260,7 +309,7 @@ function normalizeUpstreamParams(params: TaskParams | undefined, patch: Partial<
       ? patch.quality
       : typeof params?.quality === 'string'
         ? params.quality
-        : 'medium',
+        : 'auto',
     output_format: outputFormat,
     output_compression: typeof patch.output_compression === 'number' || patch.output_compression === null
       ? patch.output_compression
@@ -287,6 +336,57 @@ function buildPrompt(input: GatewayRequest) {
   const prompt = input.prompt?.trim() ?? ''
   const negativePrompt = input.negativePrompt?.trim()
   return negativePrompt ? `${prompt}\n\n请避免：${negativePrompt}` : prompt
+}
+
+function getUpstreamCompatibilityPatch(error: unknown): UpstreamRequestCompatibilityPatch | null {
+  const message = getErrorMessage(error)
+  if (!message || classifyGatewayFailure(error) !== 'parameter_incompatible') return null
+
+  const normalized = message.toLowerCase()
+  if (
+    normalized.includes("unknown parameter: 'tools[0].n'") ||
+    normalized.includes('unknown parameter: "tools[0].n"') ||
+    normalized.includes('unsupported parameter: n') ||
+    normalized.includes("unknown parameter: 'n'") ||
+    normalized.includes('unknown parameter: "n"')
+  ) {
+    return { omitN: true, n: 1 }
+  }
+  if (normalized.includes('unsupported parameter: quality') || normalized.includes('unknown parameter: quality')) {
+    return { omitQuality: true }
+  }
+  if (normalized.includes('unsupported parameter: moderation') || normalized.includes('unknown parameter: moderation')) {
+    return { omitModeration: true }
+  }
+  if (
+    normalized.includes('unsupported parameter: output_compression') ||
+    normalized.includes('unknown parameter: output_compression')
+  ) {
+    return { omitOutputCompression: true, output_compression: null }
+  }
+  if (normalized.includes('unsupported parameter: output_format') || normalized.includes('unknown parameter: output_format')) {
+    return { omitOutputFormat: true }
+  }
+  if (normalized.includes('unsupported parameter: response_format') || normalized.includes('unknown parameter: response_format')) {
+    return { omitResponseFormat: true }
+  }
+  return null
+}
+
+function mergeCompatibilityPatch(
+  current: UpstreamRequestCompatibilityPatch | null,
+  next: UpstreamRequestCompatibilityPatch,
+): UpstreamRequestCompatibilityPatch {
+  return {
+    ...(current ?? {}),
+    ...next,
+    omitQuality: Boolean(current?.omitQuality || next.omitQuality),
+    omitModeration: Boolean(current?.omitModeration || next.omitModeration),
+    omitOutputCompression: Boolean(current?.omitOutputCompression || next.omitOutputCompression),
+    omitOutputFormat: Boolean(current?.omitOutputFormat || next.omitOutputFormat),
+    omitResponseFormat: Boolean(current?.omitResponseFormat || next.omitResponseFormat),
+    omitN: Boolean(current?.omitN || next.omitN),
+  }
 }
 
 function appendPath(baseUrl: string, path: string) {
@@ -385,7 +485,7 @@ function serializePublicModel(row: ModelRow, routeIds: string[]) {
     routeIds,
     defaultParams: {
       size: '1024x1024',
-      quality: 'medium',
+      quality: 'auto',
       output_format: 'jpeg',
       output_compression: 90,
       moderation: 'low',
@@ -590,15 +690,29 @@ async function recordRouteFailure(db: Db, input: {
   ])
 }
 
-async function callUpstream(route: RuntimeRouteRow, input: GatewayRequest) {
-  const params = normalizeUpstreamParams(input.params)
+async function callUpstream(route: RuntimeRouteRow, input: GatewayRequest, externalSignal?: AbortSignal) {
+  const params = normalizeUpstreamParams(input.params, { n: UPSTREAM_OUTPUT_COUNT_PER_REQUEST })
   const inputImages = Array.isArray(input.inputImageDataUrls) ? input.inputImageDataUrls.filter(Boolean) : []
   const upstreamModel = route.upstream_model || route.default_upstream_model || route.model_name || DEFAULT_MODEL_SKU
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), Math.max(1, route.timeout_seconds) * 1000)
+  const timeout = setTimeout(() => controller.abort(getTaskAbortError('upstream_timeout')), Math.max(1, route.timeout_seconds) * 1000)
+  const relayExternalAbort = () => {
+    const reason = externalSignal?.reason
+    if (reason instanceof Error) {
+      controller.abort(reason)
+      return
+    }
+    controller.abort(getTaskAbortError(typeof reason === 'string' && reason ? reason : TASK_ABORT_REASON_CANCELLED))
+  }
+  if (externalSignal?.aborted) relayExternalAbort()
+  externalSignal?.addEventListener('abort', relayExternalAbort, { once: true })
 
   try {
-    const requestOnce = async (effectiveParams: TaskParams) => {
+    const requestOnce = async (
+      effectiveParams: TaskParams,
+      compatibilityPatch: UpstreamRequestCompatibilityPatch | null = null,
+    ) => {
+      const effectiveOutputCount = UPSTREAM_OUTPUT_COUNT_PER_REQUEST
       const effectiveOutputFormat = effectiveParams.output_format
       const effectiveFallbackMime = effectiveOutputFormat === 'png'
         ? 'image/png'
@@ -611,12 +725,14 @@ async function callUpstream(route: RuntimeRouteRow, input: GatewayRequest) {
         form.set('model', upstreamModel)
         form.set('prompt', buildPrompt(input))
         form.set('size', effectiveParams.size)
-        form.set('quality', effectiveParams.quality)
-        form.set('output_format', effectiveOutputFormat)
-        form.set('moderation', effectiveParams.moderation)
-        form.set('response_format', 'b64_json')
-        form.set('n', String(effectiveParams.n))
-        if (typeof effectiveParams.output_compression === 'number' && effectiveOutputFormat !== 'png') {
+        if (!compatibilityPatch?.omitQuality) form.set('quality', effectiveParams.quality)
+        if (!compatibilityPatch?.omitOutputFormat) form.set('output_format', effectiveOutputFormat)
+        if (!compatibilityPatch?.omitModeration) form.set('moderation', effectiveParams.moderation)
+        if (
+          !compatibilityPatch?.omitOutputCompression
+          && typeof effectiveParams.output_compression === 'number'
+          && effectiveOutputFormat !== 'png'
+        ) {
           form.set('output_compression', String(effectiveParams.output_compression))
         }
         for (const [index, dataUrl] of inputImages.entries()) {
@@ -634,13 +750,15 @@ async function callUpstream(route: RuntimeRouteRow, input: GatewayRequest) {
           model: upstreamModel,
           prompt: buildPrompt(input),
           size: effectiveParams.size,
-          quality: effectiveParams.quality,
-          output_format: effectiveOutputFormat,
-          moderation: effectiveParams.moderation,
-          response_format: 'b64_json',
-          n: effectiveParams.n,
         }
-        if (typeof effectiveParams.output_compression === 'number' && effectiveOutputFormat !== 'png') {
+        if (!compatibilityPatch?.omitQuality) body.quality = effectiveParams.quality
+        if (!compatibilityPatch?.omitOutputFormat) body.output_format = effectiveOutputFormat
+        if (!compatibilityPatch?.omitModeration) body.moderation = effectiveParams.moderation
+        if (
+          !compatibilityPatch?.omitOutputCompression
+          && typeof effectiveParams.output_compression === 'number'
+          && effectiveOutputFormat !== 'png'
+        ) {
           body.output_compression = effectiveParams.output_compression
         }
         response = await fetch(appendPath(route.base_url, 'images/generations'), {
@@ -674,18 +792,35 @@ async function callUpstream(route: RuntimeRouteRow, input: GatewayRequest) {
         actualParams: {
           ...result.actualParams,
           size: effectiveParams.size,
-          quality: effectiveParams.quality,
-          output_format: effectiveParams.output_format,
-          output_compression: effectiveParams.output_compression,
-          moderation: effectiveParams.moderation,
-          n: effectiveParams.n,
+          ...(compatibilityPatch?.omitQuality ? {} : { quality: effectiveParams.quality }),
+          ...(compatibilityPatch?.omitOutputFormat ? {} : { output_format: effectiveParams.output_format }),
+          ...(compatibilityPatch?.omitOutputCompression ? {} : { output_compression: effectiveParams.output_compression }),
+          ...(compatibilityPatch?.omitModeration ? {} : { moderation: effectiveParams.moderation }),
+          n: effectiveOutputCount,
         },
       }
     }
 
-    return await requestOnce(params)
+    let compatibilityPatch: UpstreamRequestCompatibilityPatch | null = null
+    let lastError: unknown
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const effectiveParams = normalizeUpstreamParams(params, compatibilityPatch ?? {})
+      try {
+        return await requestOnce(effectiveParams, compatibilityPatch)
+      } catch (error) {
+        lastError = error
+        const nextPatch = getUpstreamCompatibilityPatch(error)
+        if (!nextPatch) throw error
+        const mergedPatch = mergeCompatibilityPatch(compatibilityPatch, nextPatch)
+        if (JSON.stringify(mergedPatch) === JSON.stringify(compatibilityPatch)) throw error
+        compatibilityPatch = mergedPatch
+      }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error(String(lastError ?? '上游请求失败'))
   } finally {
     clearTimeout(timeout)
+    externalSignal?.removeEventListener('abort', relayExternalAbort)
   }
 }
 
@@ -696,6 +831,8 @@ async function createReservedRunningTask(db: Pool, input: {
   mode: string
   requestedOutputCount: number
   params?: TaskParams
+  status?: Extract<GenerationTaskStatus, 'queued' | 'running'>
+  requestPayload?: GatewayRequest
 }): Promise<BillingReservation> {
   return await withTransaction(db, async (tx) => {
     const taskId = createId('task')
@@ -712,9 +849,21 @@ async function createReservedRunningTask(db: Pool, input: {
     await tx.query(`
       INSERT INTO generation_tasks (
         id, user_id, status, mode, model_sku, request_id, route_id, upstream_model,
-        output_count, charged_points, ledger_id, failure_kind, error_summary, created_at, finished_at
-      ) VALUES ($1, $2, 'running', $3, $4, $5, NULL, NULL, 0, 0, NULL, NULL, NULL, $6, NULL)
-    `, [taskId, input.userId, input.mode, input.modelSku, input.requestId, createdAt])
+        output_count, requested_output_count, reserved_points, charged_points, ledger_id,
+        failure_kind, error_summary, request_json, created_at, finished_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL, 0, $7, $8, 0, NULL, NULL, NULL, $9, $10, NULL)
+    `, [
+      taskId,
+      input.userId,
+      input.status ?? 'running',
+      input.mode,
+      input.modelSku,
+      input.requestId,
+      input.requestedOutputCount,
+      reservedPoints,
+      input.requestPayload ? JSON.stringify(input.requestPayload) : null,
+      createdAt,
+    ])
 
     if (reservedPoints > 0) {
       await tx.query(`
@@ -739,6 +888,18 @@ async function finalizeSuccess(db: Pool, input: {
   outputs: PersistedOutput[]
 }) {
   return await withTransaction(db, async (tx) => {
+    const task = (await tx.query<{ status: GenerationTaskStatus }>(
+      'SELECT status FROM generation_tasks WHERE id = $1 FOR UPDATE',
+      [input.taskId],
+    )).rows[0]
+    if (task?.status === 'cancelled') {
+      return {
+        outputCount: 0,
+        chargedPoints: 0,
+        ledgerId: null,
+        outputs: [],
+      }
+    }
     const account = (await tx.query<{ balance: string; frozen_balance: string }>(
       'SELECT balance::text, frozen_balance::text FROM accounts WHERE user_id = $1 FOR UPDATE',
       [input.userId],
@@ -862,12 +1023,12 @@ async function finalizeFailure(db: Db, input: {
     ? buildFailureSummary(input.error, input.attempts)
     : getErrorMessage(input.error).slice(0, 500)
   const finishedAt = nowIso()
-  await db.query(`
+  const result = await db.query(`
     UPDATE generation_tasks
     SET status = 'failed', failure_kind = $1, error_summary = $2, finished_at = $3
-    WHERE id = $4
+    WHERE id = $4 AND status <> 'cancelled'
   `, [failureKind, message, finishedAt, input.taskId]).catch(() => undefined)
-  if (input.reservation?.reservedPoints && input.userId) {
+  if ((result?.rowCount ?? 0) > 0 && input.reservation?.reservedPoints && input.userId) {
     await db.query(`
       UPDATE accounts
       SET balance = balance + $1,
@@ -953,8 +1114,9 @@ async function recordCompletedExternalTask(db: Pool, env: ServerEnv, input: {
       ) VALUES ($1, $2, 'succeeded', $3, $4, $5, NULL, NULL, $6, $7, $8, NULL, NULL, $9, $9)
     `, [taskId, input.userId, input.mode, input.modelSku, requestId, outputCount, chargedPoints, ledgerId, finishedAt])
 
+    let outputs: PersistedOutput[] = []
     if (input.images.length > 0) {
-      const outputs = await persistGeneratedOutputs(env, {
+      outputs = await persistGeneratedOutputs(env, {
         taskId,
         userId: input.userId,
         images: input.images,
@@ -990,6 +1152,7 @@ async function recordCompletedExternalTask(db: Pool, env: ServerEnv, input: {
       outputCount,
       chargedPoints,
       ledgerId,
+      persistedImages: outputs.map(serializePersistedOutput),
       alreadyRecorded: false,
     }
   })
@@ -1116,6 +1279,391 @@ function buildFailureSummary(error: unknown, attempts: GatewayAttempt[]) {
   }).slice(0, 4000)
 }
 
+async function isGenerationTaskCancelled(db: Db, taskId: string) {
+  const row = (await db.query<{ status: GenerationTaskStatus }>(
+    'SELECT status FROM generation_tasks WHERE id = $1 LIMIT 1',
+    [taskId],
+  )).rows[0]
+  return row?.status === 'cancelled'
+}
+
+async function markTaskRunningIfQueued(db: Db, taskId: string) {
+  await db.query(
+    "UPDATE generation_tasks SET status = 'running' WHERE id = $1 AND status = 'queued'",
+    [taskId],
+  )
+}
+
+async function cancelReservedTask(db: Pool, input: { taskId: string; userId: string }) {
+  return await withTransaction(db, async (tx) => {
+    const task = (await tx.query<{
+      id: string
+      status: GenerationTaskStatus
+      reserved_points: string
+    }>(
+      'SELECT id, status, reserved_points::text FROM generation_tasks WHERE id = $1 AND user_id = $2 FOR UPDATE',
+      [input.taskId, input.userId],
+    )).rows[0]
+    if (!task) throw new ApiError(404, 'task_not_found', '任务不存在')
+    if (task.status === 'succeeded' || task.status === 'failed' || task.status === 'timeout') {
+      return { taskId: input.taskId, status: task.status, cancelled: false }
+    }
+    if (task.status === 'cancelled') {
+      return { taskId: input.taskId, status: task.status, cancelled: true }
+    }
+
+    const finishedAt = nowIso()
+    const reservedPoints = Number(task.reserved_points) || 0
+    await tx.query(`
+      UPDATE generation_tasks
+      SET status = 'cancelled', failure_kind = 'cancelled', error_summary = $1, finished_at = $2
+      WHERE id = $3
+    `, ['用户取消任务', finishedAt, input.taskId])
+    if (reservedPoints > 0) {
+      await tx.query(`
+        UPDATE accounts
+        SET balance = balance + $1,
+          frozen_balance = GREATEST(frozen_balance - $1, 0),
+          updated_at = $2
+        WHERE user_id = $3
+      `, [reservedPoints, finishedAt, input.userId])
+    }
+    abortGenerationTaskController(input.taskId)
+    return { taskId: input.taskId, status: 'cancelled' as const, cancelled: true }
+  })
+}
+
+async function readGenerationTaskResult(db: Db, input: { taskId: string; userId: string }) {
+  const task = (await db.query<{
+    id: string
+    status: GenerationTaskStatus
+    mode: string
+    model_sku: string
+    request_id?: string | null
+    route_id?: string | null
+    upstream_model?: string | null
+    requested_output_count: number
+    output_count: number
+    charged_points: string
+    ledger_id?: string | null
+    failure_kind?: GatewayFailureKind | 'cancelled' | string | null
+    error_summary?: string | null
+    created_at: string
+    finished_at?: string | null
+  }>(`
+    SELECT id, status, mode, model_sku, request_id, route_id, upstream_model,
+      COALESCE(requested_output_count, 1) AS requested_output_count,
+      output_count, charged_points::text, ledger_id, failure_kind, error_summary,
+      created_at::text, finished_at::text
+    FROM generation_tasks
+    WHERE id = $1 AND user_id = $2
+    LIMIT 1
+  `, [input.taskId, input.userId])).rows[0]
+  if (!task) throw new ApiError(404, 'task_not_found', '任务不存在')
+
+  const outputs = (await db.query<{
+    id: string
+    task_id: string
+    output_index: number
+    public_url: string
+    storage_provider: string
+    storage_key: string
+    mime_type: string
+    byte_size: number
+    revised_prompt?: string | null
+    raw_source_url?: string | null
+  }>(`
+    SELECT id, task_id, output_index, public_url, storage_provider, storage_key,
+      mime_type, byte_size, revised_prompt, raw_source_url
+    FROM generation_task_outputs
+    WHERE task_id = $1 AND user_id = $2
+    ORDER BY output_index ASC
+  `, [input.taskId, input.userId])).rows
+
+  const images = outputs.map((output) => output.public_url)
+  const revisedPrompts = outputs.map((output) => output.revised_prompt ?? undefined)
+  const rawImageUrls = outputs.map((output) => output.raw_source_url).filter((url): url is string => Boolean(url))
+  return {
+    ok: true,
+    taskId: task.id,
+    status: task.status,
+    mode: task.mode,
+    images,
+    revisedPrompts,
+    rawImageUrls,
+    actualParams: { n: images.length },
+    persistedImages: outputs.map((output) => ({
+      id: output.id,
+      taskId: output.task_id,
+      outputIndex: output.output_index,
+      url: output.public_url,
+      storageProvider: output.storage_provider,
+      storageKey: output.storage_key,
+      mimeType: output.mime_type,
+      byteSize: output.byte_size,
+    })),
+    modelSku: task.model_sku,
+    routeId: task.route_id ?? '',
+    upstreamModel: task.upstream_model ?? DEFAULT_MODEL_SKU,
+    attempts: [],
+    requestedOutputCount: task.requested_output_count,
+    outputCount: task.output_count,
+    partialSuccess: task.status === 'succeeded' && task.output_count > 0 && task.output_count < task.requested_output_count,
+    partialFailureMessage: undefined,
+    error: task.status === 'failed' || task.status === 'timeout' || task.status === 'cancelled'
+      ? {
+          message: task.error_summary || (task.status === 'cancelled' ? '任务已取消' : '生图线路请求失败'),
+          requestId: task.request_id ?? undefined,
+          failureKind: task.failure_kind ?? undefined,
+        }
+      : undefined,
+    billing: {
+      outputCount: task.output_count,
+      chargedPoints: Number(task.charged_points),
+      ledgerId: task.ledger_id ?? null,
+    },
+    createdAt: task.created_at,
+    finishedAt: task.finished_at ?? undefined,
+  }
+}
+
+async function executeReservedGenerationTask(db: Pool, env: ServerEnv, input: {
+  userId: string
+  payload: GatewayRequest
+  prompt: string
+  modelSku: string
+  routes: RuntimeRouteRow[]
+  requestedOutputCount: number
+  reservation: BillingReservation
+  shouldSkipCompletion?: () => boolean
+}) {
+  const taskController = new AbortController()
+  registerGenerationTaskController(input.reservation.taskId, taskController)
+  try {
+    await markTaskRunningIfQueued(db, input.reservation.taskId)
+    if (await isGenerationTaskCancelled(db, input.reservation.taskId)) {
+      return await readGenerationTaskResult(db, { taskId: input.reservation.taskId, userId: input.userId })
+    }
+
+    const attempts: GatewayAttempt[] = []
+    let lastError: unknown = null
+    const failoverEnabled = await getGatewayFailoverEnabled(db)
+    const now = new Date()
+    const coolingRoutes = input.routes.filter((route) => isRouteCoolingDown(route, now))
+    const activeRoutesAtStart = input.routes.filter((route) => !isRouteCoolingDown(route, now))
+    for (const skippedRoute of activeRoutesAtStart.length ? coolingRoutes : []) {
+      attempts.push({
+        routeId: skippedRoute.route_id,
+        upstreamModel: skippedRoute.upstream_model || skippedRoute.default_upstream_model || skippedRoute.model_name || DEFAULT_MODEL_SKU,
+        success: false,
+        latencyMs: 0,
+        errorMessage: `线路冷却中，暂跳过到 ${skippedRoute.cooldown_until}`,
+        skippedByCooldown: true,
+      })
+    }
+    const collectedImages: string[] = []
+    const collectedRevisedPrompts: Array<string | undefined> = []
+    const collectedRawImageUrls: string[] = []
+    let successRouteId = ''
+    let successUpstreamModel = ''
+    let successActualParams: Record<string, unknown> | undefined
+
+    while (collectedImages.length < input.requestedOutputCount) {
+      if (input.shouldSkipCompletion?.() || await isGenerationTaskCancelled(db, input.reservation.taskId)) break
+      let retryRound = 0
+      let producedThisSlot = false
+      let shouldStopGeneration = false
+      while (!producedThisSlot && retryRound < MAX_OUTPUT_SLOT_RETRY_ROUNDS) {
+        const failedRouteIdsThisRound = new Set<string>()
+        const routesToTry = orderRoutesForSlot(input.routes, collectedImages.length + retryRound, new Date(), failedRouteIdsThisRound)
+        if (!routesToTry.length) break
+        for (const route of routesToTry) {
+          if (input.shouldSkipCompletion?.() || await isGenerationTaskCancelled(db, input.reservation.taskId)) {
+            shouldStopGeneration = true
+            break
+          }
+          const startedAt = Date.now()
+          try {
+            const result = await callUpstream(route, {
+              ...input.payload,
+              prompt: input.prompt,
+              modelSku: input.modelSku,
+              params: { ...(input.payload.params ?? {}), n: UPSTREAM_OUTPUT_COUNT_PER_REQUEST },
+            }, taskController.signal)
+            const acceptedImages = result.images.slice(0, UPSTREAM_OUTPUT_COUNT_PER_REQUEST)
+            if (!acceptedImages.length) {
+              throw new UpstreamRequestError('上游未返回图片', 502, 'upstream_server_error')
+            }
+            collectedImages.push(...acceptedImages)
+            collectedRevisedPrompts.push(...acceptedImages.map((_, index) => result.revisedPrompts?.[index]))
+            collectedRawImageUrls.push(...(result.rawImageUrls ?? []).slice(0, acceptedImages.length))
+            if (!successRouteId) successRouteId = route.route_id
+            successUpstreamModel = result.upstreamModel
+            successActualParams ??= result.actualParams
+            await recordRouteSuccess(db, {
+              routeId: route.route_id,
+              modelSkuId: input.modelSku,
+            })
+            attempts.push({
+              routeId: route.route_id,
+              upstreamModel: result.upstreamModel,
+              success: true,
+              latencyMs: Date.now() - startedAt,
+            })
+            producedThisSlot = true
+            break
+          } catch (error) {
+            lastError = error
+            if (taskController.signal.aborted && (await isGenerationTaskCancelled(db, input.reservation.taskId) || isTaskAbortError(error, TASK_ABORT_REASON_CANCELLED))) {
+              shouldStopGeneration = true
+              break
+            }
+            const failureKind = classifyGatewayFailure(error)
+            if (shouldAffectRouteHealth(error)) {
+              await recordRouteFailure(db, {
+                routeId: route.route_id,
+                modelSkuId: input.modelSku,
+                error,
+              })
+            }
+            attempts.push({
+              routeId: route.route_id,
+              upstreamModel: route.upstream_model || route.default_upstream_model || route.model_name || DEFAULT_MODEL_SKU,
+              success: false,
+              latencyMs: Date.now() - startedAt,
+              errorMessage: getErrorMessage(error),
+              failureKind,
+            })
+            failedRouteIdsThisRound.add(route.route_id)
+            if (!failoverEnabled || !isRetryableGatewayError(error)) {
+              shouldStopGeneration = true
+              break
+            }
+          }
+        }
+        retryRound += 1
+        if (shouldStopGeneration) break
+      }
+      if (shouldStopGeneration || !producedThisSlot) break
+    }
+
+    if (await isGenerationTaskCancelled(db, input.reservation.taskId)) {
+      return await readGenerationTaskResult(db, { taskId: input.reservation.taskId, userId: input.userId })
+    }
+
+    if (collectedImages.length > 0) {
+      const outputImages = collectedImages.slice(0, input.requestedOutputCount)
+      const partialInfo = createPartialGenerationInfo({
+        requestedOutputCount: input.requestedOutputCount,
+        outputCount: outputImages.length,
+        lastError,
+        attempts,
+      })
+      const outputs = await persistGeneratedOutputs(env, {
+        taskId: input.reservation.taskId,
+        userId: input.userId,
+        images: outputImages,
+        revisedPrompts: collectedRevisedPrompts.slice(0, outputImages.length),
+        rawImageUrls: collectedRawImageUrls.slice(0, outputImages.length),
+      })
+      const billing = await finalizeSuccess(db, {
+        taskId: input.reservation.taskId,
+        userId: input.userId,
+        routeId: successRouteId,
+        upstreamModel: successUpstreamModel || DEFAULT_MODEL_SKU,
+        outputCount: outputImages.length,
+        reservedPoints: input.reservation.reservedPoints,
+        billingBasis: input.reservation.billingBasis,
+        outputs,
+      })
+      return {
+        images: outputs.map((output) => output.publicUrl),
+        revisedPrompts: collectedRevisedPrompts.slice(0, outputImages.length),
+        rawImageUrls: collectedRawImageUrls.slice(0, outputImages.length),
+        actualParams: {
+          ...(successActualParams ?? {}),
+          n: outputImages.length,
+        },
+        persistedImages: outputs.map((output) => ({
+          id: output.id,
+          taskId: output.taskId,
+          outputIndex: output.outputIndex,
+          url: output.publicUrl,
+          storageProvider: output.storageProvider,
+          storageKey: output.storageKey,
+          mimeType: output.mimeType,
+          byteSize: output.byteSize,
+        })),
+        modelSku: input.modelSku,
+        routeId: successRouteId,
+        upstreamModel: successUpstreamModel || DEFAULT_MODEL_SKU,
+        attempts,
+        requestedOutputCount: partialInfo.requestedOutputCount,
+        outputCount: partialInfo.outputCount,
+        partialSuccess: partialInfo.partialSuccess,
+        partialFailureMessage: partialInfo.partialFailureMessage,
+        taskId: input.reservation.taskId,
+        billing,
+      }
+    }
+
+    await finalizeFailure(db, {
+      taskId: input.reservation.taskId,
+      error: lastError ?? '生图线路请求失败',
+      attempts,
+      reservation: input.reservation,
+      userId: input.userId,
+    })
+    throw Object.assign(lastError instanceof Error ? lastError : new Error('生图线路请求失败'), {
+      failureKind: classifyGatewayFailure(lastError ?? '生图线路请求失败'),
+      attempts,
+    })
+  } finally {
+    clearGenerationTaskController(input.reservation.taskId, taskController)
+  }
+}
+
+export async function reconcileGenerationTasksOnStartup(db: Pool) {
+  const staleTasks = (await db.query<{
+    id: string
+    user_id: string
+    reserved_points: string
+  }>(`
+    SELECT id, user_id, reserved_points::text
+    FROM generation_tasks
+    WHERE status IN ('queued', 'running')
+      AND finished_at IS NULL
+  `)).rows
+
+  for (const task of staleTasks) {
+    const reservedPoints = Number(task.reserved_points) || 0
+    await withTransaction(db, async (tx) => {
+      const updated = await tx.query(`
+        UPDATE generation_tasks
+        SET status = 'timeout', failure_kind = 'startup_recovery_timeout', error_summary = $1, finished_at = $2
+        WHERE id = $3 AND status IN ('queued', 'running') AND finished_at IS NULL
+      `, ['服务重启后任务未恢复，已按超时收口', nowIso(), task.id])
+      if ((updated.rowCount ?? 0) <= 0 || reservedPoints <= 0) return
+      await tx.query(`
+        UPDATE accounts
+        SET balance = balance + $1,
+          frozen_balance = GREATEST(frozen_balance - $1, 0),
+          updated_at = $2
+        WHERE user_id = $3
+      `, [reservedPoints, nowIso(), task.user_id])
+    })
+  }
+}
+
+export function abortAllGenerationTasks(reason = 'server_shutdown') {
+  for (const [taskId, controller] of activeGenerationTaskControllers.entries()) {
+    if (!controller.signal.aborted) {
+      controller.abort(getTaskAbortError(reason))
+    }
+    activeGenerationTaskControllers.delete(taskId)
+  }
+}
+
 export function registerImageGatewayRoutes(app: FastifyInstance, db: Pool, env: ServerEnv) {
   app.get('/api/model-skus', async (_request, reply) => {
     try {
@@ -1149,188 +1697,17 @@ export function registerImageGatewayRoutes(app: FastifyInstance, db: Pool, env: 
         params: payload.params,
       })
 
-      const attempts: GatewayAttempt[] = []
-      let lastError: unknown = null
-      const failoverEnabled = await getGatewayFailoverEnabled(db)
-      const now = new Date()
-      const coolingRoutes = routes.filter((route) => isRouteCoolingDown(route, now))
-      const activeRoutesAtStart = routes.filter((route) => !isRouteCoolingDown(route, now))
-      for (const skippedRoute of activeRoutesAtStart.length ? coolingRoutes : []) {
-        attempts.push({
-          routeId: skippedRoute.route_id,
-          upstreamModel: skippedRoute.upstream_model || skippedRoute.default_upstream_model || skippedRoute.model_name || DEFAULT_MODEL_SKU,
-          success: false,
-          latencyMs: 0,
-          errorMessage: `线路冷却中，暂跳过到 ${skippedRoute.cooldown_until}`,
-          skippedByCooldown: true,
-        })
-      }
-      const collectedImages: string[] = []
-      const collectedRevisedPrompts: Array<string | undefined> = []
-      const collectedRawImageUrls: string[] = []
-      let successRouteId = ''
-      let successUpstreamModel = ''
-      let successActualParams: Record<string, unknown> | undefined
-      while (collectedImages.length < requestedOutputCount) {
-        let retryRound = 0
-        let producedThisSlot = false
-        let shouldStopGeneration = false
-        while (!producedThisSlot && retryRound < MAX_OUTPUT_SLOT_RETRY_ROUNDS) {
-          const failedRouteIdsThisRound = new Set<string>()
-          const routesToTry = orderRoutesForSlot(routes, collectedImages.length + retryRound, new Date(), failedRouteIdsThisRound)
-          if (!routesToTry.length) break
-          for (const route of routesToTry) {
-            const startedAt = Date.now()
-            try {
-              const remainingOutputCount = requestedOutputCount - collectedImages.length
-              const result = await callUpstream(route, {
-                ...payload,
-                prompt,
-                modelSku,
-                params: { ...(payload.params ?? {}), n: remainingOutputCount },
-              })
-              const acceptedImages = result.images.slice(0, remainingOutputCount)
-              if (!acceptedImages.length) {
-                throw new UpstreamRequestError('上游未返回图片', 502, 'upstream_server_error')
-              }
-              collectedImages.push(...acceptedImages)
-              collectedRevisedPrompts.push(...acceptedImages.map((_, index) => result.revisedPrompts?.[index]))
-              collectedRawImageUrls.push(...(result.rawImageUrls ?? []).slice(0, acceptedImages.length))
-              if (!successRouteId) successRouteId = route.route_id
-              successUpstreamModel = result.upstreamModel
-              successActualParams ??= result.actualParams
-              await recordRouteSuccess(db, {
-                routeId: route.route_id,
-                modelSkuId: modelSku,
-              })
-              attempts.push({
-                routeId: route.route_id,
-                upstreamModel: result.upstreamModel,
-                success: true,
-                latencyMs: Date.now() - startedAt,
-              })
-              producedThisSlot = true
-              break
-            } catch (error) {
-              lastError = error
-              const failureKind = classifyGatewayFailure(error)
-              const clientDisconnected = isClientDisconnected(request, reply)
-              const shouldRecordRouteHealth = shouldAffectRouteHealth(error)
-                && !(clientDisconnected && error instanceof Error && error.name === 'AbortError')
-              if (shouldRecordRouteHealth) {
-                await recordRouteFailure(db, {
-                  routeId: route.route_id,
-                  modelSkuId: modelSku,
-                  error,
-                })
-              }
-              attempts.push({
-                routeId: route.route_id,
-                upstreamModel: route.upstream_model || route.default_upstream_model || route.model_name || DEFAULT_MODEL_SKU,
-                success: false,
-                latencyMs: Date.now() - startedAt,
-                errorMessage: getErrorMessage(error),
-                failureKind,
-              })
-              failedRouteIdsThisRound.add(route.route_id)
-              if (!failoverEnabled || !isRetryableGatewayError(error)) {
-                shouldStopGeneration = true
-                break
-              }
-            }
-          }
-          retryRound += 1
-          if (shouldStopGeneration) break
-        }
-        if (shouldStopGeneration || !producedThisSlot) break
-      }
-      if (collectedImages.length > 0 && collectedImages.length < requestedOutputCount) {
-        await finalizeFailure(db, {
-          taskId: reservation.taskId,
-          error: lastError ?? `只生成了 ${collectedImages.length}/${requestedOutputCount} 张图片`,
-          attempts,
-          reservation,
-          userId,
-        })
-        return reply.status(502).send({
-          error: {
-            message: lastError instanceof Error ? lastError.message : `只生成了 ${collectedImages.length}/${requestedOutputCount} 张图片`,
-            requestId,
-            failureKind: classifyGatewayFailure(lastError ?? '剩余图片未生成成功'),
-            attempts,
-          }
-        })
-      }
-      if (collectedImages.length > 0) {
-        const outputImages = collectedImages.slice(0, requestedOutputCount)
-        const partialInfo = createPartialGenerationInfo({
-          requestedOutputCount,
-          outputCount: outputImages.length,
-          lastError,
-          attempts,
-        })
-        const outputs = await persistGeneratedOutputs(env, {
-          taskId: reservation.taskId,
-          userId,
-          images: outputImages,
-          revisedPrompts: collectedRevisedPrompts.slice(0, outputImages.length),
-          rawImageUrls: collectedRawImageUrls.slice(0, outputImages.length),
-        })
-        const billing = await finalizeSuccess(db, {
-          taskId: reservation.taskId,
-          userId,
-          routeId: successRouteId,
-          upstreamModel: successUpstreamModel || DEFAULT_MODEL_SKU,
-          outputCount: outputImages.length,
-          reservedPoints: reservation.reservedPoints,
-          billingBasis: reservation.billingBasis,
-          outputs,
-        })
-        return reply.send({
-          images: outputs.map((output) => output.publicUrl),
-          revisedPrompts: collectedRevisedPrompts.slice(0, outputImages.length),
-          rawImageUrls: collectedRawImageUrls.slice(0, outputImages.length),
-          actualParams: {
-            ...(successActualParams ?? {}),
-            n: outputImages.length,
-          },
-          persistedImages: outputs.map((output) => ({
-            id: output.id,
-            taskId: output.taskId,
-            outputIndex: output.outputIndex,
-            url: output.publicUrl,
-            storageProvider: output.storageProvider,
-            storageKey: output.storageKey,
-            mimeType: output.mimeType,
-            byteSize: output.byteSize,
-          })),
-          modelSku,
-          routeId: successRouteId,
-          upstreamModel: successUpstreamModel || DEFAULT_MODEL_SKU,
-          attempts,
-          requestedOutputCount: partialInfo.requestedOutputCount,
-          outputCount: partialInfo.outputCount,
-          partialSuccess: partialInfo.partialSuccess,
-          partialFailureMessage: partialInfo.partialFailureMessage,
-          taskId: reservation.taskId,
-          billing,
-        })
-      }
-      await finalizeFailure(db, {
-        taskId: reservation.taskId,
-        error: lastError ?? '生图线路请求失败',
-        attempts,
-        reservation,
+      const result = await executeReservedGenerationTask(db, env, {
         userId,
+        payload,
+        prompt,
+        modelSku,
+        routes,
+        requestedOutputCount,
+        reservation,
+        shouldSkipCompletion: () => isClientDisconnected(request, reply),
       })
-      return reply.status(502).send({
-        error: {
-          message: lastError instanceof Error ? lastError.message : '生图线路请求失败',
-          requestId,
-          failureKind: classifyGatewayFailure(lastError ?? '生图线路请求失败'),
-          attempts,
-        },
-      })
+      return reply.send(result)
     } catch (error) {
       if (reservation) {
         await finalizeFailure(db, { taskId: reservation.taskId, error, reservation, userId })
@@ -1340,8 +1717,95 @@ export function registerImageGatewayRoutes(app: FastifyInstance, db: Pool, env: 
           error: { message: error.message, requestId, failureKind: error.code },
         })
       }
+      if (isRecord(error) && typeof error.failureKind === 'string') {
+        return reply.status(502).send({
+          error: {
+            message: getErrorMessage(error),
+            requestId,
+            failureKind: error.failureKind,
+            attempts: Array.isArray(error.attempts) ? error.attempts : undefined,
+          },
+        })
+      }
       const message = error instanceof Error ? error.message : '生图请求失败'
       return reply.status(500).send({ error: { message, requestId } })
+    }
+  })
+
+  app.post('/api/image/tasks', async (request, reply) => {
+    const requestId = createId('imggw')
+    reply.header('X-Image-Gateway-Request-Id', requestId)
+    try {
+      const session = await requireUserSession(db, request.headers.authorization)
+      const userId = session.user_id
+      const payload = isRecord(request.body) ? request.body as GatewayRequest : {}
+      const prompt = payload.prompt?.trim() ?? ''
+      if (!prompt) throw new ApiError(400, 'missing_prompt', '缺少提示词')
+      const modelSku = payload.modelSku?.trim() || DEFAULT_MODEL_SKU
+      const routes = await loadRoutesForModel(db, modelSku)
+      if (!routes.length) throw new ApiError(503, 'no_route', '没有可用的生图线路')
+      const requestedOutputCount = getRequestedOutputCount(payload)
+      const reservation = await createReservedRunningTask(db, {
+        userId,
+        requestId,
+        modelSku,
+        mode: Array.isArray(payload.inputImageDataUrls) && payload.inputImageDataUrls.length ? 'edit' : 'generate',
+        requestedOutputCount,
+        params: payload.params,
+        status: 'queued',
+        requestPayload: payload,
+      })
+
+      void executeReservedGenerationTask(db, env, {
+        userId,
+        payload,
+        prompt,
+        modelSku,
+        routes,
+        requestedOutputCount,
+        reservation,
+      }).catch(() => undefined)
+
+      return reply.status(202).send({
+        ok: true,
+        taskId: reservation.taskId,
+        status: 'queued',
+        requestId,
+        requestedOutputCount,
+        reservedPoints: reservation.reservedPoints,
+      })
+    } catch (error) {
+      if (error instanceof ApiError) {
+        return reply.status(error.status).send({
+          error: { message: error.message, requestId, failureKind: error.code },
+        })
+      }
+      const message = error instanceof Error ? error.message : '提交生图任务失败'
+      return reply.status(500).send({ error: { message, requestId } })
+    }
+  })
+
+  app.get('/api/image/tasks/:taskId', async (request, reply) => {
+    try {
+      const session = await requireUserSession(db, request.headers.authorization)
+      const params = request.params as { taskId?: string }
+      const taskId = typeof params.taskId === 'string' ? params.taskId.trim() : ''
+      if (!taskId) throw new ApiError(400, 'missing_task_id', '缺少任务 ID')
+      return reply.send(await readGenerationTaskResult(db, { taskId, userId: session.user_id }))
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
+  app.post('/api/image/tasks/:taskId/cancel', async (request, reply) => {
+    try {
+      const session = await requireUserSession(db, request.headers.authorization)
+      const params = request.params as { taskId?: string }
+      const taskId = typeof params.taskId === 'string' ? params.taskId.trim() : ''
+      if (!taskId) throw new ApiError(400, 'missing_task_id', '缺少任务 ID')
+      return reply.send({ ok: true, ...await cancelReservedTask(db, { taskId, userId: session.user_id }) })
+    } catch (error) {
+      return sendError(reply, error)
     }
   })
 
