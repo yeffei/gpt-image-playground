@@ -1,6 +1,6 @@
 # Image Gateway Node/Postgres Deployment Checklist
 
-Updated: 2026-06-09
+Updated: 2026-06-13
 Scope: `D:\gpt_image_playground-main`
 
 This checklist is for the commercial Node API + PostgreSQL mainline. Cloudflare Worker / D1 notes are historical unless a separate deployment explicitly chooses that path.
@@ -38,6 +38,11 @@ ADMIN_BOOTSTRAP_TOKEN=replace-with-a-long-one-time-bootstrap-token
 APP_PUBLIC_ORIGIN=https://www.example.com
 SERVER_IMAGE_STORAGE_DIR=/srv/gpt-image/storage/generated-images
 SERVER_IMAGE_PUBLIC_BASE_PATH=/api/generated-images
+EXPIRED_SHARE_CLEANUP_ENABLED=true
+EXPIRED_SHARE_RETENTION_DAYS=90
+EXPIRED_SHARE_CLEANUP_LIMIT=5000
+EXPIRED_SHARE_CLEANUP_INTERVAL_MINUTES=360
+EXPIRED_SHARE_CLEANUP_RUN_ON_STARTUP=true
 ```
 
 Rules:
@@ -46,6 +51,8 @@ Rules:
 - `ADMIN_BOOTSTRAP_TOKEN` is only for first admin bootstrap; rotate or remove it after the initial admin exists.
 - `SERVER_IMAGE_STORAGE_DIR` must be on persistent disk and included in backups.
 - `SERVER_IMAGE_PUBLIC_BASE_PATH` should stay `/api/generated-images` unless the reverse proxy is changed intentionally.
+- `EXPIRED_SHARE_CLEANUP_ENABLED` controls whether the Node API auto-prunes expired share rows after the retention window.
+- `EXPIRED_SHARE_RETENTION_DAYS`, `EXPIRED_SHARE_CLEANUP_LIMIT`, and `EXPIRED_SHARE_CLEANUP_INTERVAL_MINUTES` should match your audit-retention policy and database capacity.
 - Do not put upstream API keys or admin bootstrap secrets into any `VITE_*` variable.
 
 ## 3. PostgreSQL
@@ -145,7 +152,7 @@ The preflight checks:
 - PostgreSQL compose baseline
 - fixed image gateway path `/api/image/generate`
 - fixed generated image path `/api/generated-images`
-- this deployment checklist mentions `api.example.com`, HTTPS, storage, and startup steps
+- this deployment checklist mentions `api.example.com`, HTTPS, storage, expired-share cleanup, and startup steps
 
 ## 8. Final Local Acceptance Before Production
 

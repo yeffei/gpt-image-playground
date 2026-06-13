@@ -9,11 +9,13 @@ import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import { getModelSku } from '../lib/modelSkus'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
+import type { OwnerImageShare } from '../types'
 
 import ViewportTooltip from './ViewportTooltip'
 
 export default function DetailModal() {
   const account = useStore((s) => s.account)
+  const authSessionToken = useStore((s) => s.authSessionToken)
   const tasks = useStore((s) => s.tasks)
   const detailTaskId = useStore((s) => s.detailTaskId)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
@@ -37,6 +39,13 @@ export default function DetailModal() {
   const [showRawResponseModal, setShowRawResponseModal] = useState(false)
   const [streamPreviewLoaded, setStreamPreviewLoaded] = useState(false)
   const [promptExpanded, setPromptExpanded] = useState(false)
+  const [sharePanelOpen, setSharePanelOpen] = useState(false)
+  const [shareAccessCode, setShareAccessCode] = useState('')
+  const [shareExpiresAt, setShareExpiresAt] = useState('')
+  const [shareBusy, setShareBusy] = useState(false)
+  const [shareLoading, setShareLoading] = useState(false)
+  const [shareError, setShareError] = useState('')
+  const [sharesByImageId, setSharesByImageId] = useState<Record<string, OwnerImageShare>>({})
   const modalRef = useRef<HTMLDivElement>(null)
   const rawUrlsModalRef = useRef<HTMLDivElement>(null)
   const rawResponseModalRef = useRef<HTMLDivElement>(null)
@@ -99,6 +108,10 @@ export default function DetailModal() {
   useEffect(() => {
     setImageIndex(0)
     setPromptExpanded(false)
+    setSharePanelOpen(false)
+    setShareAccessCode('')
+    setShareExpiresAt('')
+    setShareError('')
   }, [detailTaskId])
 
   useEffect(() => {
@@ -149,6 +162,9 @@ export default function DetailModal() {
 
   const currentOutputImageId = task?.outputImages?.[imageIndex] || ''
   const currentOutputPreviewSrc = currentOutputImageId ? outputPreviewSrcs[currentOutputImageId] || '' : ''
+  const currentServerOutput = currentOutputImageId ? task?.serverOutputByImageId?.[currentOutputImageId] : undefined
+  const currentShare = currentOutputImageId ? sharesByImageId[currentOutputImageId] : undefined
+  const activeShare = currentShare && !currentShare.revokedAt && (!currentShare.expiresAt || new Date(currentShare.expiresAt).getTime() > Date.now()) ? currentShare : null
   const maskTargetId = task?.maskTargetImageId || null
   const maskTargetSrc = maskTargetId ? imageSrcs[maskTargetId] || '' : ''
   const maskSrc = task?.maskImageId ? imageSrcs[task.maskImageId] || '' : ''
@@ -184,6 +200,30 @@ export default function DetailModal() {
     }
   }, [task?.outputImages])
 
+  useEffect(() => {
+    if (!currentOutputImageId || !currentServerOutput?.outputId || sharesByImageId[currentOutputImageId]) return
+    let cancelled = false
+    setShareLoading(true)
+    setShareError('')
+
+    import('../lib/imageShareApi')
+      .then(({ listImageOutputShares }) => listImageOutputShares(currentServerOutput.outputId, authSessionToken))
+      .then((shares) => {
+        if (cancelled) return
+        const active = shares.find((share) => !share.revokedAt && (!share.expiresAt || new Date(share.expiresAt).getTime() > Date.now()))
+        if (active) setSharesByImageId((prev) => ({ ...prev, [currentOutputImageId]: active }))
+      })
+      .catch((err) => {
+        if (!cancelled) setShareError(err instanceof Error ? err.message : '读取分享记录失败')
+      })
+      .finally(() => {
+        if (!cancelled) setShareLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [authSessionToken, currentOutputImageId, currentServerOutput?.outputId, sharesByImageId])
   useEffect(() => {
     let cancelled = false
     setMaskPreviewSrc('')
@@ -384,7 +424,69 @@ export default function DetailModal() {
     retryTask(task)
     setDetailTaskId(null)
   }
+  const getAbsoluteShareUrl = (share: OwnerImageShare) => {
+    try {
+      return new URL(share.shareUrlPath, window.location.origin).toString()
+    } catch {
+      return share.shareUrlPath
+    }
+  }
 
+  const handleCopyShare = async (share: OwnerImageShare) => {
+    try {
+      const { copyTextToClipboard } = await import('../lib/clipboard')
+      await copyTextToClipboard(getAbsoluteShareUrl(share))
+      showToast('分享链接已复制', 'success')
+    } catch (err) {
+      const { getClipboardFailureMessage } = await import('../lib/clipboard')
+      showToast(getClipboardFailureMessage('复制分享链接失败', err), 'error')
+    }
+  }
+
+  const handleCreateShare = async () => {
+    if (!currentOutputImageId || !currentServerOutput?.outputId) {
+      setShareError('这张图缺少服务端输出编号，暂不能分享')
+      return
+    }
+    setShareBusy(true)
+    setShareError('')
+    try {
+      const expiresAt = shareExpiresAt ? new Date(shareExpiresAt).toISOString() : undefined
+      if (shareExpiresAt && Number.isNaN(new Date(shareExpiresAt).getTime())) {
+        throw new Error('过期时间格式无效')
+      }
+      const { createImageOutputShare } = await import('../lib/imageShareApi')
+      const share = await createImageOutputShare(currentServerOutput.outputId, {
+        accessCode: shareAccessCode.trim() || undefined,
+        expiresAt,
+      }, authSessionToken)
+      setSharesByImageId((prev) => ({ ...prev, [currentOutputImageId]: share }))
+      setShareAccessCode('')
+      setShareExpiresAt('')
+      setSharePanelOpen(false)
+      await handleCopyShare(share)
+    } catch (err) {
+      setShareError(err instanceof Error ? err.message : '创建分享失败')
+    } finally {
+      setShareBusy(false)
+    }
+  }
+
+  const handleRevokeShare = async () => {
+    if (!activeShare || !currentOutputImageId) return
+    setShareBusy(true)
+    setShareError('')
+    try {
+      const { revokeImageShare } = await import('../lib/imageShareApi')
+      const revoked = await revokeImageShare(activeShare.id, authSessionToken)
+      setSharesByImageId((prev) => ({ ...prev, [currentOutputImageId]: revoked }))
+      showToast('分享已撤销', 'success')
+    } catch (err) {
+      setShareError(err instanceof Error ? err.message : '撤销分享失败')
+    } finally {
+      setShareBusy(false)
+    }
+  }
   return (
     <div
       data-no-drag-select
@@ -916,6 +1018,101 @@ export default function DetailModal() {
               <span>创建于 {formatTime(task.createdAt)}</span>
               {formatDuration() && <span> · 耗时 {formatDuration()}</span>}
             </div>
+            {task.status === 'done' && outputLen > 0 && (
+              <div className="mb-4 rounded-xl border border-sky-100 bg-sky-50/70 p-3 text-xs dark:border-sky-400/15 dark:bg-sky-400/10">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2 font-medium text-sky-900 dark:text-sky-100">
+                    <LinkIcon className="h-4 w-4 shrink-0" />
+                    <span>安全分享</span>
+                  </div>
+                  {activeShare ? (
+                    <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-200">
+                      已创建
+                    </span>
+                  ) : null}
+                </div>
+
+                {!currentServerOutput?.outputId ? (
+                  <div className="text-sky-800/70 dark:text-sky-100/70">
+                    仅服务端保存的新结果支持受控分享。
+                  </div>
+                ) : shareLoading ? (
+                  <div className="text-sky-800/70 dark:text-sky-100/70">
+                    正在读取分享记录...
+                  </div>
+                ) : activeShare ? (
+                  <div className="space-y-2">
+                    <div className="truncate rounded-lg bg-white/80 px-2 py-1.5 font-mono text-[11px] text-sky-900 ring-1 ring-sky-100 dark:bg-black/20 dark:text-sky-100 dark:ring-white/10">
+                      {getAbsoluteShareUrl(activeShare)}
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleCopyShare(activeShare)}
+                        className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-white px-2 py-1.5 font-medium text-sky-700 transition hover:bg-sky-100 dark:bg-white/[0.08] dark:text-sky-100 dark:hover:bg-white/[0.12]"
+                      >
+                        <CopyIcon className="h-3.5 w-3.5" />
+                        复制链接
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleRevokeShare}
+                        disabled={shareBusy}
+                        className="rounded-lg bg-white px-2 py-1.5 font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white/[0.08] dark:text-red-300 dark:hover:bg-red-400/10"
+                      >
+                        撤销
+                      </button>
+                    </div>
+                  </div>
+                ) : sharePanelOpen ? (
+                  <div className="space-y-2">
+                    <input
+                      value={shareAccessCode}
+                      onChange={(e) => setShareAccessCode(e.target.value)}
+                      placeholder="访问码，可留空"
+                      className="w-full rounded-lg border border-sky-100 bg-white px-2 py-1.5 text-xs text-gray-800 outline-none transition placeholder:text-gray-400 focus:border-sky-300 dark:border-white/10 dark:bg-black/20 dark:text-gray-100 dark:focus:border-sky-300/50"
+                      maxLength={64}
+                    />
+                    <input
+                      value={shareExpiresAt}
+                      onChange={(e) => setShareExpiresAt(e.target.value)}
+                      type="datetime-local"
+                      className="w-full rounded-lg border border-sky-100 bg-white px-2 py-1.5 text-xs text-gray-800 outline-none transition focus:border-sky-300 dark:border-white/10 dark:bg-black/20 dark:text-gray-100 dark:focus:border-sky-300/50"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleCreateShare}
+                        disabled={shareBusy}
+                        className="flex-1 rounded-lg bg-sky-600 px-2 py-1.5 font-medium text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-sky-400 dark:text-sky-950 dark:hover:bg-sky-300"
+                      >
+                        {shareBusy ? '创建中...' : '创建并复制'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSharePanelOpen(false)
+                          setShareError('')
+                        }}
+                        className="rounded-lg bg-white px-2 py-1.5 font-medium text-sky-700 transition hover:bg-sky-100 dark:bg-white/[0.08] dark:text-sky-100 dark:hover:bg-white/[0.12]"
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setSharePanelOpen(true)}
+                    className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-white px-2 py-1.5 font-medium text-sky-700 transition hover:bg-sky-100 dark:bg-white/[0.08] dark:text-sky-100 dark:hover:bg-white/[0.12]"
+                  >
+                    <LinkIcon className="h-3.5 w-3.5" />
+                    创建分享链接
+                  </button>
+                )}
+                {shareError && <div className="mt-2 text-red-600 dark:text-red-300">{shareError}</div>}
+              </div>
+            )}
           </div>
 
           {/* 操作按钮 */}

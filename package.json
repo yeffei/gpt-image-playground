@@ -44,13 +44,15 @@
     "admin:write-acceptance": "node scripts/admin-write-acceptance.mjs",
     "admin:read-smoke": "node scripts/admin-read-smoke.mjs",
     "admin:maintenance:reset": "node scripts/admin-maintenance-reset.mjs",
+    "admin:maintenance:cleanup-expired-shares": "node scripts/cleanup-expired-shares.mjs",
     "verify:admin-backend-config": "node scripts/verify-admin-backend-config.mjs",
     "verify:server-deploy-config": "node scripts/verify-server-deployment-config.mjs",
     "verify:prelaunch": "node scripts/verify-prelaunch.mjs",
     "test:verify:image:gateway:ux": "vitest run scripts/verify-gateway-failure-ux.test.ts",
     "test:verify:image:live": "vitest run scripts/live-verify-image-gateway.integration.test.ts src/lib/liveVerifyImageGateway.test.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "smoke:image-share": "tsx scripts/smoke-image-share-flow.mjs"
   },
   "dependencies": {
     "@fal-ai/client": "^1.10.0",

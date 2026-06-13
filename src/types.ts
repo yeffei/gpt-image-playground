@@ -37,6 +37,46 @@ export interface ModelSku {
   maxOutputCount: number
 }
 
+export interface PlatformCapabilities {
+  ok: true
+  platform: {
+    stage: 'standard_commercial'
+    dataSource: 'postgres'
+  }
+  image: {
+    models: Array<Omit<ModelSku, 'routeIds'>>
+    defaultModelSku: string
+    maxOutputCount: number
+    supportsEdit: boolean
+    supportsMask: boolean
+    supportsAsyncTasks: boolean
+    taskModes: Array<'generate' | 'edit' | 'agent' | 'agent_edit'>
+  }
+  billing: {
+    unit: 'points'
+    failureCharged: false
+    partialSuccessChargedByOutput: true
+    qualityBasis: 'auto'
+    sizeTiers: Array<{
+      id: '1K' | '2K' | '4K'
+      maxLongestEdge: number | null
+      unitPoints: number
+    }>
+  }
+  sharing:
+    | {
+        supported: false
+        accessCodeSupported?: false
+        expirationSupported?: false
+        revokeSupported?: false
+      }
+    | {
+        supported: true
+        accessCodeSupported: boolean
+        expirationSupported: boolean
+        revokeSupported: boolean
+      }
+}
 export interface BackendRoute {
   id: string
   name: string
@@ -68,6 +108,33 @@ export interface ImageGatewayAttempt {
   failureKind?: ImageGatewayFailureKind
 }
 
+export interface OwnerImageShare {
+  id: string
+  token: string
+  outputId: string
+  shareUrlPath: string
+  apiUrlPath: string
+  requiresAccessCode: boolean
+  expiresAt: string | null
+  revokedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface PublicImageShare {
+  token: string
+  requiresAccessCode: boolean
+  expiresAt: string | null
+  output: {
+    outputIndex: number
+    mimeType: string
+    byteSize: number
+    width: number | null
+    height: number | null
+    createdAt: string
+  }
+  createdAt: string
+}
 export type ImageGatewayFailureKind =
   | 'no_route'
   | 'route_exhausted'
@@ -448,6 +515,12 @@ export interface TaskRecord {
   maskImageId?: string | null
   /** 输出图片的 image store id 列表 */
   outputImages: string[]
+  /** 本地输出图片 id 对应的服务端输出记录，用于受控分享等服务端能力 */
+  serverOutputByImageId?: Record<string, {
+    outputId: string
+    taskId?: string
+    outputIndex: number
+  }>
   /** 流式生成的中间步骤图片 id 列表，仅失败时保留供排查/下载 */
   streamPartialImageIds?: string[]
   /** API 返回的原始图片 HTTP URL（非 base64 时记录） */

@@ -160,6 +160,19 @@ CREATE TABLE IF NOT EXISTS generation_task_outputs (
   UNIQUE (task_id, output_index)
 );
 
+CREATE TABLE IF NOT EXISTS generation_output_shares (
+  id TEXT PRIMARY KEY,
+  token TEXT NOT NULL UNIQUE,
+  output_id TEXT NOT NULL REFERENCES generation_task_outputs(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  access_code_hash TEXT,
+  access_code_salt TEXT,
+  expires_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS gateway_routes (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -305,6 +318,9 @@ CREATE INDEX IF NOT EXISTS idx_generation_tasks_user_created ON generation_tasks
 CREATE INDEX IF NOT EXISTS idx_generation_tasks_route_created ON generation_tasks(route_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_generation_task_outputs_task ON generation_task_outputs(task_id, output_index);
 CREATE INDEX IF NOT EXISTS idx_generation_task_outputs_user_created ON generation_task_outputs(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_generation_output_shares_user_created ON generation_output_shares(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_generation_output_shares_output_created ON generation_output_shares(output_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_generation_output_shares_token_active ON generation_output_shares(token) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_gateway_routes_enabled ON gateway_routes(enabled);
 CREATE INDEX IF NOT EXISTS idx_model_skus_enabled_sort ON model_skus(enabled, sort_order);
 CREATE INDEX IF NOT EXISTS idx_model_route_bindings_model_priority ON model_route_bindings(model_sku_id, enabled, priority, weight);

@@ -5,11 +5,14 @@ import { extname, join, normalize, sep } from 'node:path'
 import type { Pool } from 'pg'
 import { registerAdminAuthRoutes } from './adminAuth.js'
 import { registerAdminBillingRoutes } from './adminBilling.js'
+import { registerAdminImageShareRoutes } from './adminImageShares.js'
 import { registerAdminTaskRoutes } from './adminTasks.js'
 import { registerAdminUserRoutes } from './adminUsers.js'
 import type { ServerEnv } from './env.js'
 import { registerGatewayModelRoutes } from './gatewayModels.js'
 import { registerImageGatewayRoutes } from './imageGateway.js'
+import { registerImageShareRoutes } from './imageShares.js'
+import { registerPlatformCapabilitiesRoutes } from './platformCapabilities.js'
 import { registerPromptTemplateRoutes } from './promptTemplates.js'
 import { registerRechargeCodeRoutes } from './rechargeCodes.js'
 import { registerUserAuthRoutes } from './userAuth.js'
@@ -140,10 +143,13 @@ export function buildApp(db: Pool, env: ServerEnv) {
   registerAdminAuthRoutes(app, db, env)
   registerUserAuthRoutes(app, db)
   registerAdminBillingRoutes(app, db)
+  registerAdminImageShareRoutes(app, db)
   registerAdminTaskRoutes(app, db)
   registerAdminUserRoutes(app, db)
   registerRechargeCodeRoutes(app, db)
   registerGatewayModelRoutes(app, db)
+  registerPlatformCapabilitiesRoutes(app, db)
+  registerImageShareRoutes(app, db, env)
   registerGeneratedImageRoutes(app, env)
   registerPromptTemplateAssetRoutes(app)
   registerPromptLibrarySourceRoutes(app)

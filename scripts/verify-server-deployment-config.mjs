@@ -82,6 +82,11 @@ for (const key of [
   'VITE_IMAGE_GATEWAY_PATH',
   'SERVER_IMAGE_STORAGE_DIR',
   'SERVER_IMAGE_PUBLIC_BASE_PATH',
+  'EXPIRED_SHARE_CLEANUP_ENABLED',
+  'EXPIRED_SHARE_RETENTION_DAYS',
+  'EXPIRED_SHARE_CLEANUP_LIMIT',
+  'EXPIRED_SHARE_CLEANUP_INTERVAL_MINUTES',
+  'EXPIRED_SHARE_CLEANUP_RUN_ON_STARTUP',
 ]) {
   if (!(key in exampleEnv)) fail(`.env.example missing ${key}`)
 }
@@ -107,6 +112,8 @@ if (!isPath(exampleEnv.SERVER_IMAGE_PUBLIC_BASE_PATH)) fail('.env.example SERVER
 if (!/DATABASE_URL\s+is\s+required/.test(serverEnvText)) fail('server/src/env.ts must require DATABASE_URL')
 if (!/SERVER_IMAGE_STORAGE_DIR/.test(serverEnvText)) fail('server/src/env.ts must support SERVER_IMAGE_STORAGE_DIR')
 if (!/SERVER_IMAGE_PUBLIC_BASE_PATH/.test(serverEnvText)) fail('server/src/env.ts must support SERVER_IMAGE_PUBLIC_BASE_PATH')
+if (!/EXPIRED_SHARE_CLEANUP_ENABLED/.test(serverEnvText)) fail('server/src/env.ts must support EXPIRED_SHARE_CLEANUP_ENABLED')
+if (!/EXPIRED_SHARE_CLEANUP_INTERVAL_MINUTES/.test(serverEnvText)) fail('server/src/env.ts must support EXPIRED_SHARE_CLEANUP_INTERVAL_MINUTES')
 
 hasScript(packageJson, 'server:build', 'tsc -p server/tsconfig.json')
 hasScript(packageJson, 'server:migrate', 'tsx server/src/migrate.ts')
@@ -128,6 +135,7 @@ for (const expected of [
   'npm run verify:prelaunch',
   'SERVER_IMAGE_STORAGE_DIR',
   'SERVER_IMAGE_PUBLIC_BASE_PATH',
+  'EXPIRED_SHARE_CLEANUP_ENABLED',
   '/api/image/generate',
   '/api/generated-images',
   'HTTPS',

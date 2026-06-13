@@ -27,6 +27,7 @@ type AdminSectionKey =
   | 'gateway'
   | 'content'
   | 'growth'
+  | 'shares'
   | 'auditLogs'
 
 type RechargeSubsectionKey =
@@ -144,6 +145,9 @@ const ADMIN_VALUE_LABELS: Record<string, string> = {
   network: '网络连接失败',
   unknown: '未知失败',
   admin_cancelled: '后台取消',
+  shareActive: '有效',
+  shareExpired: '已过期',
+  shareRevoked: '已撤销',
 }
 
 const READABLE_FIELD_KEYS: Record<string, string[]> = {
@@ -206,6 +210,7 @@ const ADMIN_SECTIONS: Array<{ key: AdminSectionKey; label: string; meta: string 
   { key: 'tasks', label: '任务与扣点', meta: '任务 / 补偿' },
   { key: 'gateway', label: '网关管理', meta: '线路 / 模型' },
   { key: 'content', label: '内容配置', meta: '模板 / 审核' },
+  { key: 'shares', label: '分享审计', meta: '分享 / 状态' },
 ]
 
 const ADMIN_HOME_ACTIONS: Array<{
@@ -219,6 +224,7 @@ const ADMIN_HOME_ACTIONS: Array<{
   { key: 'tasks', label: '去处理', title: '任务扣点追踪', description: '查看生成任务、扣点、失败原因，并对需要处理的任务做补偿或取消。' },
   { key: 'content', label: '去处理', title: '提示词模板维护', description: '手工新增模板，或从 URL/GitHub 导入候选后人工审核。' },
   { key: 'gateway', label: '去处理', title: '网关线路与模型', description: '添加中转站线路、添加生图模型，并给每个模型选择可用线路。' },
+  { key: 'shares', label: '去查看', title: '分享链接审计', description: '查看用户创建的结果分享、访问码要求、过期和撤销状态。' },
 ]
 
 const ADMIN_MODULES: Record<Exclude<AdminSectionKey, 'dashboard'>, AdminModuleConfig> = {
@@ -347,6 +353,24 @@ const ADMIN_MODULES: Record<Exclude<AdminSectionKey, 'dashboard'>, AdminModuleCo
       { key: 'status', label: '状态' },
       { key: 'inviterUserId', label: '邀请人' },
       { key: 'inviteeUserId', label: '被邀请人' },
+    ],
+  },
+  shares: {
+    summaryPath: '/api/admin/image-shares/summary',
+    listPath: '/api/admin/image-shares?limit=25&offset=0',
+    listKey: 'shares',
+    detailBasePath: '/api/admin/image-shares',
+    detailIdKey: 'id',
+    title: '分享审计',
+    description: '只读查看用户创建的图片分享、访问码要求、过期与撤销状态。',
+    columns: [
+      { key: 'tokenPreview', label: 'Token' },
+      { key: 'status', label: '状态' },
+      { key: 'userId', label: '用户' },
+      { key: 'taskId', label: '任务' },
+      { key: 'outputIndex', label: '序号' },
+      { key: 'requiresAccessCode', label: '访问码' },
+      { key: 'createdAt', label: '创建时间' },
     ],
   },
   auditLogs: {
@@ -590,6 +614,16 @@ const ADMIN_FILTERS: Partial<Record<Exclude<AdminSectionKey, 'dashboard'> | User
     { key: 'type', label: '类型' },
     { key: 'relatedId', label: '关联记录' },
     { key: 'createdByAdmin', label: '管理员' },
+    { key: 'dateFrom', label: '开始日期', type: 'date' },
+    { key: 'dateTo', label: '结束日期', type: 'date' },
+  ],
+  shares: [
+    { key: 'status', label: '状态', type: 'select', options: ['shareActive', 'shareExpired', 'shareRevoked'] },
+    { key: 'user', label: '用户', placeholder: '邮箱 / 昵称 / 用户ID' },
+    { key: 'token', label: 'Token' },
+    { key: 'outputId', label: '输出编号' },
+    { key: 'taskId', label: '任务编号' },
+    { key: 'requiresAccessCode', label: '访问码', type: 'select', options: ['true', 'false'] },
     { key: 'dateFrom', label: '开始日期', type: 'date' },
     { key: 'dateTo', label: '结束日期', type: 'date' },
   ],
@@ -1253,6 +1287,13 @@ function getSelectedLabel(section: Exclude<AdminSectionKey, 'dashboard'>, select
 }
 
 function getModuleWorkflow(config: AdminModuleConfig, section: Exclude<AdminSectionKey, 'dashboard'>) {
+  if (config.listKey === 'shares') {
+    return [
+      '查看分享记录',
+      '按状态或用户筛选',
+      '选择记录确认输出信息',
+    ]
+  }
   if (config.listKey === 'attempts') {
     return [
       '查看兑换记录',
@@ -1282,18 +1323,21 @@ function getModuleWorkflow(config: AdminModuleConfig, section: Exclude<AdminSect
 }
 
 function getFilterTitle(config: AdminModuleConfig, section: Exclude<AdminSectionKey, 'dashboard'>) {
+  if (config.listKey === 'shares') return '筛选分享记录'
   if (config.listKey === 'attempts') return '筛选兑换记录'
   if (section === 'rechargeCodes') return '筛选充值码库存'
   return '筛选'
 }
 
 function getFilterHint(config: AdminModuleConfig, section: Exclude<AdminSectionKey, 'dashboard'>, filterCount: number) {
+  if (config.listKey === 'shares') return '按分享状态、用户、任务或时间查找记录'
   if (config.listKey === 'attempts') return '按充值码、用户、结果或时间查找兑换记录'
   if (section === 'rechargeCodes') return '按状态、批次或兑换用户查找兑换码'
   return filterCount ? `定位要处理的 ${config.title} 记录` : '调整每页数量后浏览记录'
 }
 
 function getListTitle(config: AdminModuleConfig, section: Exclude<AdminSectionKey, 'dashboard'>) {
+  if (config.listKey === 'shares') return '分享记录'
   if (config.listKey === 'attempts') return '兑换记录'
   if (section === 'rechargeCodes') return '充值码库存'
   return `${config.title}列表`
@@ -1816,7 +1860,7 @@ function AdminActionPanel(props: {
           token={props.token}
         />
       ) : null}
-      {actionScope === 'billingLedger' || actionScope === 'referrals' || actionScope === 'creditRecords' || actionScope === 'growth' || actionScope === 'auditLogs' || actionScope === 'redemptionAttempts' ? (
+      {actionScope === 'billingLedger' || actionScope === 'referrals' || actionScope === 'creditRecords' || actionScope === 'growth' || actionScope === 'shares' || actionScope === 'auditLogs' || actionScope === 'redemptionAttempts' ? (
         <p className="admin-empty">当前模块后端以查看、筛选和详情追踪为主，没有额外写操作。</p>
       ) : null}
     </section>

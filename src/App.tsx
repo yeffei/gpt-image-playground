@@ -44,6 +44,7 @@ const MaskEditorModal = lazy(() => import('./components/MaskEditorModal'))
 const ImageContextMenu = lazy(() => import('./components/ImageContextMenu'))
 const SupportPromptModal = lazy(() => import('./components/SupportPromptModal'))
 const TemplatesPreview = lazy(() => import('./components/TemplatesPreview'))
+const PublicShareView = lazy(() => import('./components/PublicShareView'))
 
 let appStoreInitStarted = false
 
@@ -78,6 +79,7 @@ export default function App() {
   const [imageContextMenuReady, setImageContextMenuReady] = useState(false)
   const [initialImageContextMenuInfo, setInitialImageContextMenuInfo] = useState<ImageContextMenuInfo | null>(null)
   const previewMode = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('preview') : null
+  const publicShareToken = typeof window !== 'undefined' ? getPublicShareToken(window.location.pathname) : null
   const setShowSettings = useStore((s) => s.setShowSettings)
   const showSettings = useStore((s) => s.showSettings)
   const galleryView = useStore((s) => s.galleryView)
@@ -307,7 +309,13 @@ export default function App() {
       </Suspense>
     )
   }
-
+  if (publicShareToken) {
+    return (
+      <Suspense fallback={<LazyViewFallback title="正在打开分享..." description="正在读取共享作品。" />}>
+        <PublicShareView token={publicShareToken} />
+      </Suspense>
+    )
+  }
   return (
     <>
       <Header />
@@ -495,4 +503,9 @@ function isEmbeddedPage() {
   } catch {
     return true
   }
+}
+
+function getPublicShareToken(pathname: string) {
+  const match = pathname.match(/^\/share\/([^/?#]+)\/?$/)
+  return match ? decodeURIComponent(match[1]) : null
 }

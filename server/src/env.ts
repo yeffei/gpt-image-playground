@@ -10,6 +10,11 @@ export interface ServerEnv {
   nodeEnv: string
   imageStorageDir: string
   imagePublicBasePath: string
+  expiredShareCleanupEnabled: boolean
+  expiredShareRetentionDays: number
+  expiredShareCleanupLimit: number
+  expiredShareCleanupIntervalMinutes: number
+  expiredShareCleanupRunOnStartup: boolean
 }
 
 const currentDir = dirname(fileURLToPath(import.meta.url))
@@ -28,6 +33,22 @@ function parseEnvFile(text: string) {
     output[key] = rawValue.replace(/^['"]|['"]$/g, '')
   }
   return output
+}
+
+function parseIntegerEnv(value: string | undefined, fallback: number, options: { min?: number; max?: number } = {}) {
+  const parsed = Number.parseInt((value ?? '').trim(), 10)
+  if (!Number.isFinite(parsed)) return fallback
+  if (options.min != null && parsed < options.min) return fallback
+  if (options.max != null && parsed > options.max) return fallback
+  return parsed
+}
+
+function parseBooleanEnv(value: string | undefined, fallback = false) {
+  const normalized = (value ?? '').trim().toLowerCase()
+  if (!normalized) return fallback
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false
+  return fallback
 }
 
 function loadLocalEnv(input: NodeJS.ProcessEnv) {
@@ -64,5 +85,10 @@ export function loadServerEnv(input: NodeJS.ProcessEnv = process.env): ServerEnv
     nodeEnv: (env.NODE_ENV ?? 'development').trim() || 'development',
     imageStorageDir: (env.SERVER_IMAGE_STORAGE_DIR ?? join(serverRoot, 'storage', 'generated-images')).trim(),
     imagePublicBasePath: (env.SERVER_IMAGE_PUBLIC_BASE_PATH ?? '/api/generated-images').trim() || '/api/generated-images',
+    expiredShareCleanupEnabled: parseBooleanEnv(env.EXPIRED_SHARE_CLEANUP_ENABLED, false),
+    expiredShareRetentionDays: parseIntegerEnv(env.EXPIRED_SHARE_RETENTION_DAYS, 90, { min: 0, max: 3650 }),
+    expiredShareCleanupLimit: parseIntegerEnv(env.EXPIRED_SHARE_CLEANUP_LIMIT, 5000, { min: 1, max: 10000 }),
+    expiredShareCleanupIntervalMinutes: parseIntegerEnv(env.EXPIRED_SHARE_CLEANUP_INTERVAL_MINUTES, 360, { min: 5, max: 10080 }),
+    expiredShareCleanupRunOnStartup: parseBooleanEnv(env.EXPIRED_SHARE_CLEANUP_RUN_ON_STARTUP, true),
   }
 }
