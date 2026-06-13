@@ -1969,7 +1969,7 @@ export default function InputBar() {
         <div className="prototype-param-grid prototype-param-grid-desktop grid text-xs flex-1">
           {sizeField}
           <div className="prototype-param-side-stack">
-            {qualityField}
+            {!usesProductGateway && qualityField}
             {quantityField}
           </div>
         </div>
@@ -1979,7 +1979,7 @@ export default function InputBar() {
     return (
       <div className={`prototype-param-grid grid ${cols} gap-2 text-xs flex-1`}>
         {sizeField}
-        {qualityField}
+        {!usesProductGateway && qualityField}
         {quantityField}
       </div>
     )

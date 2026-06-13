@@ -14,7 +14,7 @@ import {
 } from './lib/accessCopy'
 
 type PrototypeNavItem = {
-  key: 'workbench' | 'library' | 'promptLibrary' | 'favorites' | 'auth' | 'invite' | 'plan' | 'help' | 'settings'
+  key: 'workbench' | 'library' | 'promptLibrary' | 'favorites' | 'auth' | 'plan' | 'help' | 'settings'
   label: string
   meta?: string
   tooltip: string
@@ -94,9 +94,6 @@ export default function App() {
   const logout = useStore((s) => s.logout)
   const openLoginDialog = useStore((s) => s.openLoginDialog)
   const tasks = useStore((s) => s.tasks)
-  const searchQuery = useStore((s) => s.searchQuery)
-  const filterStatus = useStore((s) => s.filterStatus)
-  const filterFavorite = useStore((s) => s.filterFavorite)
   const setSearchQuery = useStore((s) => s.setSearchQuery)
   const setFilterStatus = useStore((s) => s.setFilterStatus)
   const setFilterFavorite = useStore((s) => s.setFilterFavorite)
@@ -150,16 +147,6 @@ export default function App() {
       favoriteDoneTasks: favoriteDoneCount,
     }
   }, [account, tasks])
-  const hasActiveFilters = Boolean(searchQuery.trim()) || filterStatus !== 'all' || filterFavorite
-  const currentViewLabel = hasActiveFilters
-    ? [
-        searchQuery.trim() ? `关键词 ${searchQuery.trim()}` : null,
-        filterStatus !== 'all' ? `状态 ${filterStatus}` : null,
-        filterFavorite ? '仅收藏' : null,
-      ]
-        .filter(Boolean)
-        .join(' / ')
-    : `${totalTasks} 条记录 / ${favoriteTasks} 条收藏`
   const authRedirectTarget = galleryView === 'plan'
     ? 'plan'
     : galleryView === 'library'
@@ -191,12 +178,6 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
     showToast(account.isLoggedIn ? '已进入提示词库' : '已进入提示词库，当前可先浏览官方模板', 'info')
   }
-  const openInviteRegistration = () => {
-    setGalleryView('plan')
-    window.setTimeout(() => {
-      document.getElementById('invite-registration')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }, 120)
-  }
   const navSections: PrototypeNavSection[] = account.isLoggedIn
     ? [
         {
@@ -216,7 +197,6 @@ export default function App() {
         {
           group: '系统',
           items: [
-            { key: 'invite', label: '邀请链接', meta: account.inviteCode ? '可复制' : '加载中', tooltip: '复制发给别人注册的邀请链接', icon: 'invite', onClick: openInviteRegistration },
             { key: 'plan', label: '计划与额度', meta: `${account.balance} 点`, tooltip: '查看计划与额度', icon: 'wallet', onClick: () => setGalleryView('plan') },
             { key: 'help', label: '帮助', meta: '快捷说明', tooltip: '查看帮助说明', icon: 'help', onClick: () => setShowHelp(true) },
             { key: 'settings', label: '设置', meta: '偏好配置', tooltip: '打开设置', icon: 'settings', onClick: () => setShowSettings(true) },
@@ -309,6 +289,7 @@ export default function App() {
       </Suspense>
     )
   }
+
   if (publicShareToken) {
     return (
       <Suspense fallback={<LazyViewFallback title="正在打开分享..." description="正在读取共享作品。" />}>
@@ -316,6 +297,7 @@ export default function App() {
       </Suspense>
     )
   }
+
   return (
     <>
       <Header />
@@ -377,6 +359,7 @@ export default function App() {
                   <section className="prototype-prompt-panel">
                       <div className="prototype-panel-head">
                         <h3>输入</h3>
+                        <p className="prototype-panel-note">本地保存，生成中勿刷新。</p>
                       </div>
                       <div className="production-composer-slot">
                         <InputBar />
@@ -388,15 +371,7 @@ export default function App() {
                         <section className="prototype-results-section">
                           {account.isLoggedIn ? (
                             <>
-                              <div className="studio-results-head studio-results-head-compact">
-                                <section className="studio-topbar" aria-label="结果概览">
-                                  <div className="studio-topbar-main">
-                                    <span className="studio-topbar-title">当前结果</span>
-                                    <span className="studio-topbar-subtitle">
-                                      {currentViewLabel}
-                                    </span>
-                                  </div>
-                                </section>
+                              <div className="studio-results-head studio-results-toolbar">
                                 <SearchBar compact />
                               </div>
                               <TaskGrid limit={6} />

@@ -1,10 +1,15 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
 import { useStore, reuseConfig, removeTask, isTaskVisibleForAccount } from '../store'
+import type { TaskRecord } from '../types'
 import TaskCard from './TaskCard'
 import {
   GUEST_RESULTS_RETURN_COPY,
   GUEST_VIEW_YOUR_RESULTS_TITLE,
 } from '../lib/accessCopy'
+
+function getTaskRecentTime(task: TaskRecord) {
+  return Math.max(task.createdAt || 0, task.finishedAt || 0)
+}
 
 export default function TaskGrid({ limit = 6 }: { limit?: number }) {
   const account = useStore((s) => s.account)
@@ -51,7 +56,7 @@ export default function TaskGrid({ limit = 6 }: { limit?: number }) {
       const prompt = (t.prompt || '').toLowerCase()
       const paramStr = JSON.stringify(t.params).toLowerCase()
       return prompt.includes(q) || paramStr.includes(q)
-    })
+    }).sort((a, b) => getTaskRecentTime(b) - getTaskRecentTime(a) || b.createdAt - a.createdAt)
   }, [account, tasks, searchQuery, filterStatus, effectiveFavoriteFilter])
   const visibleTasks = limit > 0 ? filteredTasks.slice(0, limit) : filteredTasks
   const canDragSelect = visibleTasks.length > 0

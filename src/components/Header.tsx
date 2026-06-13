@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { GUEST_VIEW_BALANCE_LABEL } from '../lib/accessCopy'
 
@@ -8,7 +8,6 @@ export default function Header() {
   const openPlanDialog = useStore((s) => s.openPlanDialog)
   const logout = useStore((s) => s.logout)
   const authSessionToken = useStore((s) => s.authSessionToken)
-  const setAccountState = useStore((s) => s.setAccountState)
   const galleryView = useStore((s) => s.galleryView)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -100,47 +99,6 @@ export default function Header() {
     ? `${accountIdentityLabel} · ${account.balance} 点`
     : GUEST_VIEW_BALANCE_LABEL
 
-  useEffect(() => {
-    const token = authSessionToken?.trim()
-    if (!account.isLoggedIn || account.inviteCode?.trim() || !token) return
-
-    let cancelled = false
-    import('../lib/authApi')
-      .then(({ getMyReferralInfo }) => getMyReferralInfo(token))
-      .then((payload) => {
-        if (!cancelled) setAccountState({ inviteCode: payload.referral.inviteCode })
-      })
-      .catch(() => {
-        // The plan page still shows a clear empty state if referral loading fails.
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [account.inviteCode, account.isLoggedIn, authSessionToken, setAccountState])
-
-  const inviteLink = useMemo(() => {
-    const inviteCode = account.inviteCode?.trim()
-    if (!inviteCode || typeof window === 'undefined') return ''
-    const url = new URL('/register', window.location.origin)
-    url.searchParams.set('inviteCode', inviteCode)
-    return url.toString()
-  }, [account.inviteCode])
-  const handleCopyInviteLink = async () => {
-    if (!inviteLink) {
-      useStore.getState().showToast('当前账号暂未生成邀请码', 'error')
-      return
-    }
-    const { copyTextToClipboard, getClipboardFailureMessage } = await import('../lib/clipboard')
-    try {
-      await copyTextToClipboard(inviteLink)
-      setMenuOpen(false)
-      useStore.getState().showToast('邀请链接已复制', 'success')
-    } catch (error) {
-      useStore.getState().showToast(getClipboardFailureMessage('邀请链接复制失败', error), 'error')
-    }
-  }
-
   return (
     <>
       <header
@@ -156,18 +114,6 @@ export default function Header() {
           </div>
 
           <div className="prototype-top-actions">
-            {account.isLoggedIn ? (
-              <button
-                type="button"
-                className="prototype-top-button prototype-top-button-ghost prototype-invite-shortcut"
-                onClick={() => void handleCopyInviteLink()}
-                disabled={!inviteLink}
-                title={inviteLink ? '复制后可发给别人注册' : '邀请码加载中'}
-              >
-                <span aria-hidden="true">↗</span>
-                复制邀请链接
-              </button>
-            ) : null}
             {!account.isLoggedIn && galleryView === 'auth' ? null : (
             <div
               ref={accountMenuRef}
@@ -256,20 +202,6 @@ export default function Header() {
                     </div>
                     <div className="mx-2 my-1.5 h-px bg-[linear-gradient(90deg,rgba(99,102,241,0),rgba(99,102,241,0.16),rgba(99,102,241,0))] dark:bg-[linear-gradient(90deg,rgba(99,102,241,0),rgba(129,140,248,0.22),rgba(99,102,241,0))]" />
                     <div className="flex flex-col gap-0.5">
-                      <button
-                        type="button"
-                        className="group flex items-center justify-between rounded-[14px] px-3 py-2.5 text-left transition hover:bg-white/90 focus:bg-white/90 dark:hover:bg-white/[0.05] dark:focus:bg-white/[0.05]"
-                        role="menuitem"
-                        onClick={() => void handleCopyInviteLink()}
-                      >
-                        <div>
-                          <p className="text-sm font-medium text-slate-800 dark:text-gray-100">复制邀请链接</p>
-                          <p className="mt-1 text-[10px] text-slate-500 dark:text-gray-400">发给别人注册新账号</p>
-                        </div>
-                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] text-slate-500 transition group-hover:bg-indigo-50 group-hover:text-indigo-600 dark:bg-white/[0.06] dark:text-gray-400 dark:group-hover:bg-indigo-400/12 dark:group-hover:text-indigo-300">
-                          复制
-                        </span>
-                      </button>
                       <button
                         type="button"
                         className="group flex items-center justify-between rounded-[14px] px-3 py-2.5 text-left transition hover:bg-white/90 focus:bg-white/90 dark:hover:bg-white/[0.05] dark:focus:bg-white/[0.05]"

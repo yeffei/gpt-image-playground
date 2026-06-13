@@ -30,26 +30,11 @@ export default function LibraryView() {
     const favorites = visibleTasks.filter((task) => task.status === 'done' && task.isFavorite && task.outputImages.length > 0).length
     return { all, favorites }
   }, [account, tasks])
-  const accountScopeLabel = useMemo(() => {
-    if (!account.isLoggedIn) return ''
-    const email = account.email?.trim()
-    const userId = account.userId?.trim()
-    const userIdSuffix = userId ? userId.slice(-6) : ''
-    if (email) return `${email}${userIdSuffix ? ` · ${userIdSuffix}` : ''}`
-    if (userIdSuffix) return `账号 ${userIdSuffix}`
-    return account.displayName
-  }, [account.displayName, account.email, account.isLoggedIn, account.userId])
-
   const activeLabel = libraryViewMode === 'favorites' ? '收藏' : '作品库'
   const accessTitle = libraryViewMode === 'favorites' ? GUEST_VIEW_FAVORITES_LABEL : GUEST_VIEW_LIBRARY_LABEL
   const accessCopy = libraryViewMode === 'favorites'
     ? GUEST_FAVORITES_ACCESS_COPY
     : GUEST_LIBRARY_ACCESS_COPY
-  const filterSummary = [
-    searchQuery.trim() ? `关键词 ${searchQuery.trim()}` : null,
-    filterStatus !== 'all' ? `状态 ${filterStatus}` : null,
-    filterFavorite ? '仅收藏' : null,
-  ].filter(Boolean).join(' / ')
   const resultSummary = !account.isLoggedIn
     ? activeLabel
     : libraryViewMode === 'favorites'
@@ -95,14 +80,6 @@ export default function LibraryView() {
               <h1 className="library-view-title">{activeLabel}</h1>
               <span className="library-view-count-badge">{resultSummary}</span>
             </div>
-            <p className="library-view-inline-note">
-              {filterSummary
-                ? `当前筛选: ${filterSummary}`
-                : libraryViewMode === 'favorites'
-                ? '集中回看你主动保留下来的结果。'
-                : '按时间倒序查看最近产出的结果。'}
-            </p>
-            <p className="library-account-scope">当前账号：{accountScopeLabel}</p>
           </div>
           <div className="library-results-head">
             <div className="library-toolbar">
