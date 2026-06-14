@@ -389,22 +389,15 @@ export default function PromptLibraryView() {
     let cancelled = false
     const loadHiddenOfficialTemplateIds = async () => {
       try {
-        const response = await fetch(buildAdminApiUrl('/api/prompt-library/official-template-overrides'))
-        const payload = await response.json() as { ok?: boolean; hiddenTemplateIds?: unknown }
+        const ids = await fetchOfficialTemplateOverrideIds()
         if (cancelled) return
-        if (!response.ok || payload.ok === false) {
-          setHiddenOfficialTemplateIds([])
-          setOfficialTemplateOverridesLoaded(true)
-          return
-        }
-        const ids = Array.isArray(payload.hiddenTemplateIds)
-          ? payload.hiddenTemplateIds.filter((item): item is string => typeof item === 'string')
-          : []
         setHiddenOfficialTemplateIds(ids)
-        setOfficialTemplateOverridesLoaded(true)
       } catch {
         if (!cancelled) {
           setHiddenOfficialTemplateIds([])
+        }
+      } finally {
+        if (!cancelled) {
           setOfficialTemplateOverridesLoaded(true)
         }
       }
