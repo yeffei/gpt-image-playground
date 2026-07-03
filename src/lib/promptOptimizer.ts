@@ -15,9 +15,11 @@ export interface PromptOptimizerResult {
   explanation: string[]
   optimizedPrompt: string
   negativePrompt: string
-  recommendedRatio: string
+  recommendedRatio?: string
   enhancementTips: string[]
 }
+
+import { sanitizeNegativePrompt } from './negativePromptSafety'
 
 const NEGATIVE_BASE_TERMS = [
   'low quality',
@@ -40,6 +42,10 @@ const NEGATIVE_BASE_TERMS_ZH = [
   '标志',
   '文字错误',
 ]
+
+const PEOPLE_SUBJECT_PATTERN = /(人像|人物|人类|角色|肖像|女孩|女生|女人|女性|男孩|男生|男人|男性|模特|人群|行人|person|people|human|portrait|woman|man|girl|boy|model|character|crowd)/i
+const SCENE_ONLY_PATTERN = /(宇宙|太空|星云|星系|银河|星空|风景|自然景观|山脉|海洋|天空|云海|建筑空间|室内空间|纯场景|无人|无人物|space|cosmos|galaxy|nebula|starscape|landscape|seascape|sky|mountain|interior|architecture|no people|without people)/i
+const EXPLICIT_NO_PEOPLE_PATTERN = /(无人物|无人|无角色|不要人物|避免人物|没有人物|no people|without people|no human figures|no characters)/i
 
 function splitTerms(value: string) {
   return value
@@ -198,6 +204,27 @@ function inferCompactAdditions(prompt: string) {
   return additions.slice(0, 2)
 }
 
+function filterBaseNegativeTerms(baseTerms: string[], prompt: string, preferChinese: boolean) {
+  const normalized = prompt.toLowerCase()
+  return baseTerms.filter((term) => {
+    const key = normalizeTermKey(term)
+    if (/(插画|illustration|绘本|水彩|手绘|illustrated)/i.test(normalized) && ['illustration', '插画感'].includes(key)) return false
+    if (/(动漫|二次元|anime|manga)/i.test(normalized) && ['anime', '动漫感'].includes(key)) return false
+    if (/(cgi|3d|三维|渲染|render|blender|octane|c4d)/i.test(normalized) && ['cgi look', 'cgi 质感'].includes(key)) return false
+    if (/(logo|标志|徽标|品牌标识|brand mark)/i.test(normalized) && ['logo', '标志'].includes(key)) return false
+    return true
+  }).concat(preferChinese ? getSceneOnlyNegativeTerms(prompt, true) : getSceneOnlyNegativeTerms(prompt, false))
+}
+
+function getSceneOnlyNegativeTerms(prompt: string, preferChinese: boolean) {
+  const promptWithoutExclusions = prompt.replace(EXPLICIT_NO_PEOPLE_PATTERN, '')
+  if (PEOPLE_SUBJECT_PATTERN.test(promptWithoutExclusions)) return []
+  if (!SCENE_ONLY_PATTERN.test(prompt)) return []
+  return preferChinese
+    ? ['无人物', '无角色', '无肖像', '无身体']
+    : ['no people', 'no characters', 'no portraits', 'no bodies']
+}
+
 function buildPromptBody(prompt: string, mode: PromptOptimizerResult['mode']) {
   const clauses = dedupeClauses(splitPromptClauses(prompt).map(cleanClauseForImagePrompt).filter(Boolean))
   const compactClauses = [...clauses].sort((a, b) => scoreClauseCategory(a) - scoreClauseCategory(b))
@@ -220,7 +247,7 @@ function buildNegativePrompt(existing: string, prompt: string) {
     : isChinesePrompt(prompt)
 
   const existingTerms = normalizeExistingNegativeTerms(existing, preferChinese)
-  const baseTerms = preferChinese ? NEGATIVE_BASE_TERMS_ZH : NEGATIVE_BASE_TERMS
+  const baseTerms = filterBaseNegativeTerms(preferChinese ? NEGATIVE_BASE_TERMS_ZH : NEGATIVE_BASE_TERMS, prompt, preferChinese)
   const promptText = prompt.toLowerCase()
 
   const detailTerms = preferChinese
@@ -284,9 +311,6 @@ function getRecommendedRatio(prompt: string, currentSize?: string) {
   if (/16\s*:\s*9|横版|横图|panorama|wide/i.test(normalizedPrompt)) return '16:9'
   if (/1\s*:\s*1|方图|方形|square/i.test(normalizedPrompt)) return '1:1'
 
-  const ratioFromSize = getRatioFromSize(currentSize)
-  if (ratioFromSize) return ratioFromSize
-
   const portraitScore = ['full body', 'standing', 'mobile wallpaper', '全身', '站立', '手机壁纸']
     .reduce((total, keyword) => total + (normalizedPrompt.includes(keyword) ? 1 : 0), 0)
   const landscapeScore = ['landscape', 'interior', 'room', 'wide shot', '风景', '室内', '空间', '远景']
@@ -297,10 +321,12 @@ function getRecommendedRatio(prompt: string, currentSize?: string) {
   if (portraitScore >= 2 && portraitScore > Math.max(landscapeScore, squareScore)) return '9:16'
   if (landscapeScore >= 2 && landscapeScore > squareScore) return '16:9'
   if (squareScore >= 2) return '1:1'
-  return '1:1'
+  const ratioFromSize = getRatioFromSize(currentSize)
+  if (/海报|封面|poster|cover/i.test(normalizedPrompt) && ratioFromSize) return ratioFromSize
+  return undefined
 }
 
-export function optimizePrompt(input: PromptOptimizerInput): PromptOptimizerResult {
+export function buildPromptOptimizerResult(input: PromptOptimizerInput): PromptOptimizerResult {
   const normalizedInput = normalizePromptOptimizerInput(input)
 
   const mode: PromptOptimizerResult['mode'] = normalizedInput.hasReferenceImages || normalizedInput.hasMask
@@ -308,7 +334,10 @@ export function optimizePrompt(input: PromptOptimizerInput): PromptOptimizerResu
     : 'text-to-image'
 
   const optimizedPrompt = buildPromptBody(normalizedInput.prompt, mode)
-  const negativePrompt = buildNegativePrompt(normalizedInput.negativePrompt ?? '', normalizedInput.prompt)
+  const negativePrompt = sanitizeNegativePrompt(
+    buildNegativePrompt(normalizedInput.negativePrompt ?? '', normalizedInput.prompt),
+    normalizedInput.prompt,
+  ) ?? ''
   const recommendedRatio = getRecommendedRatio(normalizedInput.prompt, normalizedInput.currentSize)
 
   const explanation = mode === 'image-to-image'
@@ -341,4 +370,12 @@ export function optimizePrompt(input: PromptOptimizerInput): PromptOptimizerResu
     recommendedRatio,
     enhancementTips,
   }
+}
+
+export function shouldPrecomputePromptOptimizer(input: PromptOptimizerInput) {
+  return normalizePromptText(input.prompt).length > 0
+}
+
+export function optimizePrompt(input: PromptOptimizerInput): PromptOptimizerResult {
+  return buildPromptOptimizerResult(input)
 }

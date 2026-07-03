@@ -34,7 +34,7 @@ export default function PromptOptimizerModal({ result, onClose, onApply, onCopy 
             <div>
               <div className="text-[10px] font-medium uppercase tracking-[0.22em] text-slate-400 dark:text-gray-500">提示词优化</div>
               <h3 className="mt-1 text-base font-bold text-slate-800 dark:text-gray-100">优化提示词</h3>
-              <p className="mt-1 text-xs text-slate-500 dark:text-gray-400">本次优化模式：{modeLabel}</p>
+              <p className="mt-1 text-xs text-slate-500 dark:text-gray-400">本次优化模式：{modeLabel}，点击应用前不会改写当前输入。</p>
             </div>
             <button
               type="button"
@@ -50,18 +50,15 @@ export default function PromptOptimizerModal({ result, onClose, onApply, onCopy 
         </div>
 
         <div className="max-h-[70vh] space-y-4 overflow-y-auto px-5 py-5 custom-scrollbar">
-          <section className="rounded-2xl border border-cyan-100 bg-cyan-50/80 p-4 dark:border-cyan-500/20 dark:bg-cyan-500/10">
-            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-cyan-700/80 dark:text-cyan-200/80">使用边界</div>
-            <p className="mt-2 text-sm leading-relaxed text-slate-600 dark:text-gray-300">
-              这里只整理主提示词和负面提示词，帮助你更稳定地表达画面需求，不负责审核、拦截或判断请求是否允许提交。
-            </p>
-          </section>
-
-          <section className="rounded-2xl border border-gray-100 bg-white/75 p-4 dark:border-white/[0.06] dark:bg-white/[0.02]">
-            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-gray-500">优化说明</div>
-            <div className="mt-2 space-y-1.5">
+          <section className="rounded-2xl border border-cyan-100 bg-cyan-50/70 p-3.5 dark:border-cyan-500/20 dark:bg-cyan-500/10">
+            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-cyan-700/80 dark:text-cyan-200/80">使用说明</div>
+            <div className="mt-2 grid gap-1.5 text-[13px] leading-relaxed text-slate-600 dark:text-gray-300">
+              <p>只整理主提示词和负面提示词，不判断请求是否可提交。</p>
               {result.explanation.map((line) => (
-                <p key={line} className="text-sm leading-relaxed text-slate-600 dark:text-gray-300">{line}</p>
+                <p key={line} className="flex gap-2">
+                  <span className="mt-[0.65em] h-1 w-1 shrink-0 rounded-full bg-cyan-500/70" />
+                  <span>{line}</span>
+                </p>
               ))}
             </div>
           </section>
@@ -76,18 +73,20 @@ export default function PromptOptimizerModal({ result, onClose, onApply, onCopy 
             <pre className="mt-2 whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700 dark:text-gray-200">{result.negativePrompt}</pre>
           </section>
 
-          <section className="rounded-2xl border border-gray-100 bg-white/75 p-4 dark:border-white/[0.06] dark:bg-white/[0.02]">
-            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-gray-500">推荐比例</div>
-            <div className="mt-2 flex items-center justify-between gap-3">
-              <div>
-                <div className="text-lg font-semibold text-slate-800 dark:text-gray-100">{result.recommendedRatio}</div>
-                <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-gray-400">仅作建议，不会自动覆盖当前画幅参数。</p>
+          {result.recommendedRatio && (
+            <section className="rounded-2xl border border-gray-100 bg-white/75 p-4 dark:border-white/[0.06] dark:bg-white/[0.02]">
+              <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-gray-500">推荐比例</div>
+              <div className="mt-2 flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-lg font-semibold text-slate-800 dark:text-gray-100">{result.recommendedRatio}</div>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-gray-400">仅作建议，不会自动覆盖当前画幅参数。</p>
+                </div>
+                <span className="shrink-0 rounded-full border border-[rgba(148,163,184,0.18)] bg-white/70 px-2.5 py-1 text-[11px] text-slate-600 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-300">
+                  仅供参考
+                </span>
               </div>
-              <span className="shrink-0 rounded-full border border-[rgba(148,163,184,0.18)] bg-white/70 px-2.5 py-1 text-[11px] text-slate-600 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-300">
-                仅供参考
-              </span>
-            </div>
-          </section>
+            </section>
+          )}
 
           <section className="rounded-2xl border border-gray-100 bg-white/75 p-4 dark:border-white/[0.06] dark:bg-white/[0.02]">
             <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-gray-500">增强建议</div>

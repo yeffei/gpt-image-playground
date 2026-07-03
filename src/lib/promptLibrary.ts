@@ -344,7 +344,7 @@ const RAW_PROMPT_LIBRARY_TEMPLATES: PromptTemplateItem[] = [
     tags: ['微缩建筑', '品牌空间', '街景装置'],
     prompt:
       'Create a whimsical miniature brand store scene in an urban diorama style. The building should reinterpret [brand/store type] as a memorable architectural object while keeping premium storefront details, clear windows, warm interior lighting, tiny visitors, benches, plants, and refined street props. Use soft afternoon-style light, realistic materials, and dense but controlled detail so the result feels collectible, charming, and commercially polished rather than childish.',
-    negativePrompt: '避免建筑结构混乱，避免街景元素过密，避免品牌元素生硬贴 logo，避免塑料玩具感，避免透视崩坏，避免背景脏乱',
+    negativePrompt: '避免透视错误，避免结构比例失真，避免品牌元素生硬贴 logo，避免塑料玩具感，避免背景杂乱，避免低清晰度',
     guidance: [
       '适合品牌快闪店、文旅小店、咖啡馆或零售空间的创意表达，主体最好只有一个门店。',
       '如果品牌识别不足，可以追加招牌、包装元素或橱窗陈列，但不要整条街都做成品牌广告。',
@@ -1401,7 +1401,7 @@ const RAW_PROMPT_LIBRARY_TEMPLATES: PromptTemplateItem[] = [
     tags: ['城市海报', '文化主题', '设计年鉴感'],
     prompt:
       'Create a refined city cultural poster on an off-white textured background with large negative space and one striking compositional device, such as a ribbon of water that transforms into a dreamlike city panorama. Inside that flowing structure, weave iconic landmarks, historic neighborhoods, river atmosphere, soft seasonal fog, and a subtle celebratory palette so the result feels sophisticated, layered, and premium rather than like a tourism brochure.',
-    negativePrompt: '避免地标硬拼贴，避免海报像旅游宣传单，避免信息层级杂乱，避免配色俗艳，避免城市元素过多打架，避免无留白',
+    negativePrompt: '避免拼贴痕迹过重，避免信息层级杂乱，避免配色俗艳，避免主体焦点分散，避免背景元素过密，避免无留白',
     guidance: [
       '先定一个构图母题，再决定城市元素的密度。',
       '文案只做点睛，不要让它变成文旅详情页。',
@@ -1512,7 +1512,7 @@ const RAW_PROMPT_LIBRARY_TEMPLATES: PromptTemplateItem[] = [
     tags: ['城市文旅', '重庆夜景', '中文海报'],
     prompt:
       'Create a premium city-promo poster for a layered mountain metropolis at rainy night, with stacked hillside buildings, elevated rail lines piercing architecture, wet streets, neon reflections, river mist, sloping roads, and controlled modern Chinese typography. Keep the information density moderate, the palette focused on deep blue, warm orange, and wet neon red, and the overall feel closer to a design-yearbook city campaign than a travel-agency flyer.',
-    negativePrompt: '避免像旅游社海报，避免地标堆砌，避免中文排版散乱，避免颜色发俗，避免夜景细节糊掉，避免无留白',
+    negativePrompt: '避免信息堆砌，避免中文排版散乱，避免颜色发俗，避免夜景细节糊掉，避免画面焦点分散，避免无留白',
     guidance: [
       '这类图重在氛围统一，不要什么城市元素都塞进来。',
       '先锁夜色和坡道关系，再补轻轨与雾气。',
@@ -1778,7 +1778,7 @@ const RAW_PROMPT_LIBRARY_TEMPLATES: PromptTemplateItem[] = [
     tags: ['街头时装', 'lookbook', '夜景人像'],
     prompt:
       'Create a full-body streetwear lookbook photograph of a model standing in the center of a rain-slicked Shibuya crossing at twilight, wearing an oversized technical puffer with reflective detailing, wide-leg cargo pants, and chunky sneakers. Use a 35mm feel, dramatic directional billboard light, neon bokeh in pinks and cyans, subtle Portra-like grain, and a clean vertical magazine layout with no visible brand logos.',
-    negativePrompt: '避免像游客街拍，避免服装没有轮廓，避免背景抢主角，避免霓虹太乱，避免模特姿态僵硬，避免普通淘宝拍法',
+    negativePrompt: '避免服装轮廓不清，避免背景喧宾夺主，避免霓虹杂乱，避免姿态僵硬，避免低清晰度，避免廉价摆拍感',
     guidance: [
       '最重要的是服装轮廓和夜色反光，不是把涩谷地标都拍全。',
       '先锁主外套和色温，再补路面和灯牌虚化。',
@@ -1800,7 +1800,7 @@ const RAW_PROMPT_LIBRARY_TEMPLATES: PromptTemplateItem[] = [
     tags: ['高定秀场', '时装大片', '建筑化服装'],
     prompt:
       'Create a high-angle editorial photograph of a haute couture runway show set inside a brutalist concrete cathedral, with a sculptural iridescent organza gown that behaves like liquid mercury under a single powerful overhead spotlight. Keep the palette to champagne gold and shadow gray, the makeup ethereal with silver accents, the lens around 50mm, and the overall mood solemn, artistic, and high-fashion, focusing on the meeting point of textile texture and monumental space.',
-    negativePrompt: '避免秀场像婚纱摄影，避免服装细节塌掉，避免建筑背景太弱，避免高定气质不够，避免灯光打平，避免俗艳反光',
+    negativePrompt: '避免服装细节糊掉，避免材质层次塌陷，避免灯光打平，避免反光俗艳，避免透视失真，避免低清晰度',
     guidance: [
       '高定图先保服装体积，再让空间为它服务。',
       '灯光越少越狠，别把秀场做成大平光。',
@@ -1844,7 +1844,7 @@ const RAW_PROMPT_LIBRARY_TEMPLATES: PromptTemplateItem[] = [
     tags: ['高时装', '超现实', '实验大片'],
     prompt:
       'Create a high-fashion editorial shot in a surreal desert where the sand is white and the sky a deep indigo. Dress the model in an avant-garde garment that appears grown from bioluminescent fungi and dried desert vines, with glowing acid-green veins, exaggerated asymmetry, and a monumental low-angle composition. Use a wide lens, an otherworldly internal dress glow, and a strict palette of white, indigo, and bioluminescent green for a haunting, futuristic mood.',
-    negativePrompt: '避免像 cosplay，避免时装失去结构，避免环境像普通沙漠写真，避免特效感廉价，避免色彩杂乱，避免人体比例畸形',
+    negativePrompt: '避免服装结构失真，避免特效廉价，避免色彩杂乱，避免人体比例畸形，避免材质层次塌陷，避免低清晰度',
     guidance: [
       '实验感来自材料和光，不是怪异 pose。',
       '先锁三色系统，再让服装和地形相互呼应。',
