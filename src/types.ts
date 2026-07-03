@@ -22,6 +22,7 @@ export const DEFAULT_AGENT_MAX_TOOL_ROUNDS = 15
 
 export type ImageGatewayApiMode = Extract<ApiMode, 'images'>
 export type ImageRequestCompatibilityStrategy = 'openai_standard' | 'relay_extended'
+export type BackendRouteProvider = 'openai-compatible' | 'gemini-native'
 
 export interface ModelSku {
   id: string
@@ -35,6 +36,7 @@ export interface ModelSku {
   supportsEdit?: boolean
   supportsMask?: boolean
   maxOutputCount: number
+  maxSupportedLongEdge?: number | null
 }
 
 export interface PlatformCapabilities {
@@ -47,6 +49,7 @@ export interface PlatformCapabilities {
     models: Array<Omit<ModelSku, 'routeIds'>>
     defaultModelSku: string
     maxOutputCount: number
+    maxSupportedLongEdge?: number | null
     supportsEdit: boolean
     supportsMask: boolean
     supportsAsyncTasks: boolean
@@ -78,10 +81,73 @@ export interface PlatformCapabilities {
       }
 }
 
+export interface GatewayRouteProbeTest {
+  requestedSize: string
+  actualSize: string | null
+  actualWidth: number | null
+  actualHeight: number | null
+  shrunk: boolean
+  returnedImage: boolean
+  statusCode: number | null
+  latencyMs: number
+  errorSummary: string | null
+}
+
+export interface GatewayRouteProbeResult {
+  routeId: string
+  routeName: string
+  upstreamModel: string
+  tests: GatewayRouteProbeTest[]
+  maxSupportedLongEdge: number | null
+}
+
+export interface GatewayRouteProbeBatchSummary {
+  totalRoutes: number
+  available2kRouteCount: number
+  available4kRouteCount: number
+  brokenRouteCount: number
+}
+
+export interface GatewayRoutePreflightProbe {
+  ok: boolean
+  status: number | null
+  durationMs: number
+  error?: string
+}
+
+export interface GatewayRoutePreflightResult {
+  id: string
+  name: string
+  enabled: boolean
+  provider?: BackendRouteProvider
+  baseUrl: string
+  apiKey: string
+  model: string
+  compatibilityStrategy: ImageRequestCompatibilityStrategy
+  baseProbe: GatewayRoutePreflightProbe
+  modelsProbe: GatewayRoutePreflightProbe
+  status:
+    | 'missing_base_url'
+    | 'missing_api_key'
+    | 'ready_for_smoke'
+    | 'auth_failed'
+    | 'models_endpoint_missing'
+    | 'rate_limited'
+    | 'upstream_server_error'
+    | 'network_or_timeout'
+    | 'unknown'
+}
+
+export interface GatewayRoutePreflightSummary {
+  totalRoutes: number
+  readyForSmokeCount: number
+  authFailedCount: number
+}
+
 export interface BackendRoute {
   id: string
   name: string
-  provider: 'openai-compatible'
+  provider: BackendRouteProvider
   compatibilityStrategy: ImageRequestCompatibilityStrategy
   baseUrl: string
   apiKey: string
@@ -201,6 +267,7 @@ export interface InspirationHomePostCard {
 export type ImageGatewayFailureKind =
   | 'no_route'
   | 'route_exhausted'
+  | 'insufficient_balance'
   | 'upstream_timeout'
   | 'upstream_rate_limited'
   | 'upstream_server_error'
@@ -536,6 +603,23 @@ export interface MaskDraft {
 
 export type TaskStatus = 'running' | 'done' | 'error'
 
+export type PublicTaskResultStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout'
+export type PublicTaskChargeStatus = 'not_charged' | 'charged' | 'partial_charged' | 'pending'
+export type PublicTaskRetryAction = 'reuse_or_tune' | 'retry' | 'adjust_params' | 'wait' | 'contact_support'
+
+export interface PublicTaskResultView {
+  status: PublicTaskResultStatus
+  modelLabel: string
+  outputCount: number
+  requestedOutputCount: number
+  chargedPoints: number
+  chargeStatus: PublicTaskChargeStatus
+  failureHeadline?: string
+  failureSummary?: string
+  requestId?: string
+  retryAction: PublicTaskRetryAction
+}
+
 export interface TaskRecord {
   id: string
   ownerUserId?: string | null
@@ -556,6 +640,22 @@ export interface TaskRecord {
   modelSku?: string
   /** Gateway 失败分类，用于标准化错误文案 */
   gatewayFailureKind?: ImageGatewayFailureKind
+  /** 服务端请求编号，用于前后台统一排查 */
+  requestId?: string
+  /** 服务端最终命中的线路标识，用于失败任务排查 */
+  routeId?: string
+  /** 服务端最终命中的上游模型，用于共享线路排查 */
+  upstreamModel?: string
+  /** 服务端记录的路由尝试明细，用于失败任务排查 */
+  attempts?: ImageGatewayAttempt[]
+  /** 服务端记录的请求输出数量，用于部分成功解释 */
+  requestedOutputCount?: number
+  /** 部分成功时的补充说明 */
+  partialFailureMessage?: string
+  /** 本次任务实际扣点，优先以后端真相为准 */
+  chargedPoints?: number | null
+  /** 本次任务关联的服务端流水编号 */
+  chargeLedgerId?: string | null
   /** fal.ai 队列请求 ID，用于连接断开后的结果恢复 */
   falRequestId?: string
   /** fal.ai 队列 endpoint，用于连接断开后的状态和结果查询 */
@@ -570,6 +670,16 @@ export interface TaskRecord {
   serverImageTaskId?: string
   /** API 返回的实际生效参数，用于标记与请求值不一致的情况 */
   actualParams?: Partial<TaskParams>
+  /** 底图生成计划与交付信息，用于解释平台增强输出 */
+  deliveryPlan?: {
+    requestedSize: string
+    requestedTier: '1K' | '2K' | '4K'
+    requestedRatio: string
+    baseSize: string
+    baseRatio: '1:1' | '3:2' | '2:3'
+    strategy: 'direct' | 'upscale' | 'crop_then_upscale' | 'pad_then_upscale'
+    deliveryLabel: string
+  }
   /** 输出图片对应的实际生效参数，key 为 outputImages 中的图片 id */
   actualParamsByImage?: Record<string, Partial<TaskParams>>
   /** 输出图片对应的 API 改写提示词，key 为 outputImages 中的图片 id */

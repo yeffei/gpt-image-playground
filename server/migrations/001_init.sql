@@ -145,10 +145,23 @@ CREATE TABLE IF NOT EXISTS generation_tasks (
   finished_at TIMESTAMPTZ
 );
 
-ALTER TABLE generation_tasks
-  ADD COLUMN IF NOT EXISTS requested_output_count INTEGER NOT NULL DEFAULT 1 CHECK (requested_output_count > 0),
-  ADD COLUMN IF NOT EXISTS reserved_points NUMERIC(14, 2) NOT NULL DEFAULT 0 CHECK (reserved_points >= 0),
-  ADD COLUMN IF NOT EXISTS request_json JSONB;
+ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'succeeded';
+ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'generate';
+ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS model_sku TEXT NOT NULL DEFAULT 'legacy';
+ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS request_id TEXT;
+ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS route_id TEXT;
+ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS upstream_model TEXT;
+ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS requested_output_count INTEGER NOT NULL DEFAULT 1 CHECK (requested_output_count > 0);
+ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS reserved_points NUMERIC(14, 2) NOT NULL DEFAULT 0 CHECK (reserved_points >= 0);
+ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS output_count INTEGER NOT NULL DEFAULT 0 CHECK (output_count >= 0);
+ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS charged_points NUMERIC(14, 2) NOT NULL DEFAULT 0 CHECK (charged_points >= 0);
+ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS ledger_id TEXT REFERENCES balance_ledger(id);
+ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS failure_kind TEXT;
+ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS error_summary TEXT;
+ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS request_json JSONB;
+ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ;
+ALTER TABLE generation_tasks DROP CONSTRAINT IF EXISTS generation_tasks_status_check;
+ALTER TABLE generation_tasks ADD CONSTRAINT generation_tasks_status_check CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled', 'timeout'));
 
 CREATE TABLE IF NOT EXISTS generation_task_outputs (
   id TEXT PRIMARY KEY,
@@ -286,11 +299,23 @@ CREATE TABLE IF NOT EXISTS gateway_routes (
   base_url TEXT NOT NULL,
   api_key_ref TEXT NOT NULL,
   default_upstream_model TEXT,
+  compatibility_strategy TEXT CHECK (compatibility_strategy IN ('openai_standard', 'relay_extended')),
   enabled BOOLEAN NOT NULL DEFAULT true,
+  is_official BOOLEAN NOT NULL DEFAULT false,
+  max_supported_long_edge INTEGER CHECK (max_supported_long_edge IS NULL OR max_supported_long_edge > 0),
+  high_res_probe_result JSONB,
+  high_res_probe_at TIMESTAMPTZ,
   notes TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE gateway_routes ADD COLUMN IF NOT EXISTS compatibility_strategy TEXT CHECK (compatibility_strategy IN ('openai_standard', 'relay_extended'));
+ALTER TABLE gateway_routes ADD COLUMN IF NOT EXISTS is_official BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE gateway_routes ADD COLUMN IF NOT EXISTS max_supported_long_edge INTEGER CHECK (max_supported_long_edge IS NULL OR max_supported_long_edge > 0);
+ALTER TABLE gateway_routes ADD COLUMN IF NOT EXISTS high_res_probe_result JSONB;
+ALTER TABLE gateway_routes ADD COLUMN IF NOT EXISTS high_res_probe_at TIMESTAMPTZ;
+UPDATE gateway_routes SET compatibility_strategy = 'relay_extended' WHERE compatibility_strategy IS NULL;
 
 CREATE TABLE IF NOT EXISTS model_skus (
   id TEXT PRIMARY KEY,

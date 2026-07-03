@@ -7,12 +7,16 @@ import type { Db } from './db.js'
 import type { ServerEnv } from './env.js'
 import { storeGeneratedImage, type StoredImageOutput } from './imageStorage.js'
 import { requireUserSession } from './userAuth.js'
+import { buildGeminiGenerateContentBody, buildGeminiModelPath, parseGeminiNativeImagePayload } from './geminiNativeImageApi.js'
+import { createImageDeliveryPlan, type ImageDeliveryPlan } from './imageDeliveryPlan.js'
+import { applyDeliveryPlanToImage, createSharpResizeExecutor } from './imageDeliveryProcessor.js'
 
-const DEFAULT_MODEL_SKU = 'gpt-image-2-fast'
+const DEFAULT_UPSTREAM_MODEL = 'gpt-image-2'
 const MAX_OUTPUT_COUNT = 4
 const MAX_OUTPUT_SLOT_RETRY_ROUNDS = 2
 const UPSTREAM_OUTPUT_COUNT_PER_REQUEST = 1
 const TASK_ABORT_REASON_CANCELLED = 'task_cancelled'
+const GPT_IMAGE_2_SUPPORTED_SIZES = ['*']
 const activeGenerationTaskControllers = new Map<string, AbortController>()
 
 type TaskParams = {
@@ -32,6 +36,8 @@ type GatewayRequest = {
   inputImageDataUrls?: string[]
   maskDataUrl?: string
 }
+
+type DeliveryPlan = ImageDeliveryPlan
 
 type RecordCompletedTaskRequest = {
   clientTaskId?: string
@@ -61,10 +67,13 @@ type RuntimeRouteRow = {
   route_id: string
   route_name: string
   model_name: string
+  provider?: 'openai-compatible' | 'gemini-native' | string
   base_url: string
   api_key_ref: string
+  compatibility_strategy?: 'openai_standard' | 'relay_extended' | null
   default_upstream_model?: string | null
   upstream_model?: string | null
+  max_supported_long_edge?: number | null
   priority: number
   weight: number
   timeout_seconds: number
@@ -76,6 +85,10 @@ type BillingReservation = {
   taskId: string
   reservedPoints: number
   billingBasis: GenerationBillingBasis
+}
+
+function isGeminiModel(upstreamModel: string) {
+  return /^gemini(?:-|$)/i.test(upstreamModel.trim())
 }
 
 type GenerationTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout'
@@ -137,6 +150,20 @@ type PersistedOutput = StoredImageOutput & {
   rawSourceUrl?: string
 }
 
+function normalizeDeliveryPlan(size?: string): DeliveryPlan | undefined {
+  if (!size) return undefined
+  return createImageDeliveryPlan(size) ?? undefined
+}
+
+function getBaseGenerationSize(size?: string) {
+  return normalizeDeliveryPlan(size)?.baseSize ?? size
+}
+
+function shouldPreferLosslessDelivery(size?: string) {
+  const requestedLongestEdge = parseRequestedLongestEdge(size)
+  return requestedLongestEdge > 1536
+}
+
 function serializePersistedOutput(output: PersistedOutput) {
   return {
     id: output.id,
@@ -147,6 +174,8 @@ function serializePersistedOutput(output: PersistedOutput) {
     storageKey: output.storageKey,
     mimeType: output.mimeType,
     byteSize: output.byteSize,
+    width: output.width,
+    height: output.height,
   }
 }
 
@@ -235,14 +264,39 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
-function isClientDisconnected(request: { raw: { aborted?: boolean; destroyed?: boolean } }, reply: { raw: { destroyed?: boolean; writableEnded?: boolean } }) {
-  return Boolean(request.raw.aborted || request.raw.destroyed || (reply.raw.destroyed && !reply.raw.writableEnded))
+export function isClientDisconnected(request: { raw: { aborted?: boolean; destroyed?: boolean } }, reply: { raw: { destroyed?: boolean; writableEnded?: boolean } }) {
+  return Boolean(request.raw.aborted || (reply.raw.destroyed && !reply.raw.writableEnded))
 }
 
 function normalizeJsonArray(value: unknown, fallback: string[]) {
   return Array.isArray(value)
     ? value.map((item) => typeof item === 'string' ? item.trim() : '').filter(Boolean)
     : fallback
+}
+
+function normalizePublicSupportedSizes(modelId: string, value: unknown) {
+  const sizes = normalizeJsonArray(value, ['*'])
+  return modelId.startsWith('gpt-image-2') && sizes.includes('*')
+    ? GPT_IMAGE_2_SUPPORTED_SIZES
+    : sizes
+}
+
+export function normalizeRequestedParamsForModel(
+  params: TaskParams | undefined,
+  model: Pick<ModelRow, 'id' | 'supported_sizes'>,
+): TaskParams {
+  const normalizedParams = normalizeUpstreamParams(params)
+  const supportedSizes = normalizePublicSupportedSizes(model.id, model.supported_sizes)
+    .map((size) => size.trim())
+    .filter(Boolean)
+  if (!supportedSizes.length || supportedSizes.includes('*') || supportedSizes.includes(normalizedParams.size ?? '')) {
+    return normalizedParams
+  }
+
+  return {
+    ...normalizedParams,
+    size: supportedSizes.includes('1024x1024') ? '1024x1024' : supportedSizes[0],
+  }
 }
 
 function normalizeOutputCount(value: unknown) {
@@ -332,10 +386,24 @@ function resolveApiKey(apiKeyRef: string) {
   return process.env[ref]?.trim() || ref
 }
 
-function buildPrompt(input: GatewayRequest) {
+function normalizeCompatibilityStrategy(value?: string | null): 'openai_standard' | 'relay_extended' {
+  return value === 'openai_standard' ? 'openai_standard' : 'relay_extended'
+}
+
+export function buildUpstreamPromptFields(
+  strategy: 'openai_standard' | 'relay_extended',
+  input: Pick<GatewayRequest, 'prompt' | 'negativePrompt'>,
+) {
   const prompt = input.prompt?.trim() ?? ''
   const negativePrompt = input.negativePrompt?.trim()
-  return negativePrompt ? `${prompt}\n\n请避免：${negativePrompt}` : prompt
+  if (!negativePrompt) return { prompt }
+  if (strategy === 'relay_extended') {
+    return {
+      prompt,
+      negativePrompt,
+    }
+  }
+  return { prompt: `${prompt}\n\n请避免：${negativePrompt}` }
 }
 
 function getUpstreamCompatibilityPatch(error: unknown): UpstreamRequestCompatibilityPatch | null {
@@ -491,7 +559,7 @@ function serializePublicModel(row: ModelRow, routeIds: string[]) {
       moderation: 'low',
       n: 1,
     },
-    supportedSizes: normalizeJsonArray(row.supported_sizes, ['*']),
+    supportedSizes: normalizePublicSupportedSizes(row.id, row.supported_sizes),
     supportedQualities: normalizeJsonArray(row.supported_qualities, ['*']),
     supportsEdit: row.supports_edit,
     supportsMask: row.supports_mask,
@@ -513,10 +581,33 @@ async function listPublicModels(db: Db) {
   return rows.rows.map((row) => serializePublicModel(row, row.route_ids ?? []))
 }
 
+async function loadModelForGeneration(db: Db, modelSkuId: string) {
+  return (await db.query<Pick<ModelRow, 'id' | 'supported_sizes'>>(`
+    SELECT id, supported_sizes
+    FROM model_skus
+    WHERE id = $1 AND enabled = true
+    LIMIT 1
+  `, [modelSkuId])).rows[0]
+}
+
+export async function resolveRequestedModelSku(db: Db, requestedModelSku: string | undefined) {
+  const normalized = requestedModelSku?.trim() ?? ''
+  if (normalized) return normalized
+  const defaultModel = (await db.query<{ id: string }>(`
+    SELECT id
+    FROM model_skus
+    WHERE enabled = true
+    ORDER BY sort_order ASC, created_at ASC
+    LIMIT 1
+  `)).rows[0]
+  return defaultModel?.id ?? ''
+}
+
 async function loadRoutesForModel(db: Db, modelSkuId: string) {
   const rows = await db.query<RuntimeRouteRow>(`
-    SELECT r.id AS route_id, r.name AS route_name, m.name AS model_name, r.base_url, r.api_key_ref,
-      r.default_upstream_model, b.upstream_model, b.priority, b.weight, b.timeout_seconds,
+    SELECT r.id AS route_id, r.name AS route_name, m.name AS model_name, r.provider, r.base_url, r.api_key_ref,
+      r.compatibility_strategy,
+      r.default_upstream_model, r.max_supported_long_edge, b.upstream_model, b.priority, b.weight, b.timeout_seconds,
       COALESCE(h.consecutive_failures, 0) AS consecutive_failures,
       h.cooldown_until::text
     FROM model_route_bindings b
@@ -532,6 +623,26 @@ async function loadRoutesForModel(db: Db, modelSkuId: string) {
       b.created_at ASC
   `, [modelSkuId])
   return rows.rows
+}
+
+export function parseRequestedLongestEdge(size: string | undefined) {
+  if (typeof size !== 'string') return 1024
+  const match = size.trim().match(/^(\d+)\s*[xX×]\s*(\d+)$/)
+  if (!match) return 1024
+  const width = Number(match[1])
+  const height = Number(match[2])
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return 1024
+  return Math.max(width, height)
+}
+
+export function filterRoutesForRequestedSize(routes: RuntimeRouteRow[], requestedSize: string | undefined) {
+  const requestedLongestEdge = parseRequestedLongestEdge(getBaseGenerationSize(requestedSize))
+  if (requestedLongestEdge <= 1536) return routes
+
+  return routes.filter((route) => {
+    const maxEdge = typeof route.max_supported_long_edge === 'number' ? route.max_supported_long_edge : 1536
+    return maxEdge >= requestedLongestEdge
+  })
 }
 
 function isRouteCoolingDown(route: RuntimeRouteRow, now = new Date()) {
@@ -691,9 +802,17 @@ async function recordRouteFailure(db: Db, input: {
 }
 
 async function callUpstream(route: RuntimeRouteRow, input: GatewayRequest, externalSignal?: AbortSignal) {
-  const params = normalizeUpstreamParams(input.params, { n: UPSTREAM_OUTPUT_COUNT_PER_REQUEST })
+  const params = normalizeUpstreamParams(input.params, {
+    size: getBaseGenerationSize(input.params?.size),
+    ...(shouldPreferLosslessDelivery(input.params?.size)
+      ? { output_format: 'png', output_compression: null }
+      : {}),
+    n: UPSTREAM_OUTPUT_COUNT_PER_REQUEST,
+  })
   const inputImages = Array.isArray(input.inputImageDataUrls) ? input.inputImageDataUrls.filter(Boolean) : []
-  const upstreamModel = route.upstream_model || route.default_upstream_model || route.model_name || DEFAULT_MODEL_SKU
+  const upstreamModel = route.upstream_model || route.default_upstream_model || route.model_name || DEFAULT_UPSTREAM_MODEL
+  const compatibilityStrategy = normalizeCompatibilityStrategy(route.compatibility_strategy)
+  const promptFields = buildUpstreamPromptFields(compatibilityStrategy, input)
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(getTaskAbortError('upstream_timeout')), Math.max(1, route.timeout_seconds) * 1000)
   const relayExternalAbort = () => {
@@ -720,14 +839,30 @@ async function callUpstream(route: RuntimeRouteRow, input: GatewayRequest, exter
           ? 'image/webp'
           : 'image/jpeg'
       let response: Response
-      if (inputImages.length) {
+      if (route.provider === 'gemini-native' || isGeminiModel(upstreamModel)) {
+        if (inputImages.length) throw new UpstreamRequestError('Gemini 原生线路当前只支持文生图', 400, 'parameter_incompatible')
+        response = await fetch(buildGeminiModelPath(route.base_url, upstreamModel), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': resolveApiKey(route.api_key_ref),
+          },
+          body: JSON.stringify(buildGeminiGenerateContentBody({
+            prompt: promptFields.prompt,
+            negativePrompt: promptFields.negativePrompt,
+            size: effectiveParams.size || '1024x1024',
+          })),
+          signal: controller.signal,
+        })
+      } else if (inputImages.length) {
         const form = new FormData()
         form.set('model', upstreamModel)
-        form.set('prompt', buildPrompt(input))
-        form.set('size', effectiveParams.size)
+        form.set('prompt', promptFields.prompt)
+        form.set('size', effectiveParams.size || '1024x1024')
         if (!compatibilityPatch?.omitQuality) form.set('quality', effectiveParams.quality)
         if (!compatibilityPatch?.omitOutputFormat) form.set('output_format', effectiveOutputFormat)
         if (!compatibilityPatch?.omitModeration) form.set('moderation', effectiveParams.moderation)
+        if (promptFields.negativePrompt) form.set('negative_prompt', promptFields.negativePrompt)
         if (
           !compatibilityPatch?.omitOutputCompression
           && typeof effectiveParams.output_compression === 'number'
@@ -748,12 +883,13 @@ async function callUpstream(route: RuntimeRouteRow, input: GatewayRequest, exter
       } else {
         const body: Record<string, unknown> = {
           model: upstreamModel,
-          prompt: buildPrompt(input),
-          size: effectiveParams.size,
+          prompt: promptFields.prompt,
+          size: effectiveParams.size || '1024x1024',
         }
         if (!compatibilityPatch?.omitQuality) body.quality = effectiveParams.quality
         if (!compatibilityPatch?.omitOutputFormat) body.output_format = effectiveOutputFormat
         if (!compatibilityPatch?.omitModeration) body.moderation = effectiveParams.moderation
+        if (promptFields.negativePrompt) body.negative_prompt = promptFields.negativePrompt
         if (
           !compatibilityPatch?.omitOutputCompression
           && typeof effectiveParams.output_compression === 'number'
@@ -785,13 +921,15 @@ async function callUpstream(route: RuntimeRouteRow, input: GatewayRequest, exter
           }),
         )
       }
-      const result = await extractImages(await response.json(), effectiveFallbackMime)
+      const result = route.provider === 'gemini-native' || isGeminiModel(upstreamModel)
+        ? await parseGeminiNativeImagePayload(await response.json())
+        : await extractImages(await response.json(), effectiveFallbackMime)
       return {
         ...result,
         upstreamModel,
         actualParams: {
           ...result.actualParams,
-          size: effectiveParams.size,
+          size: effectiveParams.size || '1024x1024',
           ...(compatibilityPatch?.omitQuality ? {} : { quality: effectiveParams.quality }),
           ...(compatibilityPatch?.omitOutputFormat ? {} : { output_format: effectiveParams.output_format }),
           ...(compatibilityPatch?.omitOutputCompression ? {} : { output_compression: effectiveParams.output_compression }),
@@ -831,6 +969,7 @@ async function createReservedRunningTask(db: Pool, input: {
   mode: string
   requestedOutputCount: number
   params?: TaskParams
+  deliveryPlan?: DeliveryPlan
   status?: Extract<GenerationTaskStatus, 'queued' | 'running'>
   requestPayload?: GatewayRequest
 }): Promise<BillingReservation> {
@@ -861,7 +1000,12 @@ async function createReservedRunningTask(db: Pool, input: {
       input.requestId,
       input.requestedOutputCount,
       reservedPoints,
-      input.requestPayload ? JSON.stringify(input.requestPayload) : null,
+      input.requestPayload
+        ? JSON.stringify({
+            ...input.requestPayload,
+            deliveryPlan: input.deliveryPlan ?? normalizeDeliveryPlan(input.params?.size),
+          })
+        : null,
       createdAt,
     ])
 
@@ -940,14 +1084,16 @@ async function finalizeSuccess(db: Pool, input: {
       await tx.query(`
         INSERT INTO generation_task_outputs (
           id, task_id, user_id, output_index, storage_provider, storage_key, public_url,
-          mime_type, byte_size, revised_prompt, raw_source_url, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          mime_type, byte_size, width, height, revised_prompt, raw_source_url, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         ON CONFLICT (task_id, output_index) DO UPDATE SET
           storage_provider = EXCLUDED.storage_provider,
           storage_key = EXCLUDED.storage_key,
           public_url = EXCLUDED.public_url,
           mime_type = EXCLUDED.mime_type,
           byte_size = EXCLUDED.byte_size,
+          width = EXCLUDED.width,
+          height = EXCLUDED.height,
           revised_prompt = EXCLUDED.revised_prompt,
           raw_source_url = EXCLUDED.raw_source_url
       `, [
@@ -960,6 +1106,8 @@ async function finalizeSuccess(db: Pool, input: {
         output.publicUrl,
         output.mimeType,
         output.byteSize,
+        output.width,
+        output.height,
         output.revisedPrompt ?? null,
         output.rawSourceUrl ?? null,
         finishedAt,
@@ -985,18 +1133,25 @@ async function persistGeneratedOutputs(env: ServerEnv, input: {
   taskId: string
   userId: string
   images: string[]
+  deliveryPlan?: DeliveryPlan
   revisedPrompts?: Array<string | undefined>
   rawImageUrls?: string[]
 }) {
   const outputs: PersistedOutput[] = []
+  const resizeExecutor = createSharpResizeExecutor()
   for (const [index, image] of input.images.entries()) {
+    const delivered = await applyDeliveryPlanToImage({
+      dataUrl: image,
+      deliveryPlan: input.deliveryPlan,
+      resizeExecutor,
+    })
     const stored = await storeGeneratedImage({
       storageDir: env.imageStorageDir,
       publicBasePath: env.imagePublicBasePath,
     }, {
       taskId: input.taskId,
       outputIndex: index,
-      dataUrl: image,
+      dataUrl: delivered.dataUrl,
     })
     outputs.push({
       ...stored,
@@ -1011,7 +1166,7 @@ async function persistGeneratedOutputs(env: ServerEnv, input: {
   return outputs
 }
 
-async function finalizeFailure(db: Db, input: {
+export async function finalizeFailure(db: Db, input: {
   taskId: string
   error: unknown
   attempts?: GatewayAttempt[]
@@ -1019,14 +1174,18 @@ async function finalizeFailure(db: Db, input: {
   userId?: string
 }) {
   const failureKind = classifyGatewayFailure(input.error)
-  const message = input.attempts?.length
-    ? buildFailureSummary(input.error, input.attempts)
+  const errorAttempts = isRecord(input.error) && Array.isArray(input.error.attempts)
+    ? input.error.attempts as GatewayAttempt[]
+    : []
+  const attempts = input.attempts?.length ? input.attempts : errorAttempts
+  const message = attempts.length
+    ? buildFailureSummary(input.error, attempts)
     : getErrorMessage(input.error).slice(0, 500)
   const finishedAt = nowIso()
   const result = await db.query(`
     UPDATE generation_tasks
     SET status = 'failed', failure_kind = $1, error_summary = $2, finished_at = $3
-    WHERE id = $4 AND status <> 'cancelled'
+    WHERE id = $4 AND status IN ('queued', 'running')
   `, [failureKind, message, finishedAt, input.taskId]).catch(() => undefined)
   if ((result?.rowCount ?? 0) > 0 && input.reservation?.reservedPoints && input.userId) {
     await db.query(`
@@ -1120,6 +1279,7 @@ async function recordCompletedExternalTask(db: Pool, env: ServerEnv, input: {
         taskId,
         userId: input.userId,
         images: input.images,
+        deliveryPlan: normalizeDeliveryPlan(input.params?.size),
         revisedPrompts: input.revisedPrompts,
         rawImageUrls: input.rawImageUrls,
       })
@@ -1127,8 +1287,8 @@ async function recordCompletedExternalTask(db: Pool, env: ServerEnv, input: {
         await tx.query(`
           INSERT INTO generation_task_outputs (
             id, task_id, user_id, output_index, storage_provider, storage_key, public_url,
-            mime_type, byte_size, revised_prompt, raw_source_url, created_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            mime_type, byte_size, width, height, revised_prompt, raw_source_url, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
           ON CONFLICT (task_id, output_index) DO NOTHING
         `, [
           output.id,
@@ -1140,6 +1300,8 @@ async function recordCompletedExternalTask(db: Pool, env: ServerEnv, input: {
           output.publicUrl,
           output.mimeType,
           output.byteSize,
+          output.width,
+          output.height,
           output.revisedPrompt ?? null,
           output.rawSourceUrl ?? null,
           finishedAt,
@@ -1272,11 +1434,56 @@ function buildFailureSummary(error: unknown, attempts: GatewayAttempt[]) {
     latencyMs: attempt.latencyMs,
     failureKind: attempt.failureKind,
     errorMessage: attempt.errorMessage?.slice(0, 240),
+    skippedByCooldown: attempt.skippedByCooldown,
   }))
   return JSON.stringify({
     message: message.slice(0, 500),
     attempts: attemptSummary,
   }).slice(0, 4000)
+}
+
+function parseFailureSummary(errorSummary?: string | null): { message?: string; attempts: GatewayAttempt[] } {
+  if (!errorSummary) return { attempts: [] }
+  try {
+    const parsed = JSON.parse(errorSummary)
+    if (!isRecord(parsed)) return { attempts: [] }
+    const attempts = Array.isArray(parsed.attempts)
+      ? parsed.attempts.flatMap((attempt) => {
+          if (!isRecord(attempt) || typeof attempt.routeId !== 'string' || typeof attempt.upstreamModel !== 'string') return []
+          return [{
+            routeId: attempt.routeId,
+            upstreamModel: attempt.upstreamModel,
+            success: typeof attempt.success === 'boolean' ? attempt.success : false,
+            latencyMs: typeof attempt.latencyMs === 'number' && Number.isFinite(attempt.latencyMs) ? attempt.latencyMs : 0,
+            errorMessage: typeof attempt.errorMessage === 'string' ? attempt.errorMessage : undefined,
+            failureKind: typeof attempt.failureKind === 'string' ? attempt.failureKind as GatewayFailureKind : undefined,
+            skippedByCooldown: typeof attempt.skippedByCooldown === 'boolean' ? attempt.skippedByCooldown : undefined,
+          } satisfies GatewayAttempt]
+        })
+      : []
+    return {
+      message: typeof parsed.message === 'string' ? parsed.message : undefined,
+      attempts,
+    }
+  } catch {
+    return { attempts: [] }
+  }
+}
+
+export function deriveFailureResultFields(task: {
+  route_id?: string | null
+  upstream_model?: string | null
+  error_summary?: string | null
+}) {
+  const parsedSummary = parseFailureSummary(task.error_summary)
+  const attempts = parsedSummary.attempts
+  const lastAttempt = [...attempts].reverse().find((attempt) => !attempt.skippedByCooldown) ?? attempts[attempts.length - 1]
+  return {
+    message: parsedSummary.message ?? task.error_summary ?? '',
+    routeId: task.route_id ?? lastAttempt?.routeId ?? '',
+    upstreamModel: task.upstream_model ?? lastAttempt?.upstreamModel ?? DEFAULT_UPSTREAM_MODEL,
+    attempts,
+  }
 }
 
 async function isGenerationTaskCancelled(db: Db, taskId: string) {
@@ -1348,12 +1555,13 @@ async function readGenerationTaskResult(db: Db, input: { taskId: string; userId:
     ledger_id?: string | null
     failure_kind?: GatewayFailureKind | 'cancelled' | string | null
     error_summary?: string | null
+    request_json?: unknown
     created_at: string
     finished_at?: string | null
   }>(`
     SELECT id, status, mode, model_sku, request_id, route_id, upstream_model,
       COALESCE(requested_output_count, 1) AS requested_output_count,
-      output_count, charged_points::text, ledger_id, failure_kind, error_summary,
+      output_count, charged_points::text, ledger_id, failure_kind, error_summary, request_json,
       created_at::text, finished_at::text
     FROM generation_tasks
     WHERE id = $1 AND user_id = $2
@@ -1383,6 +1591,25 @@ async function readGenerationTaskResult(db: Db, input: { taskId: string; userId:
   const images = outputs.map((output) => output.public_url)
   const revisedPrompts = outputs.map((output) => output.revised_prompt ?? undefined)
   const rawImageUrls = outputs.map((output) => output.raw_source_url).filter((url): url is string => Boolean(url))
+  const failureResultFields = deriveFailureResultFields(task)
+  const requestJson = isRecord(task.request_json) ? task.request_json : null
+  const deliveryPlan = requestJson && isRecord(requestJson.deliveryPlan)
+    ? {
+        requestedSize: typeof requestJson.deliveryPlan.requestedSize === 'string' ? requestJson.deliveryPlan.requestedSize : '',
+        requestedTier: requestJson.deliveryPlan.requestedTier === '1K' || requestJson.deliveryPlan.requestedTier === '2K' || requestJson.deliveryPlan.requestedTier === '4K'
+          ? requestJson.deliveryPlan.requestedTier
+          : '1K',
+        requestedRatio: typeof requestJson.deliveryPlan.requestedRatio === 'string' ? requestJson.deliveryPlan.requestedRatio : '',
+        baseSize: typeof requestJson.deliveryPlan.baseSize === 'string' ? requestJson.deliveryPlan.baseSize : '',
+        baseRatio: requestJson.deliveryPlan.baseRatio === '1:1' || requestJson.deliveryPlan.baseRatio === '3:2' || requestJson.deliveryPlan.baseRatio === '2:3'
+          ? requestJson.deliveryPlan.baseRatio
+          : '1:1',
+        strategy: requestJson.deliveryPlan.strategy === 'direct' || requestJson.deliveryPlan.strategy === 'upscale' || requestJson.deliveryPlan.strategy === 'crop_then_upscale' || requestJson.deliveryPlan.strategy === 'pad_then_upscale'
+          ? requestJson.deliveryPlan.strategy
+          : 'direct',
+        deliveryLabel: typeof requestJson.deliveryPlan.deliveryLabel === 'string' ? requestJson.deliveryPlan.deliveryLabel : '',
+      }
+    : undefined
   return {
     ok: true,
     taskId: task.id,
@@ -1392,6 +1619,7 @@ async function readGenerationTaskResult(db: Db, input: { taskId: string; userId:
     revisedPrompts,
     rawImageUrls,
     actualParams: { n: images.length },
+    ...(deliveryPlan ? { deliveryPlan } : {}),
     persistedImages: outputs.map((output) => ({
       id: output.id,
       taskId: output.task_id,
@@ -1403,16 +1631,16 @@ async function readGenerationTaskResult(db: Db, input: { taskId: string; userId:
       byteSize: output.byte_size,
     })),
     modelSku: task.model_sku,
-    routeId: task.route_id ?? '',
-    upstreamModel: task.upstream_model ?? DEFAULT_MODEL_SKU,
-    attempts: [],
+    routeId: failureResultFields.routeId,
+    upstreamModel: failureResultFields.upstreamModel,
+    attempts: failureResultFields.attempts,
     requestedOutputCount: task.requested_output_count,
     outputCount: task.output_count,
     partialSuccess: task.status === 'succeeded' && task.output_count > 0 && task.output_count < task.requested_output_count,
     partialFailureMessage: undefined,
     error: task.status === 'failed' || task.status === 'timeout' || task.status === 'cancelled'
       ? {
-          message: task.error_summary || (task.status === 'cancelled' ? '任务已取消' : '生图线路请求失败'),
+          message: failureResultFields.message || (task.status === 'cancelled' ? '任务已取消' : '生图线路请求失败'),
           requestId: task.request_id ?? undefined,
           failureKind: task.failure_kind ?? undefined,
         }
@@ -1454,7 +1682,7 @@ async function executeReservedGenerationTask(db: Pool, env: ServerEnv, input: {
     for (const skippedRoute of activeRoutesAtStart.length ? coolingRoutes : []) {
       attempts.push({
         routeId: skippedRoute.route_id,
-        upstreamModel: skippedRoute.upstream_model || skippedRoute.default_upstream_model || skippedRoute.model_name || DEFAULT_MODEL_SKU,
+        upstreamModel: skippedRoute.upstream_model || skippedRoute.default_upstream_model || skippedRoute.model_name || DEFAULT_UPSTREAM_MODEL,
         success: false,
         latencyMs: 0,
         errorMessage: `线路冷却中，暂跳过到 ${skippedRoute.cooldown_until}`,
@@ -1528,7 +1756,7 @@ async function executeReservedGenerationTask(db: Pool, env: ServerEnv, input: {
             }
             attempts.push({
               routeId: route.route_id,
-              upstreamModel: route.upstream_model || route.default_upstream_model || route.model_name || DEFAULT_MODEL_SKU,
+              upstreamModel: route.upstream_model || route.default_upstream_model || route.model_name || DEFAULT_UPSTREAM_MODEL,
               success: false,
               latencyMs: Date.now() - startedAt,
               errorMessage: getErrorMessage(error),
@@ -1563,6 +1791,7 @@ async function executeReservedGenerationTask(db: Pool, env: ServerEnv, input: {
         taskId: input.reservation.taskId,
         userId: input.userId,
         images: outputImages,
+        deliveryPlan: normalizeDeliveryPlan(input.payload.params?.size),
         revisedPrompts: collectedRevisedPrompts.slice(0, outputImages.length),
         rawImageUrls: collectedRawImageUrls.slice(0, outputImages.length),
       })
@@ -1570,7 +1799,7 @@ async function executeReservedGenerationTask(db: Pool, env: ServerEnv, input: {
         taskId: input.reservation.taskId,
         userId: input.userId,
         routeId: successRouteId,
-        upstreamModel: successUpstreamModel || DEFAULT_MODEL_SKU,
+        upstreamModel: successUpstreamModel || DEFAULT_UPSTREAM_MODEL,
         outputCount: outputImages.length,
         reservedPoints: input.reservation.reservedPoints,
         billingBasis: input.reservation.billingBasis,
@@ -1596,7 +1825,7 @@ async function executeReservedGenerationTask(db: Pool, env: ServerEnv, input: {
         })),
         modelSku: input.modelSku,
         routeId: successRouteId,
-        upstreamModel: successUpstreamModel || DEFAULT_MODEL_SKU,
+    upstreamModel: successUpstreamModel || DEFAULT_UPSTREAM_MODEL,
         attempts,
         requestedOutputCount: partialInfo.requestedOutputCount,
         outputCount: partialInfo.outputCount,
@@ -1684,22 +1913,30 @@ export function registerImageGatewayRoutes(app: FastifyInstance, db: Pool, env: 
       const payload = isRecord(request.body) ? request.body as GatewayRequest : {}
       const prompt = payload.prompt?.trim() ?? ''
       if (!prompt) throw new ApiError(400, 'missing_prompt', '缺少提示词')
-      const modelSku = payload.modelSku?.trim() || DEFAULT_MODEL_SKU
-      const routes = await loadRoutesForModel(db, modelSku)
+      const modelSku = await resolveRequestedModelSku(db, payload.modelSku)
+      const model = await loadModelForGeneration(db, modelSku)
+      if (!model) throw new ApiError(404, 'model_not_found', '模型不存在或未启用')
+      const normalizedPayload: GatewayRequest = {
+        ...payload,
+        params: normalizeRequestedParamsForModel(payload.params, model),
+      }
+      const deliveryPlan = normalizeDeliveryPlan(normalizedPayload.params?.size)
+      const routes = filterRoutesForRequestedSize(await loadRoutesForModel(db, modelSku), normalizedPayload.params?.size)
       if (!routes.length) throw new ApiError(503, 'no_route', '没有可用的生图线路')
-      const requestedOutputCount = getRequestedOutputCount(payload)
+      const requestedOutputCount = getRequestedOutputCount(normalizedPayload)
       reservation = await createReservedRunningTask(db, {
         userId,
         requestId,
         modelSku,
         mode: Array.isArray(payload.inputImageDataUrls) && payload.inputImageDataUrls.length ? 'edit' : 'generate',
         requestedOutputCount,
-        params: payload.params,
+        params: normalizedPayload.params,
+        deliveryPlan,
       })
 
       const result = await executeReservedGenerationTask(db, env, {
         userId,
-        payload,
+        payload: normalizedPayload,
         prompt,
         modelSku,
         routes,
@@ -1741,24 +1978,32 @@ export function registerImageGatewayRoutes(app: FastifyInstance, db: Pool, env: 
       const payload = isRecord(request.body) ? request.body as GatewayRequest : {}
       const prompt = payload.prompt?.trim() ?? ''
       if (!prompt) throw new ApiError(400, 'missing_prompt', '缺少提示词')
-      const modelSku = payload.modelSku?.trim() || DEFAULT_MODEL_SKU
-      const routes = await loadRoutesForModel(db, modelSku)
+      const modelSku = await resolveRequestedModelSku(db, payload.modelSku)
+      const model = await loadModelForGeneration(db, modelSku)
+      if (!model) throw new ApiError(404, 'model_not_found', '模型不存在或未启用')
+      const normalizedPayload: GatewayRequest = {
+        ...payload,
+        params: normalizeRequestedParamsForModel(payload.params, model),
+      }
+      const deliveryPlan = normalizeDeliveryPlan(normalizedPayload.params?.size)
+      const routes = filterRoutesForRequestedSize(await loadRoutesForModel(db, modelSku), normalizedPayload.params?.size)
       if (!routes.length) throw new ApiError(503, 'no_route', '没有可用的生图线路')
-      const requestedOutputCount = getRequestedOutputCount(payload)
+      const requestedOutputCount = getRequestedOutputCount(normalizedPayload)
       const reservation = await createReservedRunningTask(db, {
         userId,
         requestId,
         modelSku,
         mode: Array.isArray(payload.inputImageDataUrls) && payload.inputImageDataUrls.length ? 'edit' : 'generate',
         requestedOutputCount,
-        params: payload.params,
+        params: normalizedPayload.params,
+        deliveryPlan,
         status: 'queued',
-        requestPayload: payload,
+        requestPayload: normalizedPayload,
       })
 
       void executeReservedGenerationTask(db, env, {
         userId,
-        payload,
+        payload: normalizedPayload,
         prompt,
         modelSku,
         routes,
@@ -1820,7 +2065,7 @@ export function registerImageGatewayRoutes(app: FastifyInstance, db: Pool, env: 
       const result = await recordCompletedExternalTask(db, env, {
         userId: session.user_id,
         clientTaskId: payload.clientTaskId,
-        modelSku: payload.modelSku?.trim() || DEFAULT_MODEL_SKU,
+        modelSku: await resolveRequestedModelSku(db, payload.modelSku),
         mode: payload.mode === 'agent_edit' ? 'agent_edit' : 'agent',
         params: payload.params,
         outputCount,

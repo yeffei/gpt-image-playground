@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
+import { createSharpImageSizeReader } from './imageDeliveryProcessor.js'
 
 const MIME_EXTENSIONS: Record<string, string> = {
   'image/jpeg': 'jpg',
@@ -13,6 +14,8 @@ export type StoredImageOutput = {
   publicUrl: string
   mimeType: string
   byteSize: number
+  width: number | null
+  height: number | null
 }
 
 export type ImageStorageConfig = {
@@ -39,6 +42,8 @@ function normalizePublicBasePath(value: string) {
   return `/${value.trim().replace(/^\/+|\/+$/g, '') || 'api/generated-images'}`
 }
 
+const readImageSize = createSharpImageSizeReader()
+
 export async function storeGeneratedImage(
   config: ImageStorageConfig,
   input: {
@@ -48,6 +53,7 @@ export async function storeGeneratedImage(
   },
 ): Promise<StoredImageOutput> {
   const { mimeType, bytes } = parseDataUrl(input.dataUrl)
+  const imageSize = await readImageSize({ sourceBytes: bytes, mimeType })
   const extension = MIME_EXTENSIONS[mimeType] || 'bin'
   const taskSegment = sanitizeSegment(input.taskId)
   const filename = `${String(input.outputIndex).padStart(2, '0')}.${extension}`
@@ -62,5 +68,7 @@ export async function storeGeneratedImage(
     publicUrl: `${normalizePublicBasePath(config.publicBasePath)}/${encodeURIComponent(taskSegment)}/${encodeURIComponent(filename)}`,
     mimeType,
     byteSize: bytes.byteLength,
+    width: imageSize?.width ?? null,
+    height: imageSize?.height ?? null,
   }
 }

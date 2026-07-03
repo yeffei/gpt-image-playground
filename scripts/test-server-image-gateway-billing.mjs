@@ -83,6 +83,17 @@ async function getRouteHealth(routeId, modelSkuId) {
   }
 }
 
+async function setRouteMaxSupportedLongEdge(routeId, maxSupportedLongEdge) {
+  const databaseUrl = resolveDatabaseUrl()
+  if (!databaseUrl) throw new Error('DATABASE_URL is required to seed route resolution capability')
+  const pool = new Pool({ connectionString: databaseUrl })
+  try {
+    await pool.query('UPDATE gateway_routes SET max_supported_long_edge = $1 WHERE id = $2', [maxSupportedLongEdge, routeId])
+  } finally {
+    await pool.end()
+  }
+}
+
 function startMockImageApi() {
   const state = {
     successCalls: 0,
@@ -266,6 +277,7 @@ async function createGatewayRoute(adminToken, input) {
     },
   })
   assert(result.response.status === 201, `${input.name} route create failed: ${result.response.status} ${JSON.stringify(result.payload)}`)
+  await setRouteMaxSupportedLongEdge(result.payload.route.id, input.maxSupportedLongEdge ?? 3840)
   return result.payload.route
 }
 
@@ -402,6 +414,7 @@ async function main() {
       },
     })
     assert(routeResult.response.status === 201, `route create failed: ${routeResult.response.status} ${JSON.stringify(routeResult.payload)}`)
+    await setRouteMaxSupportedLongEdge(routeResult.payload.route.id, 3840)
 
     const modelResult = await request('/api/admin/model-skus', {
       token: adminToken,
@@ -799,6 +812,7 @@ async function main() {
       },
     })
     assert(serverErrorRouteResult.response.status === 201, `server-error route create failed: ${serverErrorRouteResult.response.status} ${JSON.stringify(serverErrorRouteResult.payload)}`)
+    await setRouteMaxSupportedLongEdge(serverErrorRouteResult.payload.route.id, 3840)
 
     const cooldownModelResult = await request('/api/admin/model-skus', {
       token: adminToken,

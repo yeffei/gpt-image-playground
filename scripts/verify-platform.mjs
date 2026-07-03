@@ -24,6 +24,7 @@ export function parseArgs(argv = process.argv.slice(2), env = process.env) {
     includeLocalServices: env.PLATFORM_VERIFY_LOCAL_SERVICES === '1',
     includeGatewayPreflight: env.PLATFORM_VERIFY_GATEWAY_PREFLIGHT === '1',
     includeLiveImage: env.PLATFORM_VERIFY_LIVE_IMAGE === '1',
+    hasRechargeCodeAdminToken: Boolean((env.RECHARGE_CODE_ADMIN_TOKEN || env.IMAGE_GATEWAY_ADMIN_TOKEN || '').trim()),
     continueOnFail: false,
     json: false,
     help: false,
@@ -95,8 +96,14 @@ export function buildPlatformVerifyPlan(options = parseArgs([])) {
       skipReason: 'Skipped by default because it needs PostgreSQL/local services. Re-run with --include-local-services.',
     }),
     npmGate('recharge-flow-local-service', 'Recharge-code local service flow', ['run', 'recharge-codes:verify'], {
+      enabled: options.includeLocalServices && options.hasRechargeCodeAdminToken,
+      skipReason: options.includeLocalServices
+        ? 'Skipped because RECHARGE_CODE_ADMIN_TOKEN or IMAGE_GATEWAY_ADMIN_TOKEN is not set; verify:prelaunch already covers the self-contained local recharge-code smoke.'
+        : 'Skipped by default because it mutates a local service/database and needs an admin token. Re-run with --include-local-services and set RECHARGE_CODE_ADMIN_TOKEN or IMAGE_GATEWAY_ADMIN_TOKEN.',
+    }),
+    npmGate('image-share-local-service', 'Image share local service smoke', ['run', 'smoke:image-share'], {
       enabled: options.includeLocalServices,
-      skipReason: 'Skipped by default because it mutates a local service/database and needs an admin token. Re-run with --include-local-services.',
+      skipReason: 'Skipped by default because it needs PostgreSQL/local storage and mutates temporary share fixtures. Re-run with --include-local-services.',
     }),
     npmGate('gateway-routes-preflight', 'Gateway route reachability preflight', ['run', 'gateway:routes:preflight'], {
       enabled: options.includeGatewayPreflight,

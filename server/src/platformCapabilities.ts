@@ -3,8 +3,8 @@ import type { Pool } from 'pg'
 import { sendError } from './adminAuth.js'
 import type { Db } from './db.js'
 
-const DEFAULT_MODEL_SKU = 'gpt-image-2-fast'
 const MAX_OUTPUT_COUNT = 4
+const GPT_IMAGE_2_SUPPORTED_SIZES = ['*']
 
 type ModelRow = {
   id: string
@@ -16,6 +16,7 @@ type ModelRow = {
   supports_edit: boolean
   supports_mask: boolean
   sort_order: number
+  max_route_supported_long_edge?: number | string | null
 }
 
 export type PlatformCapabilitiesModel = {
@@ -36,6 +37,7 @@ export type PlatformCapabilitiesModel = {
   supportsEdit: boolean
   supportsMask: boolean
   maxOutputCount: number
+  maxSupportedLongEdge: number | null
 }
 
 export type PlatformCapabilitiesPayload = {
@@ -48,6 +50,7 @@ export type PlatformCapabilitiesPayload = {
     models: PlatformCapabilitiesModel[]
     defaultModelSku: string
     maxOutputCount: number
+    maxSupportedLongEdge: number | null
     supportsEdit: boolean
     supportsMask: boolean
     supportsAsyncTasks: boolean
@@ -78,6 +81,22 @@ function normalizeJsonArray(value: unknown, fallback: string[]) {
     : fallback
 }
 
+function normalizePublicSupportedSizes(modelId: string, value: unknown) {
+  const sizes = normalizeJsonArray(value, ['*'])
+  return modelId.startsWith('gpt-image-2') && sizes.includes('*')
+    ? GPT_IMAGE_2_SUPPORTED_SIZES
+    : sizes
+}
+
+function normalizeMaxSupportedLongEdge(value: unknown) {
+  const parsed = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Number.parseInt(value, 10)
+      : NaN
+  return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : null
+}
+
 export function serializeCapabilitiesModel(row: ModelRow): PlatformCapabilitiesModel {
   return {
     id: row.id,
@@ -92,15 +111,17 @@ export function serializeCapabilitiesModel(row: ModelRow): PlatformCapabilitiesM
       moderation: 'low',
       n: 1,
     },
-    supportedSizes: normalizeJsonArray(row.supported_sizes, ['*']),
+    supportedSizes: normalizePublicSupportedSizes(row.id, row.supported_sizes),
     supportedQualities: normalizeJsonArray(row.supported_qualities, ['*']),
     supportsEdit: row.supports_edit,
     supportsMask: row.supports_mask,
     maxOutputCount: MAX_OUTPUT_COUNT,
+    maxSupportedLongEdge: normalizeMaxSupportedLongEdge(row.max_route_supported_long_edge),
   }
 }
 
 export function buildPlatformCapabilitiesPayload(models: PlatformCapabilitiesModel[]): PlatformCapabilitiesPayload {
+  const defaultModelSku = models[0]?.id ?? ''
   return {
     ok: true,
     platform: {
@@ -109,10 +130,12 @@ export function buildPlatformCapabilitiesPayload(models: PlatformCapabilitiesMod
     },
     image: {
       models,
-      defaultModelSku: models.some((model) => model.id === DEFAULT_MODEL_SKU)
-        ? DEFAULT_MODEL_SKU
-        : models[0]?.id ?? DEFAULT_MODEL_SKU,
+      defaultModelSku,
       maxOutputCount: models.reduce((max, model) => Math.max(max, model.maxOutputCount), MAX_OUTPUT_COUNT),
+      maxSupportedLongEdge: models.reduce<number | null>((max, model) => {
+        if (typeof model.maxSupportedLongEdge !== 'number') return max
+        return max == null ? model.maxSupportedLongEdge : Math.max(max, model.maxSupportedLongEdge)
+      }, null),
       supportsEdit: models.some((model) => model.supportsEdit),
       supportsMask: models.some((model) => model.supportsMask),
       supportsAsyncTasks: true,
@@ -140,11 +163,25 @@ export function buildPlatformCapabilitiesPayload(models: PlatformCapabilitiesMod
 
 async function listCapabilityModels(db: Db) {
   const rows = await db.query<ModelRow>(`
-    SELECT id, display_name, description, enabled, supported_sizes, supported_qualities,
-      supports_edit, supports_mask, sort_order
-    FROM model_skus
-    WHERE enabled = true
-    ORDER BY sort_order ASC, created_at ASC
+    SELECT m.id, m.display_name, m.description, m.enabled, m.supported_sizes, m.supported_qualities,
+      m.supports_edit, m.supports_mask, m.sort_order,
+      MAX(r.max_supported_long_edge)::text AS max_route_supported_long_edge
+    FROM model_skus m
+    LEFT JOIN model_route_bindings b ON b.model_sku_id = m.id AND b.enabled = true
+    LEFT JOIN gateway_routes r ON r.id = b.route_id AND r.enabled = true
+    WHERE m.enabled = true
+    GROUP BY
+      m.id,
+      m.display_name,
+      m.description,
+      m.enabled,
+      m.supported_sizes,
+      m.supported_qualities,
+      m.supports_edit,
+      m.supports_mask,
+      m.sort_order,
+      m.created_at
+    ORDER BY m.sort_order ASC, m.created_at ASC
   `)
   return rows.rows.map(serializeCapabilitiesModel)
 }

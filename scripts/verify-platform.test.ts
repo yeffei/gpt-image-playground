@@ -43,6 +43,7 @@ describe('platform verifier plan', () => {
     expect(plan.gates.filter((gate) => gate.status === 'skipped').map((gate) => gate.id)).toEqual([
       'prelaunch-local-services',
       'recharge-flow-local-service',
+      'image-share-local-service',
       'gateway-routes-preflight',
       'live-image-gateway',
     ])
@@ -53,9 +54,19 @@ describe('platform verifier plan', () => {
     const plan = buildPlatformVerifyPlan(parseArgs(['--include-local-services'], {}))
 
     expect(plan.gates.find((gate) => gate.id === 'prelaunch-local-services')?.status).toBe('pending')
-    expect(plan.gates.find((gate) => gate.id === 'recharge-flow-local-service')?.status).toBe('pending')
+    expect(plan.gates.find((gate) => gate.id === 'recharge-flow-local-service')?.status).toBe('skipped')
+    expect(plan.gates.find((gate) => gate.id === 'recharge-flow-local-service')?.skipReason).toContain('not set')
+    expect(plan.gates.find((gate) => gate.id === 'image-share-local-service')?.status).toBe('pending')
     expect(plan.gates.find((gate) => gate.id === 'gateway-routes-preflight')?.status).toBe('skipped')
     expect(plan.gates.find((gate) => gate.id === 'live-image-gateway')?.status).toBe('skipped')
+  })
+
+  it('enables standalone recharge-code local verification when an admin token is present', () => {
+    const plan = buildPlatformVerifyPlan(parseArgs(['--include-local-services'], {
+      IMAGE_GATEWAY_ADMIN_TOKEN: 'env-token',
+    }))
+
+    expect(plan.gates.find((gate) => gate.id === 'recharge-flow-local-service')?.status).toBe('pending')
   })
 
   it('keeps live upstream image generation as a residual gate unless explicitly included', () => {

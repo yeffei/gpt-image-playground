@@ -1,5 +1,33 @@
 import { describe, expect, it } from 'vitest'
 import { getConfiguredServerGatewayRoutes, getServerGatewayModelSkus } from './serverImageGatewayRoutes'
+import { DEFAULT_PARAMS, type ModelSku } from '../types'
+
+const serverModelSkus: ModelSku[] = [
+  {
+    id: 'gpt-image-2-fast',
+    label: 'GPT Image 2 Fast',
+    enabled: true,
+    routeIds: [],
+    defaultParams: { ...DEFAULT_PARAMS },
+    supportedSizes: ['*'],
+    supportedQualities: ['auto'],
+    supportsEdit: true,
+    supportsMask: true,
+    maxOutputCount: 4,
+  },
+  {
+    id: 'gpt-image-2-quality',
+    label: 'GPT Image 2 Quality',
+    enabled: true,
+    routeIds: [],
+    defaultParams: { ...DEFAULT_PARAMS },
+    supportedSizes: ['*'],
+    supportedQualities: ['auto'],
+    supportsEdit: true,
+    supportsMask: true,
+    maxOutputCount: 4,
+  },
+]
 
 describe('serverImageGatewayRoutes', () => {
   it('reads configured server routes from runtime env', () => {
@@ -58,9 +86,32 @@ describe('serverImageGatewayRoutes', () => {
       IMAGE_GATEWAY_ROUTE_2_ENABLED: 'false',
     })
 
-    const modelSkus = getServerGatewayModelSkus(routes)
+    const modelSkus = getServerGatewayModelSkus(routes, serverModelSkus)
 
     expect(modelSkus.find((sku) => sku.id === 'gpt-image-2-fast')?.routeIds).toEqual(['route-1'])
     expect(modelSkus.find((sku) => sku.id === 'gpt-image-2-quality')?.routeIds).toEqual(['route-1'])
+  })
+
+  it('reads gemini-native routes with provider-specific defaults', () => {
+    const routes = getConfiguredServerGatewayRoutes({
+      IMAGE_GATEWAY_ROUTE_1_PROVIDER: 'gemini-native',
+      IMAGE_GATEWAY_ROUTE_1_BASE_URL: 'https://generativelanguage.googleapis.com/v1beta',
+      IMAGE_GATEWAY_ROUTE_1_API_KEY: 'gemini-secret',
+    })
+
+    expect(routes).toEqual([
+      expect.objectContaining({
+        id: 'route-1',
+        provider: 'gemini-native',
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+        apiKey: 'gemini-secret',
+        supportsEdit: false,
+        supportsMask: false,
+        upstreamModelBySku: {
+          'gpt-image-2-fast': 'gemini-3-pro-image-preview',
+          'gpt-image-2-quality': 'gemini-3-pro-image-preview',
+        },
+      }),
+    ])
   })
 })

@@ -1,4 +1,3 @@
-import { MODEL_SKUS } from './modelSkus'
 import { buildRouteHealthSnapshot, createSchedulerState, type SchedulerState } from './imageRouteScheduler'
 import { getServerGatewayModelSkus } from './serverImageGatewayRoutes'
 import { getActiveRouteOverride, listActiveRouteOverrides } from './gatewayRuntimeState'
@@ -9,6 +8,7 @@ import type {
   GatewayDiagnosticsRouteInfo,
   GatewayPersistenceInfo,
   GatewayRouteExclusionReason,
+  ModelSku,
   RouteOperatorOverride,
 } from '../types'
 
@@ -59,6 +59,7 @@ function toGatewayDiagnosticsRouteInfo(
 
 export function buildGatewayDiagnosticsPayload(
   routes: BackendRoute[],
+  sourceModelSkus: ModelSku[],
   schedulerState: SchedulerState = createSchedulerState(),
   latestRequest: GatewayDiagnosticsLatestRequest | null = null,
   options?: {
@@ -67,7 +68,7 @@ export function buildGatewayDiagnosticsPayload(
   },
   now = Date.now(),
 ): GatewayDiagnosticsPayload {
-  const modelSkus = getServerGatewayModelSkus(routes, MODEL_SKUS)
+  const modelSkus = getServerGatewayModelSkus(routes, sourceModelSkus)
   const overrides = options?.overrides ?? {}
 
   return {

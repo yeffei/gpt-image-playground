@@ -3,6 +3,10 @@
 Updated: 2026-06-03
 Scope: `D:\gpt_image_playground-main`
 
+For the admin-facing route onboarding flow, also see [docs/gateway-route-admission-guide.md](/D:/gpt_image_playground-main/docs/gateway-route-admission-guide.md).
+
+For deployment execution steps in Chinese, also see [docs/deployment-operator-runbook.md](/D:/gpt_image_playground-main/docs/deployment-operator-runbook.md).
+
 ## Goal
 
 This document covers the minimum runtime operations for the multi-route image gateway:

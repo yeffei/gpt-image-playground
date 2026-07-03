@@ -1,8 +1,8 @@
 import type { ApiProfile, BackendRoute, ImageGatewayAttempt, ImageGatewayRouteHealthSnapshot, ModelSku, ServerPersistedImageOutput, TaskParams } from '../types'
 import { callOpenAICompatibleImageApi } from './openaiCompatibleImageApi'
+import { callGeminiNativeImageApi } from './geminiNativeImageApi'
 import type { CallApiResult } from './imageApiShared'
-import { DEFAULT_MODEL_SKU_ID, getModelSku } from './modelSkus'
-import { getDevOnlyGatewayModelSkus } from './imageGatewayRoutes'
+import { getEnabledModelSkus, getModelSku } from './modelSkus'
 import { classifyGatewayFailure } from './gatewayFailure'
 import type { GatewayRuntimeState } from './gatewayRuntimeState'
 import {
@@ -38,6 +38,7 @@ export interface ImageGatewayResult extends CallApiResult {
   partialSuccess?: boolean
   partialFailureMessage?: string
   persistedImages?: ServerPersistedImageOutput[]
+  deliveryPlan?: import('../types').TaskRecord['deliveryPlan']
   routeHealth?: ImageGatewayRouteHealthSnapshot
   routeSelection?: import('../types').ImageGatewayRouteSelectionSnapshot
   taskId?: string
@@ -64,6 +65,10 @@ function getRouteSelectionOptions(request: ImageGatewayRequest) {
   }
 }
 
+function isGeminiModel(upstreamModel: string) {
+  return /^gemini(?:-|$)/i.test(upstreamModel.trim())
+}
+
 function routeToProfile(route: BackendRoute, modelSku: string): ApiProfile {
   return {
     id: route.id,
@@ -82,10 +87,56 @@ function routeToProfile(route: BackendRoute, modelSku: string): ApiProfile {
   }
 }
 
+async function callGatewayRouteApi(route: BackendRoute, request: ImageGatewayRequest, modelSku: string, upstreamModel: string) {
+  if (route.provider === 'gemini-native' || isGeminiModel(upstreamModel)) {
+    return callGeminiNativeImageApi({
+      route,
+      upstreamModel,
+      prompt: request.prompt,
+      negativePrompt: request.negativePrompt,
+      params: request.params,
+    })
+  }
+
+  return callOpenAICompatibleImageApi({
+    settings: {
+      baseUrl: route.baseUrl,
+      apiKey: route.apiKey,
+      model: upstreamModel,
+      timeout: route.timeoutSeconds,
+      apiMode: route.apiMode,
+      codexCli: false,
+      apiProxy: false,
+      streamImages: route.supportsStreaming,
+      streamPartialImages: 1,
+      customProviders: [],
+      clearInputAfterSubmit: false,
+      persistInputOnRestart: true,
+      reuseTaskApiProfileTemporarily: false,
+      alwaysShowRetryButton: false,
+      enterSubmit: false,
+      referenceImageEditAction: 'ask',
+      agentScrollToBottomAfterSubmit: true,
+      agentMaxToolRounds: 15,
+      agentWebSearch: false,
+      profiles: [routeToProfile(route, modelSku)],
+      activeProfileId: route.id,
+    },
+    prompt: request.prompt,
+    negativePrompt: request.negativePrompt,
+    compatibilityStrategy: route.compatibilityStrategy,
+    params: request.params,
+    inputImageDataUrls: request.inputImageDataUrls,
+    maskDataUrl: request.maskDataUrl,
+    onPartialImage: request.onPartialImage,
+    disableRetry: true,
+  }, routeToProfile(route, modelSku), null)
+}
+
 export async function callImageGateway(request: ImageGatewayRequest, config: ImageGatewayConfig): Promise<ImageGatewayResult> {
   const routes = config.routes
-  const modelSkus = config.modelSkus ?? getDevOnlyGatewayModelSkus(routes)
-  const modelSkuId = request.modelSku || DEFAULT_MODEL_SKU_ID
+  const modelSkus = config.modelSkus ?? []
+  const modelSkuId = request.modelSku || getEnabledModelSkus(modelSkus)[0]?.id || ''
   const sku = getModelSku(modelSkuId, modelSkus)
   if (!sku) throw new Error(`模型不可用：${modelSkuId}`)
 
@@ -118,39 +169,7 @@ export async function callImageGateway(request: ImageGatewayRequest, config: Ima
     const startedAt = Date.now()
     markRouteStarted(state, route.id)
     try {
-      const result = await callOpenAICompatibleImageApi({
-        settings: {
-          baseUrl: route.baseUrl,
-          apiKey: route.apiKey,
-          model: upstreamModel,
-          timeout: route.timeoutSeconds,
-          apiMode: route.apiMode,
-          codexCli: false,
-          apiProxy: false,
-          streamImages: route.supportsStreaming,
-          streamPartialImages: 1,
-          customProviders: [],
-          clearInputAfterSubmit: false,
-          persistInputOnRestart: true,
-          reuseTaskApiProfileTemporarily: false,
-          alwaysShowRetryButton: false,
-          enterSubmit: false,
-          referenceImageEditAction: 'ask',
-          agentScrollToBottomAfterSubmit: true,
-          agentMaxToolRounds: 15,
-          agentWebSearch: false,
-          profiles: [routeToProfile(route, sku.id)],
-          activeProfileId: route.id,
-        },
-        prompt: request.prompt,
-        negativePrompt: request.negativePrompt,
-        compatibilityStrategy: route.compatibilityStrategy,
-        params: request.params,
-        inputImageDataUrls: request.inputImageDataUrls,
-        maskDataUrl: request.maskDataUrl,
-        onPartialImage: request.onPartialImage,
-        disableRetry: true,
-      }, routeToProfile(route, sku.id), null)
+      const result = await callGatewayRouteApi(route, request, sku.id, upstreamModel)
       const attempt = {
         routeId: route.id,
         upstreamModel,

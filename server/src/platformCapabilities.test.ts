@@ -34,8 +34,8 @@ describe('platform capabilities', () => {
   it('builds a standard commercial platform contract', () => {
     const payload = buildPlatformCapabilitiesPayload([
       serializeCapabilitiesModel({
-        id: 'gpt-image-2-fast',
-        display_name: 'GPT Image 2 快速',
+        id: 'model_mq6t2i4f_73063a43ec87',
+        display_name: 'GPT Image 2',
         description: null,
         enabled: true,
         supported_sizes: ['*'],
@@ -53,7 +53,7 @@ describe('platform capabilities', () => {
         dataSource: 'postgres',
       },
       image: {
-        defaultModelSku: 'gpt-image-2-fast',
+        defaultModelSku: 'model_mq6t2i4f_73063a43ec87',
         maxOutputCount: 4,
         supportsAsyncTasks: true,
       },
@@ -69,6 +69,76 @@ describe('platform capabilities', () => {
         revokeSupported: true,
       },
     })
+    expect(payload.image.models[0]?.supportedSizes).toEqual(['*'])
+  })
+
+  it('uses the first enabled model as the default model sku', () => {
+    const payload = buildPlatformCapabilitiesPayload([
+      serializeCapabilitiesModel({
+        id: 'model-real-default',
+        display_name: 'Real Default',
+        description: null,
+        enabled: true,
+        supported_sizes: ['*'],
+        supported_qualities: ['auto'],
+        supports_edit: true,
+        supports_mask: true,
+        sort_order: 1,
+      }),
+      serializeCapabilitiesModel({
+        id: 'gpt-image-2-fast',
+        display_name: 'Legacy Fast',
+        description: null,
+        enabled: true,
+        supported_sizes: ['*'],
+        supported_qualities: ['auto'],
+        supports_edit: true,
+        supports_mask: true,
+        sort_order: 2,
+      }),
+    ])
+
+    expect(payload.image.defaultModelSku).toBe('model-real-default')
+  })
+
+  it('exposes the real route-backed max resolution edge for each public model', () => {
+    const payload = buildPlatformCapabilitiesPayload([
+      serializeCapabilitiesModel({
+        id: 'model-2k-only',
+        display_name: '2K Only',
+        description: null,
+        enabled: true,
+        supported_sizes: ['*'],
+        supported_qualities: ['auto'],
+        supports_edit: true,
+        supports_mask: true,
+        sort_order: 1,
+        max_route_supported_long_edge: '2560',
+      }),
+      serializeCapabilitiesModel({
+        id: 'model-4k',
+        display_name: '4K Ready',
+        description: null,
+        enabled: true,
+        supported_sizes: ['*'],
+        supported_qualities: ['auto'],
+        supports_edit: true,
+        supports_mask: true,
+        sort_order: 2,
+        max_route_supported_long_edge: '3840',
+      }),
+    ])
+
+    expect(payload.image.models[0]).toMatchObject({
+      id: 'model-2k-only',
+      supportedSizes: ['*'],
+      maxSupportedLongEdge: 2560,
+    })
+    expect(payload.image.models[1]).toMatchObject({
+      id: 'model-4k',
+      maxSupportedLongEdge: 3840,
+    })
+    expect(payload.image.maxSupportedLongEdge).toBe(3840)
   })
 
   it('serves public capabilities without secret route fields', async () => {
@@ -114,6 +184,7 @@ describe('platform capabilities', () => {
       expect(payload.image.models[0]).toMatchObject({
         id: 'gpt-image-2-fast',
         label: 'GPT Image 2 快速',
+        supportedSizes: ['*'],
       })
       const serialized = JSON.stringify(payload)
       expect(serialized).not.toContain('apiKeyRef')

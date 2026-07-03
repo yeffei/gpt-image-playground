@@ -2,6 +2,18 @@ import { randomBytes } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { ApiError, requireAdminSession, sendError } from './adminAuth.js'
 import type { Db } from './db.js'
+import { normalizeProbeSizes, probeGatewayRoute, summarizeProbeBatch } from './gatewayRouteProbe.js'
+
+type RoutePreflightStatus =
+  | 'missing_base_url'
+  | 'missing_api_key'
+  | 'ready_for_smoke'
+  | 'auth_failed'
+  | 'models_endpoint_missing'
+  | 'rate_limited'
+  | 'upstream_server_error'
+  | 'network_or_timeout'
+  | 'unknown'
 
 interface GatewayRouteRow {
   id: string
@@ -11,6 +23,10 @@ interface GatewayRouteRow {
   api_key_ref: string
   default_upstream_model?: string | null
   enabled: boolean
+  is_official: boolean
+  max_supported_long_edge?: number | null
+  high_res_probe_result?: unknown
+  high_res_probe_at?: string | null
   notes?: string | null
   created_at: string
   updated_at: string
@@ -22,6 +38,41 @@ interface GatewayRouteRow {
   last_failure_kind?: string | null
   last_error?: string | null
   cooldown_until?: string | null
+}
+
+type ProbeRouteRow = GatewayRouteRow & {
+  compatibility_strategy?: 'openai_standard' | 'relay_extended' | null
+}
+
+function normalizeRouteProvider(value: unknown) {
+  const provider = typeof value === 'string' ? value.trim() : ''
+  return provider === 'gemini-native' ? 'gemini-native' : 'openai-compatible'
+}
+
+type RoutePreflightProbe = {
+  ok: boolean
+  status: number | null
+  durationMs: number
+  error?: string
+}
+
+type RoutePreflightResult = {
+  id: string
+  name: string
+  enabled: boolean
+  baseUrl: string
+  apiKey: string
+  model: string
+  compatibilityStrategy: 'openai_standard' | 'relay_extended'
+  baseProbe: RoutePreflightProbe
+  modelsProbe: RoutePreflightProbe
+  status: RoutePreflightStatus
+}
+
+type RoutePreflightSummary = {
+  totalRoutes: number
+  readyForSmokeCount: number
+  authFailedCount: number
 }
 
 interface ModelSkuRow {
@@ -97,6 +148,94 @@ function normalizePositiveInteger(value: unknown, fallback: number, options: { m
   return numberValue
 }
 
+function redactApiKey(apiKeyRef: string) {
+  const ref = apiKeyRef.trim()
+  const resolved = process.env[ref]?.trim() || ref
+  if (!resolved) return 'missing'
+  return `present (*${resolved.slice(-4)})`
+}
+
+function buildRouteUrl(baseUrl: string, path: string) {
+  return `${baseUrl.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`
+}
+
+async function timedFetch(url: string, init: RequestInit, timeoutMs = 15_000): Promise<RoutePreflightProbe> {
+  const controller = new AbortController()
+  const startedAt = Date.now()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    })
+    return {
+      ok: response.ok,
+      status: response.status,
+      durationMs: Date.now() - startedAt,
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      status: null,
+      durationMs: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function runRouteConnectivityPreflight(route: ProbeRouteRow): Promise<RoutePreflightResult> {
+  const model = route.default_upstream_model?.trim() || 'gpt-image-2'
+  const compatibilityStrategy = route.compatibility_strategy === 'openai_standard' ? 'openai_standard' : 'relay_extended'
+  const apiKeyRef = route.api_key_ref?.trim() ?? ''
+  const resolvedApiKey = process.env[apiKeyRef]?.trim() || apiKeyRef
+
+  const baseProbe = route.base_url
+    ? await timedFetch(route.base_url, { method: 'HEAD' })
+    : { ok: false, status: null, durationMs: 0, error: 'missing base url' }
+
+  const modelsProbe = route.base_url
+    ? resolvedApiKey
+      ? await timedFetch(buildRouteUrl(route.base_url, 'models'), {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${resolvedApiKey}` },
+      })
+      : { ok: false, status: null, durationMs: 0, error: 'missing api key' }
+    : { ok: false, status: null, durationMs: 0, error: 'missing base url' }
+
+  let status: RoutePreflightStatus = 'unknown'
+  if (!route.base_url) status = 'missing_base_url'
+  else if (!resolvedApiKey) status = 'missing_api_key'
+  else if (modelsProbe.ok) status = 'ready_for_smoke'
+  else if (modelsProbe.status === 401 || modelsProbe.status === 403) status = 'auth_failed'
+  else if (modelsProbe.status === 404 || modelsProbe.status === 405) status = 'models_endpoint_missing'
+  else if (modelsProbe.status === 429) status = 'rate_limited'
+  else if (modelsProbe.status != null && modelsProbe.status >= 500) status = 'upstream_server_error'
+  else if (baseProbe.error || modelsProbe.error) status = 'network_or_timeout'
+
+  return {
+    id: route.id,
+    name: route.name,
+    enabled: route.enabled,
+    baseUrl: route.base_url,
+    apiKey: redactApiKey(route.api_key_ref),
+    model,
+    compatibilityStrategy,
+    baseProbe,
+    modelsProbe,
+    status,
+  }
+}
+
+function summarizeRouteConnectivityPreflight(routes: RoutePreflightResult[]): RoutePreflightSummary {
+  return {
+    totalRoutes: routes.length,
+    readyForSmokeCount: routes.filter((route) => route.status === 'ready_for_smoke').length,
+    authFailedCount: routes.filter((route) => route.status === 'auth_failed').length,
+  }
+}
+
 function normalizeStringArray(value: unknown, fallback: string[]) {
   if (!Array.isArray(value)) return fallback
   return value
@@ -146,6 +285,10 @@ function serializeRoute(row: GatewayRouteRow) {
     apiKeyRef: row.api_key_ref,
     defaultUpstreamModel: row.default_upstream_model ?? null,
     enabled: row.enabled,
+    isOfficial: row.is_official,
+    maxSupportedLongEdge: typeof row.max_supported_long_edge === 'number' ? row.max_supported_long_edge : null,
+    highResProbeResult: row.high_res_probe_result ?? null,
+    highResProbeAt: row.high_res_probe_at ?? null,
     notes: row.notes ?? null,
     healthStatus: coolingModelCount > 0 ? 'cooling' : maxConsecutiveFailures > 0 ? 'degraded' : 'healthy',
     health: diagnostics,
@@ -153,6 +296,23 @@ function serializeRoute(row: GatewayRouteRow) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
+}
+
+async function persistProbeResult(db: Db, probe: Awaited<ReturnType<typeof probeGatewayRoute>>) {
+  const capturedAt = nowIso()
+  await db.query(`
+    UPDATE gateway_routes
+    SET max_supported_long_edge = $1,
+      high_res_probe_result = $2::jsonb,
+      high_res_probe_at = $3,
+      updated_at = $3
+    WHERE id = $4
+  `, [
+    probe.maxSupportedLongEdge,
+    JSON.stringify(probe),
+    capturedAt,
+    probe.routeId,
+  ])
 }
 
 function serializeModel(row: ModelSkuRow) {
@@ -237,7 +397,8 @@ async function writeAuditLog(
 
 async function getRoute(db: Db, id: string) {
   return (await db.query<GatewayRouteRow>(`
-    SELECT id, name, provider, base_url, api_key_ref, default_upstream_model, enabled,
+    SELECT id, name, provider, base_url, api_key_ref, default_upstream_model, enabled, is_official,
+      max_supported_long_edge, high_res_probe_result, high_res_probe_at::text,
       notes, created_at::text, updated_at::text,
       (
         SELECT COUNT(*)::text FROM model_route_bindings b WHERE b.route_id = gateway_routes.id
@@ -269,6 +430,39 @@ async function getRoute(db: Db, id: string) {
   `, [id])).rows[0]
 }
 
+function toProbeRoute(row: ProbeRouteRow) {
+  return {
+    id: row.id,
+    name: row.name,
+    baseUrl: row.base_url,
+    apiKeyRef: row.api_key_ref,
+    defaultUpstreamModel: row.default_upstream_model ?? null,
+    compatibilityStrategy: row.compatibility_strategy ?? null,
+  }
+}
+
+async function getProbeRoute(db: Db, id: string) {
+  return (await db.query<ProbeRouteRow>(`
+    SELECT id, name, provider, base_url, api_key_ref, default_upstream_model, enabled, is_official,
+      max_supported_long_edge, high_res_probe_result, high_res_probe_at::text,
+      notes, created_at::text, updated_at::text
+    FROM gateway_routes
+    WHERE id = $1
+    LIMIT 1
+  `, [id])).rows[0]
+}
+
+async function listEnabledProbeRoutes(db: Db) {
+  return (await db.query<ProbeRouteRow>(`
+    SELECT id, name, provider, base_url, api_key_ref, default_upstream_model, enabled, is_official,
+      max_supported_long_edge, high_res_probe_result, high_res_probe_at::text,
+      notes, created_at::text, updated_at::text
+    FROM gateway_routes
+    WHERE enabled = true
+    ORDER BY updated_at DESC
+  `)).rows
+}
+
 async function getModel(db: Db, id: string) {
   return (await db.query<ModelSkuRow>(`
     SELECT id, name, display_name, description, enabled, supported_sizes, supported_qualities,
@@ -297,6 +491,81 @@ async function getBinding(db: Db, id: string) {
 }
 
 export function registerGatewayModelRoutes(app: FastifyInstance, db: Db) {
+  app.post('/api/admin/gateway-routes/probe-high-res', async (request, reply) => {
+    try {
+      await requireAdminSession(db, request.headers.authorization)
+      const payload = isRecord(request.body) ? request.body : {}
+      const sizes = normalizeProbeSizes(payload.sizes)
+      const routes = await listEnabledProbeRoutes(db)
+      const probes = []
+      for (const route of routes) {
+        const probe = await probeGatewayRoute(toProbeRoute(route), sizes)
+        await persistProbeResult(db, probe)
+        probes.push(probe)
+      }
+      return reply.send({ ok: true, summary: summarizeProbeBatch(probes), probes })
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
+  app.post('/api/admin/gateway-routes/preflight', async (request, reply) => {
+    try {
+      await requireAdminSession(db, request.headers.authorization)
+      const routes = await listEnabledProbeRoutes(db)
+      const results: RoutePreflightResult[] = []
+      for (const route of routes) {
+        results.push(await runRouteConnectivityPreflight(route))
+      }
+      return reply.send({
+        ok: true,
+        summary: summarizeRouteConnectivityPreflight(results),
+        routes: results,
+        skippedDisabledRouteIds: (await db.query<ProbeRouteRow>(`
+          SELECT id, name, provider, base_url, api_key_ref, default_upstream_model, enabled, is_official,
+            max_supported_long_edge, high_res_probe_result, high_res_probe_at::text,
+            notes, created_at::text, updated_at::text
+          FROM gateway_routes
+          WHERE enabled = false
+          ORDER BY updated_at DESC
+        `)).rows.map((route) => route.id),
+      })
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
+  app.post('/api/admin/gateway-routes/:id/preflight', async (request, reply) => {
+    try {
+      await requireAdminSession(db, request.headers.authorization)
+      const params = isRecord(request.params) ? request.params : {}
+      const id = typeof params.id === 'string' ? params.id.trim() : ''
+      if (!id) throw new ApiError(400, 'missing_route_id', '缺少线路编号')
+      const route = await getProbeRoute(db, id)
+      if (!route) throw new ApiError(404, 'route_not_found', '线路不存在')
+      return reply.send({ ok: true, route: await runRouteConnectivityPreflight(route) })
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
+  app.post('/api/admin/gateway-routes/:id/probe-high-res', async (request, reply) => {
+    try {
+      await requireAdminSession(db, request.headers.authorization)
+      const params = isRecord(request.params) ? request.params : {}
+      const id = typeof params.id === 'string' ? params.id.trim() : ''
+      if (!id) throw new ApiError(400, 'missing_route_id', '缺少线路编号')
+      const route = await getProbeRoute(db, id)
+      if (!route) throw new ApiError(404, 'route_not_found', '线路不存在')
+      const payload = isRecord(request.body) ? request.body : {}
+      const probe = await probeGatewayRoute(toProbeRoute(route), normalizeProbeSizes(payload.sizes))
+      await persistProbeResult(db, probe)
+      return reply.send({ ok: true, probe })
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
   app.get('/api/admin/gateway-routes', async (request, reply) => {
     try {
       await requireAdminSession(db, request.headers.authorization)
@@ -304,7 +573,8 @@ export function registerGatewayModelRoutes(app: FastifyInstance, db: Db) {
       const { limit, offset } = normalizePagination(query)
       const total = (await db.query<{ total: string }>('SELECT COUNT(*)::text AS total FROM gateway_routes')).rows[0]
       const result = await db.query<GatewayRouteRow>(`
-        SELECT id, name, provider, base_url, api_key_ref, default_upstream_model, enabled,
+        SELECT id, name, provider, base_url, api_key_ref, default_upstream_model, enabled, is_official,
+          max_supported_long_edge, high_res_probe_result, high_res_probe_at::text,
           notes, created_at::text, updated_at::text,
           (
             SELECT COUNT(*)::text FROM model_route_bindings b WHERE b.route_id = gateway_routes.id
@@ -370,18 +640,20 @@ export function registerGatewayModelRoutes(app: FastifyInstance, db: Db) {
       const route = (await db.query<GatewayRouteRow>(`
         INSERT INTO gateway_routes (
           id, name, provider, base_url, api_key_ref, default_upstream_model, enabled,
-          notes, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
-        RETURNING id, name, provider, base_url, api_key_ref, default_upstream_model, enabled,
+          is_official, notes, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+        RETURNING id, name, provider, base_url, api_key_ref, default_upstream_model, enabled, is_official,
+          max_supported_long_edge, high_res_probe_result, high_res_probe_at::text,
           notes, created_at::text, updated_at::text
       `, [
         createId('route'),
         normalizeText(payload.name, 'name', 120),
-        normalizeText(payload.provider, 'provider', 80),
+        normalizeRouteProvider(payload.provider),
         normalizeText(payload.baseUrl, 'base_url', 500),
         normalizeText(payload.apiKeyRef, 'api_key_ref', 160),
         normalizeOptionalText(payload.defaultUpstreamModel, 160),
         normalizeBoolean(payload.enabled, true),
+        normalizeBoolean(payload.isOfficial, false),
         normalizeOptionalText(payload.notes, 1000),
         createdAt,
       ])).rows[0]
@@ -411,17 +683,19 @@ export function registerGatewayModelRoutes(app: FastifyInstance, db: Db) {
       const after = (await db.query<GatewayRouteRow>(`
         UPDATE gateway_routes
         SET name = $1, provider = $2, base_url = $3, api_key_ref = $4,
-          default_upstream_model = $5, enabled = $6, notes = $7, updated_at = $8
-        WHERE id = $9
-        RETURNING id, name, provider, base_url, api_key_ref, default_upstream_model, enabled,
+          default_upstream_model = $5, enabled = $6, is_official = $7, notes = $8, updated_at = $9
+        WHERE id = $10
+        RETURNING id, name, provider, base_url, api_key_ref, default_upstream_model, enabled, is_official,
+          max_supported_long_edge, high_res_probe_result, high_res_probe_at::text,
           notes, created_at::text, updated_at::text
       `, [
         normalizeText(payload.name ?? before.name, 'name', 120),
-        normalizeText(payload.provider ?? before.provider, 'provider', 80),
+        normalizeRouteProvider(payload.provider ?? before.provider),
         normalizeText(payload.baseUrl ?? before.base_url, 'base_url', 500),
         normalizeText(payload.apiKeyRef ?? before.api_key_ref, 'api_key_ref', 160),
         payload.defaultUpstreamModel === undefined ? before.default_upstream_model : normalizeOptionalText(payload.defaultUpstreamModel, 160),
         normalizeBoolean(payload.enabled, before.enabled),
+        normalizeBoolean(payload.isOfficial, before.is_official),
         payload.notes === undefined ? before.notes : normalizeOptionalText(payload.notes, 1000),
         updatedAt,
         id,

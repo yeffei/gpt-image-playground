@@ -1,0 +1,318 @@
+const HIGH_RES_PROBE_SIZES = ['1024x1024', '2560x1440', '3840x2160'] as const
+const HIGH_RES_PROBE_TIMEOUT_MS = 120_000
+type HighResProbeSize = typeof HIGH_RES_PROBE_SIZES[number]
+type FetchInput = Parameters<typeof fetch>[0]
+
+type ProbeRoute = {
+  id: string
+  name: string
+  baseUrl: string
+  apiKeyRef: string
+  defaultUpstreamModel?: string | null
+  compatibilityStrategy?: 'openai_standard' | 'relay_extended' | null
+}
+
+type ProbeResult = {
+  routeId: string
+  routeName: string
+  upstreamModel: string
+  tests: ProbeTestResult[]
+  maxSupportedLongEdge: number | null
+}
+
+export type ProbeTestResult = {
+  requestedSize: string
+  actualSize: string | null
+  actualWidth: number | null
+  actualHeight: number | null
+  shrunk: boolean
+  returnedImage: boolean
+  statusCode: number | null
+  latencyMs: number
+  errorSummary: string | null
+}
+
+export type ProbeBatchSummary = {
+  totalRoutes: number
+  available2kRouteCount: number
+  available4kRouteCount: number
+  brokenRouteCount: number
+}
+
+function appendPath(baseUrl: string, path: string) {
+  return `${baseUrl.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`
+}
+
+function resolveApiKey(apiKeyRef: string) {
+  const ref = apiKeyRef.trim()
+  return process.env[ref]?.trim() || ref
+}
+
+function normalizeCompatibilityStrategy(value?: string | null): 'openai_standard' | 'relay_extended' {
+  return value === 'openai_standard' ? 'openai_standard' : 'relay_extended'
+}
+
+function buildPromptFields(strategy: 'openai_standard' | 'relay_extended') {
+  const prompt = 'Generate a simple single-panel resolution test image: one centered matte gray cube on a plain light background, studio lighting, no text, no watermark, no collage, no extra objects.'
+  const negativePrompt = 'text, letters, watermark, logo, collage, split screen, multiple panels, multiple objects, people'
+  if (strategy === 'relay_extended') {
+    return {
+      prompt,
+      negative_prompt: negativePrompt,
+    }
+  }
+  return {
+    prompt: `${prompt}\n\nPlease avoid: ${negativePrompt}`,
+  }
+}
+
+function getMaxSupportedLongEdge(tests: ProbeTestResult[]) {
+  let maxEdge = 0
+  for (const test of tests) {
+    if (!test.returnedImage || test.shrunk || !test.actualWidth || !test.actualHeight) continue
+    maxEdge = Math.max(maxEdge, test.actualWidth, test.actualHeight)
+  }
+  return maxEdge > 0 ? maxEdge : null
+}
+
+async function readGatewayError(response: Response) {
+  try {
+    const payload = await response.json() as unknown
+    if (payload && typeof payload === 'object' && 'error' in payload && payload.error && typeof payload.error === 'object' && 'message' in payload.error && typeof payload.error.message === 'string') {
+      return payload.error.message
+    }
+    if (payload && typeof payload === 'object' && 'message' in payload && typeof payload.message === 'string') {
+      return payload.message
+    }
+    return JSON.stringify(payload)
+  } catch {
+    return await response.text().catch(() => `HTTP ${response.status}`)
+  }
+}
+
+function normalizeBase64Image(value: string, fallbackMime: string) {
+  return value.startsWith('data:') ? value : `data:${fallbackMime};base64,${value}`
+}
+
+async function fetchImageAsDataUrl(url: string, fallbackMime: string) {
+  const response = await fetch(url)
+  if (!response.ok) throw new Error(`图片链接下载失败：HTTP ${response.status}`)
+  const blob = await response.blob()
+  const bytes = Buffer.from(await blob.arrayBuffer())
+  return `data:${blob.type || fallbackMime};base64,${bytes.toString('base64')}`
+}
+
+async function fetchWithTimeout(input: FetchInput, init: RequestInit, timeoutMs = HIGH_RES_PROBE_TIMEOUT_MS) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(input, { ...init, signal: controller.signal })
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error(`探测请求超时：超过 ${Math.round(timeoutMs / 1000)} 秒未返回`)
+    throw error
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function extractFirstImageDataUrl(payload: unknown, fallbackMime: string) {
+  const data = payload && typeof payload === 'object' && 'data' in payload && Array.isArray((payload as { data?: unknown }).data)
+    ? (payload as { data: unknown[] }).data
+    : []
+  for (const item of data) {
+    if (!item || typeof item !== 'object') continue
+    const b64 = 'b64_json' in item && typeof (item as { b64_json?: unknown }).b64_json === 'string'
+      ? (item as { b64_json: string }).b64_json
+      : ''
+    const url = 'url' in item && typeof (item as { url?: unknown }).url === 'string'
+      ? (item as { url: string }).url
+      : ''
+    if (b64) return normalizeBase64Image(b64, fallbackMime)
+    if (url.startsWith('http://') || url.startsWith('https://')) return await fetchImageAsDataUrl(url, fallbackMime)
+    if (url.startsWith('data:')) return url
+  }
+  throw new Error('接口没有返回可识别的图片数据')
+}
+
+function parseRequestedSize(size: string) {
+  const match = size.match(/^(\d+)x(\d+)$/)
+  if (!match) return null
+  return {
+    width: Number(match[1]),
+    height: Number(match[2]),
+  }
+}
+
+function getPngDimensions(bytes: Buffer) {
+  if (bytes.length < 24) return null
+  if (bytes[0] !== 0x89 || bytes[1] !== 0x50 || bytes[2] !== 0x4e || bytes[3] !== 0x47) return null
+  return {
+    width: bytes.readUInt32BE(16),
+    height: bytes.readUInt32BE(20),
+  }
+}
+
+function getJpegDimensions(bytes: Buffer) {
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null
+  let offset = 2
+  while (offset + 9 < bytes.length) {
+    if (bytes[offset] !== 0xff) {
+      offset += 1
+      continue
+    }
+    const marker = bytes[offset + 1]
+    if (marker === 0xd8 || marker === 0xd9) {
+      offset += 2
+      continue
+    }
+    const length = bytes.readUInt16BE(offset + 2)
+    const isSof = marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)
+    if (isSof && offset + 8 < bytes.length) {
+      return {
+        width: bytes.readUInt16BE(offset + 7),
+        height: bytes.readUInt16BE(offset + 5),
+      }
+    }
+    if (length < 2) break
+    offset += 2 + length
+  }
+  return null
+}
+
+function getWebpDimensions(bytes: Buffer) {
+  if (bytes.length < 30 || bytes.toString('ascii', 0, 4) !== 'RIFF' || bytes.toString('ascii', 8, 12) !== 'WEBP') return null
+  const chunkType = bytes.toString('ascii', 12, 16)
+  if (chunkType === 'VP8X' && bytes.length >= 30) {
+    return {
+      width: 1 + bytes.readUIntLE(24, 3),
+      height: 1 + bytes.readUIntLE(27, 3),
+    }
+  }
+  if (chunkType === 'VP8 ' && bytes.length >= 30) {
+    return {
+      width: bytes.readUInt16LE(26) & 0x3fff,
+      height: bytes.readUInt16LE(28) & 0x3fff,
+    }
+  }
+  if (chunkType === 'VP8L' && bytes.length >= 25) {
+    const bits = bytes.readUInt32LE(21)
+    return {
+      width: (bits & 0x3fff) + 1,
+      height: ((bits >> 14) & 0x3fff) + 1,
+    }
+  }
+  return null
+}
+
+function getImageDimensionsFromDataUrl(dataUrl: string) {
+  const match = dataUrl.match(/^data:([^;,]+)?(;base64)?,(.*)$/)
+  if (!match) return null
+  const mimeType = (match[1] || 'image/png').toLowerCase()
+  const bytes = match[2]
+    ? Buffer.from(match[3] || '', 'base64')
+    : Buffer.from(decodeURIComponent(match[3] || ''), 'utf8')
+  if (mimeType === 'image/png') return getPngDimensions(bytes)
+  if (mimeType === 'image/jpeg' || mimeType === 'image/jpg') return getJpegDimensions(bytes)
+  if (mimeType === 'image/webp') return getWebpDimensions(bytes)
+  return getPngDimensions(bytes) ?? getJpegDimensions(bytes) ?? getWebpDimensions(bytes)
+}
+
+export async function probeGatewayRoute(route: ProbeRoute, sizes: readonly HighResProbeSize[] = HIGH_RES_PROBE_SIZES): Promise<ProbeResult> {
+  const upstreamModel = route.defaultUpstreamModel?.trim() || 'gpt-image-2'
+  const compatibilityStrategy = normalizeCompatibilityStrategy(route.compatibilityStrategy)
+  const promptFields = buildPromptFields(compatibilityStrategy)
+  const tests: ProbeTestResult[] = []
+
+  for (const requestedSize of sizes.length ? sizes : HIGH_RES_PROBE_SIZES) {
+    const startedAt = Date.now()
+    try {
+      const body: Record<string, unknown> = {
+        model: upstreamModel,
+        size: requestedSize,
+        quality: 'high',
+        output_format: 'png',
+        moderation: 'low',
+        ...promptFields,
+      }
+      const response = await fetchWithTimeout(appendPath(route.baseUrl, 'images/generations'), {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${resolveApiKey(route.apiKeyRef)}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      })
+
+      if (!response.ok) {
+        tests.push({
+          requestedSize,
+          actualSize: null,
+          actualWidth: null,
+          actualHeight: null,
+          shrunk: false,
+          returnedImage: false,
+          statusCode: response.status,
+          latencyMs: Date.now() - startedAt,
+          errorSummary: await readGatewayError(response),
+        })
+        continue
+      }
+
+      const imageDataUrl = await extractFirstImageDataUrl(await response.json(), 'image/png')
+      const actual = getImageDimensionsFromDataUrl(imageDataUrl)
+      const requested = parseRequestedSize(requestedSize)
+      const shrunk = Boolean(actual && requested && (actual.width < requested.width || actual.height < requested.height))
+      tests.push({
+        requestedSize,
+        actualSize: actual ? `${actual.width}x${actual.height}` : null,
+        actualWidth: actual?.width ?? null,
+        actualHeight: actual?.height ?? null,
+        shrunk,
+        returnedImage: true,
+        statusCode: response.status,
+        latencyMs: Date.now() - startedAt,
+        errorSummary: actual ? null : '无法识别图片尺寸',
+      })
+    } catch (error) {
+      tests.push({
+        requestedSize,
+        actualSize: null,
+        actualWidth: null,
+        actualHeight: null,
+        shrunk: false,
+        returnedImage: false,
+        statusCode: null,
+        latencyMs: Date.now() - startedAt,
+        errorSummary: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  return {
+    routeId: route.id,
+    routeName: route.name,
+    upstreamModel,
+    tests,
+    maxSupportedLongEdge: getMaxSupportedLongEdge(tests),
+  }
+}
+
+export function normalizeProbeSizes(value: unknown): HighResProbeSize[] {
+  if (!Array.isArray(value)) return [...HIGH_RES_PROBE_SIZES]
+  const allowed = new Set<string>(HIGH_RES_PROBE_SIZES)
+  const seen = new Set<string>()
+  const sizes = value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter((item): item is HighResProbeSize => allowed.has(item) && !seen.has(item) && Boolean(seen.add(item)))
+  return sizes.length ? sizes : [...HIGH_RES_PROBE_SIZES]
+}
+
+export function summarizeProbeBatch(probes: ProbeResult[]): ProbeBatchSummary {
+  return {
+    totalRoutes: probes.length,
+    available2kRouteCount: probes.filter((probe) => probe.tests.some((test) => test.requestedSize === '2560x1440' && test.returnedImage && !test.shrunk)).length,
+    available4kRouteCount: probes.filter((probe) => probe.tests.some((test) => test.requestedSize === '3840x2160' && test.returnedImage && !test.shrunk)).length,
+    brokenRouteCount: probes.filter((probe) => probe.tests.every((test) => !test.returnedImage)).length,
+  }
+}

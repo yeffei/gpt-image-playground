@@ -1,7 +1,34 @@
 import { describe, expect, it } from 'vitest'
 import { buildGatewayDiagnosticsPayload } from './gatewayDiagnosticsPayload'
 import { createSchedulerState, markRouteStarted, recordRouteAttempt } from './imageRouteScheduler'
-import type { BackendRoute } from '../types'
+import { DEFAULT_PARAMS, type BackendRoute, type ModelSku } from '../types'
+
+const diagnosticModelSkus: ModelSku[] = [
+  {
+    id: 'gpt-image-2-fast',
+    label: 'GPT Image 2 Fast',
+    enabled: true,
+    routeIds: [],
+    defaultParams: { ...DEFAULT_PARAMS },
+    supportedSizes: ['*'],
+    supportedQualities: ['auto'],
+    supportsEdit: true,
+    supportsMask: true,
+    maxOutputCount: 4,
+  },
+  {
+    id: 'gpt-image-2-quality',
+    label: 'GPT Image 2 Quality',
+    enabled: true,
+    routeIds: [],
+    defaultParams: { ...DEFAULT_PARAMS },
+    supportedSizes: ['*'],
+    supportedQualities: ['auto'],
+    supportsEdit: true,
+    supportsMask: true,
+    maxOutputCount: 4,
+  },
+]
 
 function route(id: string): BackendRoute {
   return {
@@ -42,7 +69,7 @@ describe('gatewayDiagnosticsPayload', () => {
       failureKind: 'upstream_rate_limited',
     }, 1000)
 
-    const payload = buildGatewayDiagnosticsPayload(routes, schedulerState, {
+    const payload = buildGatewayDiagnosticsPayload(routes, diagnosticModelSkus, schedulerState, {
       capturedAt: 1900,
       requestId: 'imggw-demo-1',
       modelSku: 'gpt-image-2-fast',
@@ -98,7 +125,7 @@ describe('gatewayDiagnosticsPayload', () => {
   it('includes operator overrides and persistence info in diagnostics', () => {
     const routes = [route('route-1')]
 
-    const payload = buildGatewayDiagnosticsPayload(routes, createSchedulerState(), null, {
+    const payload = buildGatewayDiagnosticsPayload(routes, diagnosticModelSkus, createSchedulerState(), null, {
       overrides: {
         'route-1': {
           routeId: 'route-1',
@@ -159,7 +186,7 @@ describe('gatewayDiagnosticsPayload', () => {
       failureKind: 'upstream_server_error',
     }, 1_000)
 
-    const payload = buildGatewayDiagnosticsPayload([disabledRoute, busyRoute], schedulerState, null, {
+    const payload = buildGatewayDiagnosticsPayload([disabledRoute, busyRoute], diagnosticModelSkus, schedulerState, null, {
       overrides: {
         'route-busy': {
           routeId: 'route-busy',
@@ -184,5 +211,12 @@ describe('gatewayDiagnosticsPayload', () => {
       restoresAt: 9_000,
       currentInFlight: 1,
     })
+  })
+
+  it('keeps diagnostics empty when no model skus are explicitly supplied', () => {
+    const payload = buildGatewayDiagnosticsPayload([route('route-1')], [], createSchedulerState(), null, undefined, 2_000)
+
+    expect(payload.modelSkus).toEqual([])
+    expect(payload.routeHealthByModelSku).toEqual([])
   })
 })
