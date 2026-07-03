@@ -1,12 +1,13 @@
 import './SiteFooter.css'
 
 type SiteFooterProps = {
-  currentView: 'workbench' | 'library' | 'promptLibrary' | 'plan' | 'recharge' | 'auth'
+  currentView: 'workbench' | 'library' | 'promptLibrary' | 'plan' | 'recharge' | 'auth' | 'inspiration'
   isLoggedIn: boolean
 }
 
 function getCurrentViewLabel(view: SiteFooterProps['currentView']) {
   if (view === 'library') return '作品库'
+  if (view === 'inspiration') return '灵感广场'
   if (view === 'promptLibrary') return '提示词库'
   if (view === 'plan' || view === 'recharge') return '计划与额度'
   if (view === 'auth') return '登录与注册'
@@ -18,8 +19,8 @@ export default function SiteFooter({ currentView, isLoggedIn }: SiteFooterProps)
     ? '面向图像生成、模板复用和资产沉淀的创作工作台。'
     : '可先试填图像需求、浏览官方模板，登录后再同步个人资产。'
   const sectionSummary = isLoggedIn
-    ? '工作台 · 提示词库 · 作品资产 · 计划与额度'
-    : '工作台 · 提示词库 · 登录 / 注册'
+    ? '工作台 · 灵感广场 · 提示词库 · 作品资产 · 计划与额度'
+    : '工作台 · 灵感广场 · 提示词库 · 登录 / 注册'
 
   return (
     <footer className="site-footer-shell" aria-label="全站底部信息">

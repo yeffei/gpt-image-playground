@@ -1420,6 +1420,7 @@ interface AppState {
   clearInputImages: () => void
   setInputImages: (imgs: InputImage[], options?: { equivalentImageIds?: Record<string, string> }) => void
   moveInputImage: (fromIdx: number, toIdx: number) => void
+  addInputImageFromReference: (src: string) => Promise<InputImage>
   maskDraft: MaskDraft | null
   setMaskDraft: (draft: MaskDraft | null) => void
   clearMaskDraft: () => void
@@ -2546,6 +2547,14 @@ export const useStore = create<AppState>()(
             prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, images),
           })
         }),
+      addInputImageFromReference: async (src) => {
+        const dataUrl = await fetchImageReferenceAsDataUrl(src)
+        const id = await storeImage(dataUrl, 'upload')
+        cacheImage(id, dataUrl)
+        const image = { id, dataUrl }
+        get().addInputImage(image)
+        return image
+      },
       maskDraft: null,
       setMaskDraft: (maskDraft) =>
         set((s) => {
