@@ -101,8 +101,7 @@ export default function App() {
   const openAuthView = useStore((s) => s.openAuthView)
   const account = useStore((s) => s.account)
   const authSessionToken = useStore((s) => s.authSessionToken)
-  const setAccountState = useStore((s) => s.setAccountState)
-  const logout = useStore((s) => s.logout)
+  const refreshBackendAccount = useStore((s) => s.refreshBackendAccount)
   const openLoginDialog = useStore((s) => s.openLoginDialog)
   const tasks = useStore((s) => s.tasks)
   const setSearchQuery = useStore((s) => s.setSearchQuery)
@@ -127,26 +126,8 @@ export default function App() {
   useEffect(() => {
     const token = authSessionToken?.trim()
     if (!token) return
-
-    let cancelled = false
-    import('./lib/authApi')
-      .then(({ accountFromAuthSnapshot, getCurrentAuthAccount }) =>
-        getCurrentAuthAccount(token).then((payload) => accountFromAuthSnapshot(payload)),
-      )
-      .then((payload) => {
-        if (cancelled) return
-        setAccountState(payload)
-      })
-      .catch((error) => {
-        if (cancelled) return
-        logout()
-        showToast(error instanceof Error ? error.message : '登录状态已失效，请重新登录', 'info')
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [authSessionToken, logout, setAccountState, showToast])
+    void refreshBackendAccount()
+  }, [authSessionToken, refreshBackendAccount])
 
   const { totalTasks, favoriteTasks, favoriteDoneTasks } = useMemo(() => {
     let favoriteCount = 0
@@ -184,13 +165,14 @@ export default function App() {
     showToast(account.isLoggedIn ? '已进入作品库' : '已打开作品库入口，登录后查看个人结果', 'info')
   }
   const showFavoriteWorks = () => {
+    window.history.pushState({}, '', '/')
     setGalleryView('library')
     setLibraryViewMode('favorites')
     setSearchQuery('')
     setFilterStatus('done')
     setFilterFavorite(true)
     window.scrollTo({ top: 0, behavior: 'smooth' })
-    showToast(account.isLoggedIn ? '已进入收藏' : '已打开收藏入口，登录后查看个人沉淀', 'info')
+    showToast(account.isLoggedIn ? '已进入灵感收藏' : '已打开收藏入口，登录后查看个人沉淀', 'info')
   }
   const showPromptLibrary = () => {
     setGalleryView('promptLibrary')
@@ -199,8 +181,7 @@ export default function App() {
     showToast(account.isLoggedIn ? '已进入提示词库' : '已进入提示词库，当前可先浏览官方模板', 'info')
   }
   const showInspiration = () => {
-    window.history.pushState({}, '', '/inspiration')
-    setCurrentPathname('/inspiration')
+    window.history.pushState({}, '', '/')
     setGalleryView('inspiration')
     window.scrollTo({ top: 0, behavior: 'smooth' })
     showToast('已进入灵感广场', 'info')
@@ -467,10 +448,16 @@ export default function App() {
                           ) : (
                             <div className="studio-access-card">
                               <div className="studio-access-copy">
+                                <span className="studio-access-eyebrow">访客创作流</span>
                                 <span className="studio-topbar-title">{GUEST_VIEW_YOUR_RESULTS_TITLE}</span>
                                 <p className="studio-topbar-subtitle">
-                                  你可以先填写提示词和参数，登录后提交生成并保存结果。
+                                  先把提示词、参数和参考图整理好。登录后直接提交生成，结果会继续回到这里。
                                 </p>
+                              </div>
+                              <div className="studio-access-steps" aria-label="访客使用路径">
+                                <span>1 先在左侧试填工作台</span>
+                                <span>2 需要时去模板库挑方向</span>
+                                <span>3 登录后提交并保存结果</span>
                               </div>
                               <div className="studio-access-actions">
                                 <button type="button" className="studio-access-primary" onClick={openLoginDialog}>
@@ -487,6 +474,7 @@ export default function App() {
                                   浏览提示词库
                                 </button>
                               </div>
+                              <p className="studio-access-footnote">当前草稿会保留在本地，登录不会打断填写节奏。</p>
                             </div>
                           )}
                         </section>

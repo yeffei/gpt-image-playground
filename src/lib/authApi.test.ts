@@ -261,4 +261,26 @@ describe('authApi', () => {
       code: 'registration_disabled',
     })
   })
+
+  it('explains local backend outage when login receives an empty 500 response', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 500 })))
+
+    await expect(loginWithPassword({ email: 'user@example.com', password: 'correct-password' })).rejects.toMatchObject({
+      name: 'AuthApiError',
+      message: '本地服务未启动或暂不可用，请确认后端服务已运行后重试。',
+      code: 'backend_unavailable',
+    })
+  })
+
+  it('explains local backend outage when public settings cannot reach the API', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('fetch failed')
+    }))
+
+    await expect(getPublicAuthSettings()).rejects.toMatchObject({
+      name: 'AuthApiError',
+      message: '本地服务未启动或暂不可用，请确认后端服务已运行后重试。',
+      code: 'backend_unavailable',
+    })
+  })
 })

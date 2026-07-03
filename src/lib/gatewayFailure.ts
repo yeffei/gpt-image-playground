@@ -22,6 +22,7 @@ export function classifyGatewayFailure(input: GatewayFailureInput): ImageGateway
   const combined = `${input.errorCode ?? ''} ${input.errorType ?? ''} ${message}`
 
   if (NO_ROUTE_ERROR_RE.test(combined)) return 'no_route'
+  if (input.status === 402 || /余额不足|请先充值|insufficient_balance/i.test(combined)) return 'insufficient_balance'
   if (ROUTE_EXHAUSTED_RE.test(combined)) return 'route_exhausted'
   if (CONTENT_POLICY_RE.test(combined)) return 'content_policy_violation'
   if (input.status === 401 || input.status === 403 || AUTH_ERROR_RE.test(combined)) return 'upstream_auth_error'
@@ -46,6 +47,8 @@ export function getGatewayFailureHeadline(kind?: ImageGatewayFailureKind) {
       return '当前生成服务暂不可用，请稍后重试。'
     case 'route_exhausted':
       return '当前生成服务额度暂时不足，请稍后重试。'
+    case 'insufficient_balance':
+      return '当前账户余额不足，请先充值后再生成。'
     case 'upstream_timeout':
       return '生成服务请求超时，请稍后重试。'
     case 'upstream_rate_limited':

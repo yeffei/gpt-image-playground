@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
-import { useStore, reuseConfig, removeTask, isTaskVisibleForAccount } from '../store'
+import { useStore, reuseConfig, removeTask, stopRunningTask, isTaskVisibleForAccount } from '../store'
 import type { TaskRecord } from '../types'
 import TaskCard from './TaskCard'
 import {
@@ -63,10 +63,12 @@ export default function TaskGrid({ limit = 6 }: { limit?: number }) {
   const hasActiveFilters = Boolean(searchQuery.trim()) || effectiveFavoriteFilter || filterStatus !== 'all'
 
   const handleDelete = (task: typeof tasks[0]) => {
+    const isRunningTask = task.status === 'running'
     setConfirmDialog({
-      title: '删除记录',
-      message: '确定要删除这条记录吗？关联的图片资源也会被清理（如果没有其他任务引用）。',
-      action: () => removeTask(task),
+      title: isRunningTask ? '停止生成' : '删除记录',
+      message: isRunningTask ? '这条任务仍在生成中。停止后会保留当前记录，但不会继续等待服务端结果。' : '确定要删除这条记录吗？关联的图片资源也会被清理（如果没有其他任务引用）。',
+      confirmText: isRunningTask ? '停止生成' : undefined,
+      action: () => (isRunningTask ? stopRunningTask(task) : removeTask(task)),
     })
   }
 

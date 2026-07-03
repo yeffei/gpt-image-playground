@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useRef, useCallback, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import type { AgentConversation, AgentMessage, AgentRound, ResponsesOutputItem, TaskRecord } from '../types'
-import { deleteAgentRoundFromConversation, getActiveAgentRounds, getAgentBranchLeafId, getAgentSiblingRounds, getCachedImage, ensureImageCached, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeMultipleTasks, removeTask, reuseConfig, updateTaskInStore, useStore } from '../store'
+import { deleteAgentRoundFromConversation, getActiveAgentRounds, getAgentBranchLeafId, getAgentSiblingRounds, getCachedImage, ensureImageCached, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeMultipleTasks, removeTask, stopRunningTask, reuseConfig, updateTaskInStore, useStore } from '../store'
 import { getPromptMentionParts } from '../lib/promptImageMentions'
 import { collectWebSearchCalls, getAgentRoundOutputItems, getWebSearchStatusForCalls, type AgentWebSearchStatus } from '../lib/agentWebSearch'
 import TaskCard from './TaskCard'
@@ -1093,7 +1093,7 @@ export default function AgentWorkspace() {
                                     disableSwipe={true}
                                     onClick={() => setDetailTaskId(block.task.id)}
                                     onReuse={() => handleReuse(block.task)}
-                                    onDelete={() => setConfirmDialog({ title: '删除记录', message: '确定要删除这条记录吗？', action: () => removeTask(block.task) })}
+                                    onDelete={() => setConfirmDialog({ title: block.task.status === 'running' ? '停止生成' : '删除记录', message: block.task.status === 'running' ? '这条任务仍在生成中。停止后会保留当前记录，但不会继续等待服务端结果。' : '确定要删除这条记录吗？', confirmText: block.task.status === 'running' ? '停止生成' : undefined, action: () => (block.task.status === 'running' ? stopRunningTask(block.task) : removeTask(block.task)) })}
                                   />
                                 </div>
                               )

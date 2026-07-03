@@ -55,6 +55,8 @@ export class AuthApiError extends Error {
   }
 }
 
+const BACKEND_UNAVAILABLE_MESSAGE = '本地服务未启动或暂不可用，请确认后端服务已运行后重试。'
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
@@ -64,6 +66,22 @@ function parseAuthErrorPayload(value: unknown) {
   return {
     error: typeof value.error === 'string' ? value.error : undefined,
     message: typeof value.message === 'string' ? value.message : undefined,
+  }
+}
+
+function isLikelyBackendUnavailable(response: Response, body: unknown) {
+  return [500, 502, 503, 504].includes(response.status) && body == null
+}
+
+function toBackendUnavailableError() {
+  return new AuthApiError(BACKEND_UNAVAILABLE_MESSAGE, 'backend_unavailable')
+}
+
+async function fetchAuth(input: RequestInfo | URL, init?: RequestInit) {
+  try {
+    return await fetch(input, init)
+  } catch {
+    throw toBackendUnavailableError()
   }
 }
 
@@ -193,13 +211,14 @@ async function readJson(response: Response) {
 }
 
 async function postJson(path: string, payload: Record<string, unknown>) {
-  const response = await fetch(path, {
+  const response = await fetchAuth(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   })
   const body = await readJson(response)
   if (!response.ok) {
+    if (isLikelyBackendUnavailable(response, body)) throw toBackendUnavailableError()
     const errorPayload = parseAuthErrorPayload(body)
     throw new AuthApiError(errorPayload.message || '账号请求失败，请稍后重试', errorPayload.error)
   }
@@ -207,12 +226,13 @@ async function postJson(path: string, payload: Record<string, unknown>) {
 }
 
 async function getJson(path: string, sessionToken: string) {
-  const response = await fetch(path, {
+  const response = await fetchAuth(path, {
     method: 'GET',
     headers: { Authorization: `Bearer ${sessionToken}` },
   })
   const body = await readJson(response)
   if (!response.ok) {
+    if (isLikelyBackendUnavailable(response, body)) throw toBackendUnavailableError()
     const errorPayload = parseAuthErrorPayload(body)
     throw new AuthApiError(errorPayload.message || '登录状态已失效，请重新登录', errorPayload.error)
   }
@@ -220,12 +240,13 @@ async function getJson(path: string, sessionToken: string) {
 }
 
 async function postWithBearer(path: string, sessionToken: string) {
-  const response = await fetch(path, {
+  const response = await fetchAuth(path, {
     method: 'POST',
     headers: { Authorization: `Bearer ${sessionToken}` },
   })
   const body = await readJson(response)
   if (!response.ok) {
+    if (isLikelyBackendUnavailable(response, body)) throw toBackendUnavailableError()
     const errorPayload = parseAuthErrorPayload(body)
     throw new AuthApiError(errorPayload.message || '账号请求失败，请稍后重试', errorPayload.error)
   }
@@ -240,9 +261,10 @@ export async function sendAuthVerificationCode(email: string, purpose: 'register
 }
 
 export async function getPublicAuthSettings(): Promise<PublicAuthSettings> {
-  const payload = await fetch('/api/settings/public', { method: 'GET' })
+  const payload = await fetchAuth('/api/settings/public', { method: 'GET' })
   const body = await readJson(payload)
   if (!payload.ok) {
+    if (isLikelyBackendUnavailable(payload, body)) throw toBackendUnavailableError()
     const errorPayload = parseAuthErrorPayload(body)
     throw new AuthApiError(errorPayload.message || '账号设置加载失败，请稍后重试', errorPayload.error)
   }

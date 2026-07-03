@@ -89,17 +89,30 @@ export default function PublicShareView({ token }: PublicShareViewProps) {
     document.body.removeChild(link)
   }
 
+  const homeHref = '/'
+
   return (
     <main className="min-h-screen bg-[#f7f7f2] text-stone-950 dark:bg-[#12110f] dark:text-stone-50">
       <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-5 sm:px-6 lg:px-8">
         <header className="flex items-center justify-between gap-4 border-b border-stone-200/80 pb-4 text-sm dark:border-white/10">
-          <div className="flex items-center gap-2 font-semibold">
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-stone-950 text-white dark:bg-white dark:text-stone-950">
+          <a href={homeHref} className="group flex items-center gap-2 font-semibold text-inherit no-underline">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-stone-950 text-white transition group-hover:scale-[1.03] dark:bg-white dark:text-stone-950">
               <LinkIcon className="h-4 w-4" />
             </span>
-            <span>共享作品</span>
+            <span className="grid gap-0.5">
+              <strong className="text-sm font-semibold leading-none">SST 创作工作台</strong>
+              <small className="text-[11px] font-medium text-stone-500 dark:text-stone-400">共享作品</small>
+            </span>
+          </a>
+          <div className="flex items-center gap-3">
+            {outputLabel ? <span className="hidden text-xs text-stone-500 dark:text-stone-400 sm:inline">{outputLabel}</span> : null}
+            <a
+              href={homeHref}
+              className="inline-flex items-center gap-1 rounded-full border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-stone-700 no-underline transition hover:border-stone-300 hover:bg-stone-50 dark:border-white/10 dark:bg-white/[0.04] dark:text-stone-200 dark:hover:bg-white/[0.08]"
+            >
+              进入网站
+            </a>
           </div>
-          {outputLabel && <span className="text-xs text-stone-500 dark:text-stone-400">{outputLabel}</span>}
         </header>
 
         <section className="grid flex-1 items-center gap-6 py-6 lg:grid-cols-[minmax(0,1fr)_320px]">
@@ -121,6 +134,10 @@ export default function PublicShareView({ token }: PublicShareViewProps) {
             <div className="mb-4">
               <div className="text-xs text-stone-500 dark:text-stone-400">分享编号</div>
               <div className="mt-1 break-all font-mono text-xs text-stone-700 dark:text-stone-200">{token}</div>
+            </div>
+
+            <div className="mb-4 rounded-xl bg-stone-50 px-3 py-2 text-xs text-stone-500 dark:bg-black/20 dark:text-stone-400">
+              由 <a href={homeHref} className="font-medium text-stone-700 underline decoration-stone-300 underline-offset-2 dark:text-stone-200 dark:decoration-white/20">SST 创作工作台</a> 提供分享
             </div>
 
             {share?.requiresAccessCode && !imageUrl && (
@@ -161,6 +178,13 @@ export default function PublicShareView({ token }: PublicShareViewProps) {
                 有效期至 {new Date(share.expiresAt).toLocaleString('zh-CN')}
               </div>
             )}
+
+            <a
+              href={homeHref}
+              className="mt-4 inline-flex w-full items-center justify-center rounded-xl border border-stone-200 px-3 py-2 text-xs font-medium text-stone-700 no-underline transition hover:border-stone-300 hover:bg-stone-50 dark:border-white/10 dark:text-stone-200 dark:hover:bg-white/[0.08]"
+            >
+              回到工作台继续创作
+            </a>
           </aside>
         </section>
       </div>
