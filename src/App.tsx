@@ -14,7 +14,7 @@ import {
 } from './lib/accessCopy'
 
 type PrototypeNavItem = {
-  key: 'workbench' | 'library' | 'promptLibrary' | 'favorites' | 'auth' | 'plan' | 'help' | 'settings'
+  key: 'workbench' | 'library' | 'promptLibrary' | 'favorites' | 'auth' | 'plan' | 'help' | 'settings' | 'inspiration'
   label: string
   meta?: string
   tooltip: string
@@ -45,6 +45,10 @@ const ImageContextMenu = lazy(() => import('./components/ImageContextMenu'))
 const SupportPromptModal = lazy(() => import('./components/SupportPromptModal'))
 const TemplatesPreview = lazy(() => import('./components/TemplatesPreview'))
 const PublicShareView = lazy(() => import('./components/PublicShareView'))
+const InspirationView = lazy(() => import('./components/InspirationView'))
+const InspirationPostView = lazy(() => import('./components/InspirationPostView'))
+const InspirationTopicView = lazy(() => import('./components/InspirationTopicView'))
+const InspirationLatestView = lazy(() => import('./components/InspirationLatestView'))
 
 let appStoreInitStarted = false
 
@@ -74,12 +78,19 @@ function scheduleAppStoreInit() {
 }
 
 export default function App() {
+  const [currentPathname, setCurrentPathname] = useState(() =>
+    typeof window !== 'undefined' ? window.location.pathname : '/',
+  )
   const [navCollapsed, setNavCollapsed] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const [imageContextMenuReady, setImageContextMenuReady] = useState(false)
   const [initialImageContextMenuInfo, setInitialImageContextMenuInfo] = useState<ImageContextMenuInfo | null>(null)
   const previewMode = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('preview') : null
-  const publicShareToken = typeof window !== 'undefined' ? getPublicShareToken(window.location.pathname) : null
+  const publicShareToken = typeof window !== 'undefined' ? getPublicShareToken(currentPathname) : null
+  const inspirationTopicCategory = typeof window !== 'undefined' ? getInspirationTopicCategory(currentPathname) : null
+  const isInspirationLatestRoute = typeof window !== 'undefined' ? isInspirationLatestPath(currentPathname) : false
+  const inspirationPostId = typeof window !== 'undefined' ? getInspirationPostId(currentPathname) : null
+  const isInspirationHomeRoute = typeof window !== 'undefined' ? isInspirationHomePath(currentPathname) : false
   const setShowSettings = useStore((s) => s.setShowSettings)
   const showSettings = useStore((s) => s.showSettings)
   const galleryView = useStore((s) => s.galleryView)
@@ -103,6 +114,15 @@ export default function App() {
   const maskEditorImageId = useStore((s) => s.maskEditorImageId)
   const supportPromptOpen = useStore((s) => s.supportPromptOpen)
   useGlobalClickSuppression()
+
+  useEffect(() => {
+    const syncLocation = () => {
+      setCurrentPathname(window.location.pathname)
+    }
+
+    window.addEventListener('popstate', syncLocation)
+    return () => window.removeEventListener('popstate', syncLocation)
+  }, [])
 
   useEffect(() => {
     const token = authSessionToken?.trim()
@@ -178,6 +198,13 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
     showToast(account.isLoggedIn ? '已进入提示词库' : '已进入提示词库，当前可先浏览官方模板', 'info')
   }
+  const showInspiration = () => {
+    window.history.pushState({}, '', '/inspiration')
+    setCurrentPathname('/inspiration')
+    setGalleryView('inspiration')
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+    showToast('已进入灵感广场', 'info')
+  }
   const navSections: PrototypeNavSection[] = account.isLoggedIn
     ? [
         {
@@ -190,6 +217,7 @@ export default function App() {
           group: '资产',
           items: [
             { key: 'library', label: '作品库', meta: `${totalTasks} 条`, tooltip: '查看全部结果', icon: 'library', onClick: showAllWorks },
+            { key: 'inspiration', label: '灵感广场', meta: '公开展示', tooltip: '浏览灵感广场', icon: 'spark', onClick: showInspiration },
             { key: 'promptLibrary', label: '提示词库', meta: '官方模板', tooltip: '浏览和复用官方模板', icon: 'prompt', onClick: showPromptLibrary },
             { key: 'favorites', label: '收藏', meta: `${favoriteDoneTasks || favoriteTasks} 张`, tooltip: '查看收藏结果', icon: 'star', onClick: showFavoriteWorks },
           ],
@@ -208,6 +236,7 @@ export default function App() {
           group: '公开入口',
           items: [
             { key: 'workbench', label: '工作台', meta: '试填入口', tooltip: '进入试填入口', icon: 'grid', tone: 'public', onClick: () => setGalleryView('workbench') },
+            { key: 'inspiration', label: '灵感广场', meta: '公开展示', tooltip: '浏览灵感广场', icon: 'spark', tone: 'public', onClick: showInspiration },
             { key: 'promptLibrary', label: '提示词库', meta: '公开浏览', tooltip: '浏览官方模板', icon: 'prompt', tone: 'public', onClick: showPromptLibrary },
           ],
         },
@@ -223,6 +252,7 @@ export default function App() {
     if (key === 'workbench') return galleryView === 'workbench'
     if (key === 'library') return galleryView === 'library' && libraryViewMode === 'all'
     if (key === 'favorites') return galleryView === 'library' && libraryViewMode === 'favorites'
+    if (key === 'inspiration') return galleryView === 'inspiration'
     if (key === 'promptLibrary') return galleryView === 'promptLibrary'
     if (key === 'auth') return galleryView === 'auth'
     if (key === 'plan') return galleryView === 'plan'
@@ -241,6 +271,11 @@ export default function App() {
 
     return scheduleAppStoreInit()
   }, [openAuthView])
+
+  useEffect(() => {
+    if (!isInspirationHomeRoute) return
+    setGalleryView('inspiration')
+  }, [isInspirationHomeRoute, setGalleryView])
 
   useEffect(() => {
     const preventPageImageDrag = (e: DragEvent) => {
@@ -298,13 +333,64 @@ export default function App() {
     )
   }
 
+  if (inspirationTopicCategory) {
+    return (
+      <>
+        <Header />
+        <main data-home-main data-drag-select-surface className="prototype-page-shell prototype-page-shell-public">
+          <div className="prototype-stage prototype-stage-public">
+            <div className="prototype-main">
+              <Suspense fallback={<LazyViewFallback title="正在打开专题..." description="正在读取专题内容。" />}>
+                <InspirationTopicView />
+              </Suspense>
+            </div>
+          </div>
+        </main>
+      </>
+    )
+  }
+
+  if (isInspirationLatestRoute) {
+    return (
+      <>
+        <Header />
+        <main data-home-main data-drag-select-surface className="prototype-page-shell prototype-page-shell-public">
+          <div className="prototype-stage prototype-stage-public">
+            <div className="prototype-main">
+              <Suspense fallback={<LazyViewFallback title="正在打开最新入选..." description="正在读取最新公开作品。" />}>
+                <InspirationLatestView />
+              </Suspense>
+            </div>
+          </div>
+        </main>
+      </>
+    )
+  }
+
+  if (inspirationPostId) {
+    return (
+      <>
+        <Header />
+        <main data-home-main data-drag-select-surface className="prototype-page-shell prototype-page-shell-public">
+          <div className="prototype-stage prototype-stage-public">
+            <div className="prototype-main">
+              <Suspense fallback={<LazyViewFallback title="正在打开灵感作品..." description="正在读取公开作品内容。" />}>
+                <InspirationPostView postId={inspirationPostId} />
+              </Suspense>
+            </div>
+          </div>
+        </main>
+      </>
+    )
+  }
+
   return (
     <>
       <Header />
       <main
         data-home-main
         data-drag-select-surface
-        className={`prototype-page-shell ${navCollapsed ? 'is-nav-collapsed' : ''}`}
+        className={`prototype-page-shell ${navCollapsed ? 'is-nav-collapsed' : ''} ${galleryView === 'inspiration' ? 'is-inspiration-shell' : ''}`}
       >
           <div className="prototype-stage">
             <aside id="prototype-sidebar" className="prototype-sidebar" aria-label="产品导航">
@@ -350,6 +436,8 @@ export default function App() {
                   <PlanAndBillingView />
                 ) : galleryView === 'library' ? (
                   <LibraryView />
+                ) : galleryView === 'inspiration' ? (
+                  <InspirationView />
                 ) : galleryView === 'promptLibrary' ? (
                   <PromptLibraryView />
                 ) : galleryView === 'auth' ? (
@@ -483,4 +571,22 @@ function isEmbeddedPage() {
 function getPublicShareToken(pathname: string) {
   const match = pathname.match(/^\/share\/([^/?#]+)\/?$/)
   return match ? decodeURIComponent(match[1]) : null
+}
+
+function getInspirationPostId(pathname: string) {
+  const match = pathname.match(/^\/inspiration\/(?!topic\/|author\/|favorites\/?$)([^/?#]+)\/?$/)
+  return match ? decodeURIComponent(match[1]) : null
+}
+
+function isInspirationLatestPath(pathname: string) {
+  return /^\/inspiration\/latest\/?$/.test(pathname)
+}
+
+function getInspirationTopicCategory(pathname: string) {
+  const match = pathname.match(/^\/inspiration\/topic\/([^/?#]+)\/?$/)
+  return match ? decodeURIComponent(match[1]) : null
+}
+
+function isInspirationHomePath(pathname: string) {
+  return /^\/inspiration\/?$/.test(pathname)
 }

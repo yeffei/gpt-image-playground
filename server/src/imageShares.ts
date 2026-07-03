@@ -7,6 +7,7 @@ import type { Pool } from 'pg'
 import { ApiError, sendError } from './adminAuth.js'
 import type { Db } from './db.js'
 import type { ServerEnv } from './env.js'
+import { reviewShareContent, type ShareReviewStatus } from './shareModeration.js'
 import { requireUserSession } from './userAuth.js'
 
 const MAX_ACCESS_CODE_LENGTH = 64
@@ -22,6 +23,9 @@ type ShareOutputRow = {
   width?: number | null
   height?: number | null
   created_at: string
+  task_prompt?: string | null
+  task_negative_prompt?: string | null
+  revised_prompt?: string | null
 }
 
 type ShareRow = {
@@ -29,6 +33,9 @@ type ShareRow = {
   token: string
   output_id: string
   user_id: string
+  purpose: 'manual' | 'inspiration_public'
+  review_status: ShareReviewStatus
+  review_summary?: string | null
   access_code_hash?: string | null
   access_code_salt?: string | null
   expires_at?: string | null
@@ -109,8 +116,11 @@ function serializeOwnerShare(row: ShareRow) {
     id: row.id,
     token: row.token,
     outputId: row.output_id,
+    purpose: row.purpose,
     shareUrlPath: `/share/${row.token}`,
     apiUrlPath: `/api/shares/${row.token}`,
+    reviewStatus: row.review_status,
+    reviewSummary: row.review_summary ?? null,
     requiresAccessCode: Boolean(row.access_code_hash),
     expiresAt: row.expires_at ?? null,
     revokedAt: row.revoked_at ?? null,
@@ -138,20 +148,24 @@ function serializePublicShare(row: ShareWithOutputRow) {
 
 async function getOwnedOutput(db: Db, outputId: string, userId: string) {
   return (await db.query<ShareOutputRow>(`
-    SELECT id, task_id, user_id, output_index, mime_type, byte_size,
-      width, height, created_at::text
-    FROM generation_task_outputs
-    WHERE id = $1 AND user_id = $2
+    SELECT o.id, o.task_id, o.user_id, o.output_index, o.mime_type, o.byte_size,
+      o.width, o.height, o.created_at::text,
+      COALESCE(t.request_json ->> 'prompt', '') AS task_prompt,
+      COALESCE(t.request_json ->> 'negativePrompt', '') AS task_negative_prompt,
+      o.revised_prompt
+    FROM generation_task_outputs o
+    JOIN generation_tasks t ON t.id = o.task_id
+    WHERE o.id = $1 AND o.user_id = $2
     LIMIT 1
   `, [outputId, userId])).rows[0] ?? null
 }
 
 async function listOwnedSharesForOutput(db: Db, outputId: string, userId: string) {
   return (await db.query<ShareRow>(`
-    SELECT id, token, output_id, user_id, access_code_hash, access_code_salt,
-      expires_at::text, revoked_at::text, created_at::text, updated_at::text
+    SELECT id, token, output_id, user_id, purpose, review_status, review_summary,
+      access_code_hash, access_code_salt, expires_at::text, revoked_at::text, created_at::text, updated_at::text
     FROM generation_output_shares
-    WHERE output_id = $1 AND user_id = $2
+    WHERE output_id = $1 AND user_id = $2 AND purpose = 'manual'
     ORDER BY created_at DESC
     LIMIT 20
   `, [outputId, userId])).rows
@@ -159,7 +173,8 @@ async function listOwnedSharesForOutput(db: Db, outputId: string, userId: string
 
 async function getShareByToken(db: Db, token: string) {
   return (await db.query<ShareWithOutputRow>(`
-    SELECT s.id, s.token, s.output_id, s.user_id, s.access_code_hash, s.access_code_salt,
+    SELECT s.id, s.token, s.output_id, s.user_id, s.purpose, s.review_status, s.review_summary,
+      s.access_code_hash, s.access_code_salt,
       s.expires_at::text, s.revoked_at::text, s.created_at::text, s.updated_at::text,
       o.task_id, o.output_index, o.storage_provider, o.storage_key, o.mime_type, o.byte_size, o.width, o.height,
       o.created_at::text AS output_created_at
@@ -217,21 +232,31 @@ export function registerImageShareRoutes(app: FastifyInstance, db: Pool, env: Se
       if (!output) throw new ApiError(404, 'output_not_found', '输出不存在')
 
       const payload = isRecord(request.body) ? request.body : {}
+      const review = reviewShareContent({
+        prompt: output.task_prompt,
+        negativePrompt: output.task_negative_prompt,
+        revisedPrompt: output.revised_prompt,
+      })
+      if (review.status === 'blocked') {
+        throw new ApiError(403, 'share_review_blocked', review.summary ?? '当前内容暂不支持创建公开分享')
+      }
       const accessCode = normalizeAccessCodeInput(payload.accessCode)
       const access = accessCode ? hashAccessCode(accessCode) : null
       const createdAt = nowIso()
       const share = (await db.query<ShareRow>(`
         INSERT INTO generation_output_shares (
-          id, token, output_id, user_id, access_code_hash, access_code_salt,
+          id, token, output_id, user_id, purpose, review_status, review_summary, access_code_hash, access_code_salt,
           expires_at, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
-        RETURNING id, token, output_id, user_id, access_code_hash, access_code_salt,
-          expires_at::text, revoked_at::text, created_at::text, updated_at::text
+        ) VALUES ($1, $2, $3, $4, 'manual', $5, $6, $7, $8, $9, $10, $10)
+        RETURNING id, token, output_id, user_id, purpose, review_status, review_summary,
+          access_code_hash, access_code_salt, expires_at::text, revoked_at::text, created_at::text, updated_at::text
       `, [
         createId('share'),
         createShareToken(),
         output.id,
         session.user_id,
+        review.status,
+        review.summary,
         access?.hash ?? null,
         access?.salt ?? null,
         normalizeExpiresAt(payload.expiresAt),
@@ -253,9 +278,9 @@ export function registerImageShareRoutes(app: FastifyInstance, db: Pool, env: Se
       const share = (await db.query<ShareRow>(`
         UPDATE generation_output_shares
         SET revoked_at = COALESCE(revoked_at, $1), updated_at = $1
-        WHERE id = $2 AND user_id = $3
-        RETURNING id, token, output_id, user_id, access_code_hash, access_code_salt,
-          expires_at::text, revoked_at::text, created_at::text, updated_at::text
+        WHERE id = $2 AND user_id = $3 AND purpose = 'manual'
+        RETURNING id, token, output_id, user_id, purpose, review_status, review_summary,
+          access_code_hash, access_code_salt, expires_at::text, revoked_at::text, created_at::text, updated_at::text
       `, [revokedAt, shareId, session.user_id])).rows[0]
       if (!share) throw new ApiError(404, 'share_not_found', '分享不存在')
       return reply.send({ ok: true, share: serializeOwnerShare(share) })

@@ -2,7 +2,7 @@
 
 export type ApiMode = 'images' | 'responses'
 export type AppMode = 'gallery' | 'agent'
-export type GalleryView = 'workbench' | 'plan' | 'auth' | 'recharge' | 'library' | 'promptLibrary'
+export type GalleryView = 'workbench' | 'plan' | 'auth' | 'recharge' | 'library' | 'promptLibrary' | 'inspiration'
 export type WorkbenchReturnSource = Exclude<GalleryView, 'workbench'>
 export type AuthRedirectView = 'workbench' | 'plan' | 'library' | 'promptLibrary'
 export type AuthReturnSource = Exclude<AuthRedirectView, 'workbench'>
@@ -124,8 +124,11 @@ export interface OwnerImageShare {
   id: string
   token: string
   outputId: string
+  purpose?: 'manual' | 'inspiration_public'
   shareUrlPath: string
   apiUrlPath: string
+  reviewStatus: 'auto_pass' | 'attention' | 'blocked'
+  reviewSummary: string | null
   requiresAccessCode: boolean
   expiresAt: string | null
   revokedAt: string | null
@@ -146,6 +149,53 @@ export interface PublicImageShare {
     createdAt: string
   }
   createdAt: string
+}
+
+export type InspirationEligibilityReason =
+  | 'ok'
+  | 'size_too_small'
+  | 'size_unavailable'
+  | 'review_not_passed'
+  | 'ratio_out_of_range'
+  | 'content_unavailable'
+
+export type InspirationPostStatus = 'ai_reviewing' | 'published' | 'needs_review' | 'hidden' | 'removed'
+
+export interface InspirationPostSummary {
+  id: string
+  status: InspirationPostStatus
+  featured: boolean
+  title: string | null
+  category: string
+  processingLabel: string
+  publishedAt: string | null
+}
+
+export interface InspirationEligibility {
+  eligible: boolean
+  reason: InspirationEligibilityReason
+  width: number | null
+  height: number | null
+  longEdge: number | null
+  existingPost: {
+    id: string
+    status: InspirationPostStatus
+    featured: boolean
+    publishedAt: string | null
+  } | null
+}
+
+export interface InspirationHomePostCard {
+  id: string
+  title: string | null
+  category: string
+  processingLabel: string
+  authorName: string | null
+  publishedAt: string | null
+  imageUrl: string
+  viewCount?: number
+  detailOpenCount?: number
+  enterStudioClickCount?: number
 }
 
 export type ImageGatewayFailureKind =

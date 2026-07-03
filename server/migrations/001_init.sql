@@ -173,6 +173,9 @@ CREATE TABLE IF NOT EXISTS generation_output_shares (
   token TEXT NOT NULL UNIQUE,
   output_id TEXT NOT NULL REFERENCES generation_task_outputs(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  purpose TEXT NOT NULL DEFAULT 'manual' CHECK (purpose IN ('manual', 'inspiration_public')),
+  review_status TEXT NOT NULL DEFAULT 'auto_pass' CHECK (review_status IN ('auto_pass', 'attention', 'blocked')),
+  review_summary TEXT,
   access_code_hash TEXT,
   access_code_salt TEXT,
   expires_at TIMESTAMPTZ,
@@ -180,6 +183,101 @@ CREATE TABLE IF NOT EXISTS generation_output_shares (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE generation_output_shares ADD COLUMN IF NOT EXISTS purpose TEXT NOT NULL DEFAULT 'manual';
+ALTER TABLE generation_output_shares ADD COLUMN IF NOT EXISTS review_status TEXT NOT NULL DEFAULT 'auto_pass';
+ALTER TABLE generation_output_shares ADD COLUMN IF NOT EXISTS review_summary TEXT;
+ALTER TABLE generation_output_shares DROP CONSTRAINT IF EXISTS generation_output_shares_purpose_check;
+ALTER TABLE generation_output_shares ADD CONSTRAINT generation_output_shares_purpose_check CHECK (purpose IN ('manual', 'inspiration_public'));
+
+CREATE TABLE IF NOT EXISTS inspiration_posts (
+  id TEXT PRIMARY KEY,
+  share_id TEXT NOT NULL REFERENCES generation_output_shares(id) ON DELETE CASCADE,
+  output_id TEXT NOT NULL REFERENCES generation_task_outputs(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  author_name_snapshot TEXT NOT NULL,
+  category TEXT NOT NULL,
+  title TEXT,
+  caption TEXT,
+  processing_label TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('ai_reviewing', 'published', 'needs_review', 'hidden', 'removed')),
+  featured BOOLEAN NOT NULL DEFAULT false,
+  featured_rank INTEGER,
+  published_at TIMESTAMPTZ,
+  featured_at TIMESTAMPTZ,
+  view_count INTEGER NOT NULL DEFAULT 0 CHECK (view_count >= 0),
+  detail_open_count INTEGER NOT NULL DEFAULT 0 CHECK (detail_open_count >= 0),
+  enter_studio_click_count INTEGER NOT NULL DEFAULT 0 CHECK (enter_studio_click_count >= 0),
+  ai_review_status TEXT NOT NULL DEFAULT 'pending',
+  ai_review_result JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE inspiration_posts ADD COLUMN IF NOT EXISTS view_count INTEGER NOT NULL DEFAULT 0 CHECK (view_count >= 0);
+ALTER TABLE inspiration_posts ADD COLUMN IF NOT EXISTS detail_open_count INTEGER NOT NULL DEFAULT 0 CHECK (detail_open_count >= 0);
+ALTER TABLE inspiration_posts ADD COLUMN IF NOT EXISTS enter_studio_click_count INTEGER NOT NULL DEFAULT 0 CHECK (enter_studio_click_count >= 0);
+
+CREATE TABLE IF NOT EXISTS inspiration_post_likes (
+  id TEXT PRIMARY KEY,
+  post_id TEXT NOT NULL REFERENCES inspiration_posts(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (post_id, user_id)
+);
+ALTER TABLE inspiration_post_likes ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE inspiration_post_likes ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+CREATE TABLE IF NOT EXISTS inspiration_post_favorites (
+  id TEXT PRIMARY KEY,
+  post_id TEXT NOT NULL REFERENCES inspiration_posts(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (post_id, user_id)
+);
+ALTER TABLE inspiration_post_favorites ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE inspiration_post_favorites ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+CREATE TABLE IF NOT EXISTS inspiration_author_follows (
+  id TEXT PRIMARY KEY,
+  follower_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  author_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (follower_user_id, author_user_id),
+  CHECK (follower_user_id <> author_user_id)
+);
+ALTER TABLE inspiration_author_follows ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE inspiration_author_follows ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+CREATE TABLE IF NOT EXISTS inspiration_post_comments (
+  id TEXT PRIMARY KEY,
+  post_id TEXT NOT NULL REFERENCES inspiration_posts(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  author_name_snapshot TEXT NOT NULL,
+  content TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'published' CHECK (status IN ('published', 'hidden', 'removed')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE inspiration_post_comments ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'published';
+ALTER TABLE inspiration_post_comments ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE inspiration_post_comments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+CREATE TABLE IF NOT EXISTS inspiration_reward_events (
+  id TEXT PRIMARY KEY,
+  author_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  source_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  source_type TEXT NOT NULL CHECK (source_type IN ('follow', 'comment')),
+  source_id TEXT,
+  points NUMERIC(14, 2) NOT NULL CHECK (points >= 0),
+  note TEXT,
+  ledger_id TEXT REFERENCES balance_ledger(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE inspiration_reward_events ADD COLUMN IF NOT EXISTS source_id TEXT;
+ALTER TABLE inspiration_reward_events ADD COLUMN IF NOT EXISTS ledger_id TEXT REFERENCES balance_ledger(id);
 
 CREATE TABLE IF NOT EXISTS gateway_routes (
   id TEXT PRIMARY KEY,
@@ -329,6 +427,24 @@ CREATE INDEX IF NOT EXISTS idx_generation_task_outputs_user_created ON generatio
 CREATE INDEX IF NOT EXISTS idx_generation_output_shares_user_created ON generation_output_shares(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_generation_output_shares_output_created ON generation_output_shares(output_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_generation_output_shares_token_active ON generation_output_shares(token) WHERE revoked_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_generation_output_shares_output_inspiration_active ON generation_output_shares(output_id) WHERE purpose = 'inspiration_public' AND revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_generation_output_shares_purpose_created ON generation_output_shares(purpose, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_inspiration_posts_share_unique ON inspiration_posts(share_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_inspiration_posts_output_active ON inspiration_posts(output_id) WHERE status <> 'removed';
+CREATE INDEX IF NOT EXISTS idx_inspiration_posts_user_created ON inspiration_posts(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inspiration_posts_status_created ON inspiration_posts(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inspiration_posts_featured_rank ON inspiration_posts(featured, featured_rank, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inspiration_posts_featured_view_count ON inspiration_posts(featured, view_count DESC, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inspiration_post_likes_user_created ON inspiration_post_likes(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inspiration_post_likes_post_created ON inspiration_post_likes(post_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inspiration_post_favorites_user_created ON inspiration_post_favorites(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inspiration_post_favorites_post_created ON inspiration_post_favorites(post_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inspiration_author_follows_author_created ON inspiration_author_follows(author_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inspiration_author_follows_follower_created ON inspiration_author_follows(follower_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inspiration_post_comments_post_created ON inspiration_post_comments(post_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inspiration_post_comments_user_created ON inspiration_post_comments(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inspiration_reward_events_author_created ON inspiration_reward_events(author_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inspiration_reward_events_source_created ON inspiration_reward_events(source_user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_gateway_routes_enabled ON gateway_routes(enabled);
 CREATE INDEX IF NOT EXISTS idx_model_skus_enabled_sort ON model_skus(enabled, sort_order);
 CREATE INDEX IF NOT EXISTS idx_model_route_bindings_model_priority ON model_route_bindings(model_sku_id, enabled, priority, weight);

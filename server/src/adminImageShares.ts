@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import type { Pool } from 'pg'
 import { ApiError, requireAdminSession, sendError } from './adminAuth.js'
 import type { Db } from './db.js'
+import type { ShareReviewStatus } from './shareModeration.js'
 
 type ShareStatus = 'shareActive' | 'shareExpired' | 'shareRevoked'
 
@@ -10,6 +11,8 @@ type AdminShareRow = {
   token: string
   output_id: string
   user_id: string
+  review_status: ShareReviewStatus
+  review_summary?: string | null
   user_email?: string | null
   user_display_name?: string | null
   requires_access_code: boolean
@@ -64,6 +67,8 @@ function serializeShare(row: AdminShareRow) {
     userEmail: row.user_email ?? null,
     userDisplayName: row.user_display_name ?? null,
     userLabel: row.user_email ?? row.user_display_name ?? row.user_id,
+    reviewStatus: row.review_status,
+    reviewSummary: row.review_summary ?? null,
     requiresAccessCode: Boolean(row.requires_access_code),
     expiresAt: row.expires_at ?? null,
     revokedAt: row.revoked_at ?? null,
@@ -89,7 +94,7 @@ function serializeOutput(row: AdminShareDetailRow) {
 
 function buildShareFilters(query: Record<string, unknown>) {
   const values: unknown[] = []
-  const where: string[] = []
+  const where: string[] = ["s.purpose = 'manual'"]
 
   const status = typeof query.status === 'string' ? query.status.trim() : ''
   if (status === 'active' || status === 'shareActive') {
@@ -100,6 +105,12 @@ function buildShareFilters(query: Record<string, unknown>) {
     where.push('s.expires_at IS NOT NULL AND s.expires_at <= now()')
   } else if (status === 'revoked' || status === 'shareRevoked') {
     where.push('s.revoked_at IS NOT NULL')
+  }
+
+  const reviewStatus = typeof query.reviewStatus === 'string' ? query.reviewStatus.trim() : ''
+  if (reviewStatus === 'auto_pass' || reviewStatus === 'attention' || reviewStatus === 'blocked') {
+    values.push(reviewStatus)
+    where.push(`s.review_status = $${values.length}`)
   }
 
   const exactFilters: Array<[string, string]> = [
@@ -158,6 +169,7 @@ async function listImageShares(db: Db, query: Record<string, unknown>) {
   `, values)
   const rows = await db.query<AdminShareRow>(`
     SELECT s.id, s.token, s.output_id, s.user_id,
+      s.review_status, s.review_summary,
       u.email AS user_email, u.display_name AS user_display_name,
       (s.access_code_hash IS NOT NULL) AS requires_access_code,
       s.expires_at::text, s.revoked_at::text, s.created_at::text, s.updated_at::text,
@@ -182,6 +194,8 @@ async function summarizeImageShares(db: Db, query: Record<string, unknown>) {
     active_count: string
     expired_count: string
     revoked_count: string
+    blocked_count: string
+    attention_count: string
     access_code_count: string
     unique_users: string
     first_created_at?: string | null
@@ -192,6 +206,8 @@ async function summarizeImageShares(db: Db, query: Record<string, unknown>) {
       SUM(CASE WHEN s.revoked_at IS NULL AND (s.expires_at IS NULL OR s.expires_at > now()) THEN 1 ELSE 0 END)::text AS active_count,
       SUM(CASE WHEN s.revoked_at IS NULL AND s.expires_at IS NOT NULL AND s.expires_at <= now() THEN 1 ELSE 0 END)::text AS expired_count,
       SUM(CASE WHEN s.revoked_at IS NOT NULL THEN 1 ELSE 0 END)::text AS revoked_count,
+      SUM(CASE WHEN s.review_status = 'blocked' THEN 1 ELSE 0 END)::text AS blocked_count,
+      SUM(CASE WHEN s.review_status = 'attention' THEN 1 ELSE 0 END)::text AS attention_count,
       SUM(CASE WHEN s.access_code_hash IS NOT NULL THEN 1 ELSE 0 END)::text AS access_code_count,
       COUNT(DISTINCT s.user_id)::text AS unique_users,
       MIN(s.created_at)::text AS first_created_at,
@@ -206,6 +222,8 @@ async function summarizeImageShares(db: Db, query: Record<string, unknown>) {
     activeCount: Number(row?.active_count ?? 0),
     expiredCount: Number(row?.expired_count ?? 0),
     revokedCount: Number(row?.revoked_count ?? 0),
+    blockedCount: Number(row?.blocked_count ?? 0),
+    attentionCount: Number(row?.attention_count ?? 0),
     accessCodeCount: Number(row?.access_code_count ?? 0),
     uniqueUsers: Number(row?.unique_users ?? 0),
     firstCreatedAt: row?.first_created_at ?? null,
@@ -216,6 +234,7 @@ async function summarizeImageShares(db: Db, query: Record<string, unknown>) {
 async function getImageShareDetail(db: Db, shareId: string) {
   const row = (await db.query<AdminShareDetailRow>(`
     SELECT s.id, s.token, s.output_id, s.user_id,
+      s.review_status, s.review_summary,
       u.email AS user_email, u.display_name AS user_display_name,
       (s.access_code_hash IS NOT NULL) AS requires_access_code,
       s.expires_at::text, s.revoked_at::text, s.created_at::text, s.updated_at::text,

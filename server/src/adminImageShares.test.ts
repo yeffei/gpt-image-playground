@@ -9,6 +9,8 @@ function createTestDb() {
       token: 'share_active_token_1234567890',
       output_id: 'output_a',
       user_id: 'user_owner',
+      review_status: 'attention',
+      review_summary: '自动标记：可能涉及成人倾向内容',
       user_email: 'owner@example.com',
       user_display_name: 'Owner',
       requires_access_code: true,
@@ -36,6 +38,8 @@ function createTestDb() {
       token: 'share_revoked_token_1234567890',
       output_id: 'output_b',
       user_id: 'user_owner',
+      review_status: 'auto_pass',
+      review_summary: null,
       user_email: 'owner@example.com',
       user_display_name: 'Owner',
       requires_access_code: false,
@@ -57,6 +61,8 @@ function createTestDb() {
       token: 'share_expired_token_1234567890',
       output_id: 'output_c',
       user_id: 'user_other',
+      review_status: 'blocked',
+      review_summary: '分享拦截：检测到极端暴力血腥内容',
       user_email: 'other@example.com',
       user_display_name: 'Other',
       requires_access_code: false,
@@ -104,6 +110,8 @@ function createTestDb() {
             active_count: String(filtered.filter((share) => !share.revoked_at && (!share.expires_at || new Date(share.expires_at).getTime() > Date.now())).length),
             expired_count: String(filtered.filter((share) => !share.revoked_at && share.expires_at && new Date(share.expires_at).getTime() <= Date.now()).length),
             revoked_count: String(filtered.filter((share) => share.revoked_at).length),
+            blocked_count: String(filtered.filter((share) => share.review_status === 'blocked').length),
+            attention_count: String(filtered.filter((share) => share.review_status === 'attention').length),
             access_code_count: String(filtered.filter((share) => share.requires_access_code).length),
             unique_users: String(new Set(filtered.map((share) => share.user_id)).size),
             first_created_at: filtered[0]?.created_at ?? null,
@@ -138,6 +146,10 @@ function applyShareFilters(text: string, values: unknown[] | undefined, rows: Ar
   }
   if (text.includes('s.access_code_hash IS NOT NULL')) filtered = filtered.filter((share) => share.requires_access_code)
   if (text.includes('s.access_code_hash IS NULL')) filtered = filtered.filter((share) => !share.requires_access_code)
+  if (text.includes('s.review_status = $')) {
+    const reviewStatus = valueList.find((value) => value === 'auto_pass' || value === 'attention' || value === 'blocked')
+    if (reviewStatus) filtered = filtered.filter((share) => share.review_status === reviewStatus)
+  }
   if (text.includes('o.task_id = $')) {
     const taskId = valueList.find((value) => value === 'task_a' || value === 'task_b' || value === 'task_c')
     if (taskId) filtered = filtered.filter((share) => share.task_id === taskId)
@@ -180,6 +192,8 @@ describe('admin image shares', () => {
         outputId: 'output_a',
         taskId: 'task_a',
         userEmail: 'owner@example.com',
+        reviewStatus: 'attention',
+        reviewSummary: '自动标记：可能涉及成人倾向内容',
         requiresAccessCode: true,
         status: 'shareActive',
       })
@@ -196,6 +210,8 @@ describe('admin image shares', () => {
         activeCount: 1,
         expiredCount: 1,
         revokedCount: 1,
+        blockedCount: 1,
+        attentionCount: 1,
         accessCodeCount: 1,
         uniqueUsers: 2,
       })
@@ -230,6 +246,7 @@ describe('admin image shares', () => {
         outputId: 'output_a',
         taskId: 'task_a',
         status: 'shareActive',
+        reviewStatus: 'attention',
       })
       expect(payload.output).toEqual({
         id: 'output_a',
