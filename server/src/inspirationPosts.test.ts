@@ -32,14 +32,64 @@ type TestFavoriteListRow = Record<string, unknown> & {
   favorited_at: unknown
 }
 
+type TestFavoriteListItem = TestPostRow & TestFavoriteListRow
+
+type TestOutputRow = Record<string, unknown> & {
+  id: string
+  task_id: string
+  user_id: string
+  output_index: number
+  public_url: string
+  mime_type: string
+  byte_size: number
+  width: number | null
+  height: number | null
+  storage_provider: string
+  storage_key: string
+  created_at: string
+  mode: string
+  review_status: string
+  author_name_snapshot: string
+  task_prompt: string
+  task_negative_prompt: string
+  revised_prompt: string | null
+}
+
+type TestPostRow = Record<string, unknown> & {
+  id: string
+  share_id: string
+  output_id: string
+  user_id: string
+  author_name_snapshot: string
+  category: string
+  title: string | null
+  caption: string | null
+  processing_label: string
+  status: string
+  featured: boolean
+  featured_rank: number | null
+  published_at: string | null
+  featured_at: string | null
+  ai_review_status: string
+  ai_review_result: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+  width?: number | null
+  height?: number | null
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
 export function createTestDb() {
   const state = {
     shares: [] as Array<Record<string, unknown>>,
-    posts: [] as Array<Record<string, unknown>>,
+    posts: [] as TestPostRow[],
     favorites: [] as TestFavoriteRow[],
     comments: [] as TestCommentRow[],
     taskPrompt: '商业海报样片',
-    outputOverrides: {} as Record<string, Partial<Record<string, unknown>>>,
+    outputOverrides: {} as Record<string, Partial<TestOutputRow>>,
     failAiReview: false,
     updatedOutputSizes: [] as Array<{ id: string; width: number; height: number }>,
   }
@@ -47,7 +97,7 @@ export function createTestDb() {
   const buildOwnedOutputRow = (outputId: string, userId: unknown) => {
     if (userId !== 'user_owner') return null
 
-    const baseByOutputId: Record<string, Record<string, unknown>> = {
+    const baseByOutputId: Record<string, TestOutputRow> = {
       output_2k: {
         id: 'output_2k',
         task_id: 'task_2k',
@@ -578,16 +628,16 @@ export function createTestDb() {
       if (text.includes('INSERT INTO inspiration_posts')) {
         const [id, shareId, outputId, userId, authorNameSnapshot, category, title, caption, processingLabel, createdAt] = values ?? []
         const output = typeof outputId === 'string' ? buildOwnedOutputRow(outputId, userId) : null
-        const post = {
-          id,
-          share_id: shareId,
-          output_id: outputId,
-          user_id: userId,
-          author_name_snapshot: authorNameSnapshot,
-          category,
-          title,
-          caption,
-          processing_label: processingLabel,
+        const post: TestPostRow = {
+          id: String(id),
+          share_id: String(shareId),
+          output_id: String(outputId),
+          user_id: String(userId),
+          author_name_snapshot: String(authorNameSnapshot),
+          category: String(category),
+          title: typeof title === 'string' ? title : null,
+          caption: typeof caption === 'string' ? caption : null,
+          processing_label: String(processingLabel),
           status: 'ai_reviewing',
           featured: false,
           featured_rank: null,
@@ -595,8 +645,8 @@ export function createTestDb() {
           featured_at: null,
           ai_review_status: 'pending',
           ai_review_result: null,
-          created_at: createdAt,
-          updated_at: createdAt,
+          created_at: String(createdAt),
+          updated_at: String(createdAt),
           width: output?.width ?? null,
           height: output?.height ?? null,
         }
@@ -677,7 +727,7 @@ export function createTestDb() {
               favorited_at: favorite.created_at,
             }
           })
-          .filter((item): item is TestFavoriteListRow => Boolean(item))
+          .filter((item): item is TestFavoriteListItem => Boolean(item))
         return { rows }
       }
 
@@ -695,7 +745,7 @@ export function createTestDb() {
         post.featured = false
         post.featured_rank = null
         post.featured_at = null
-        post.updated_at = updatedAt
+        post.updated_at = String(updatedAt)
         return { rows: [post] }
       }
 
@@ -704,10 +754,13 @@ export function createTestDb() {
         const [title, status, aiReviewResultJson, postId] = values ?? []
         const post = state.posts.find((item) => item.id === postId)
         if (!post) return { rows: [] }
-        post.title = post.title || title
-        post.status = status
+        post.title = post.title || (typeof title === 'string' ? title : null)
+        post.status = typeof status === 'string' ? status : post.status
         post.ai_review_status = 'completed'
-        post.ai_review_result = typeof aiReviewResultJson === 'string' ? JSON.parse(aiReviewResultJson) : aiReviewResultJson
+        const nextAiReviewResult = typeof aiReviewResultJson === 'string'
+          ? JSON.parse(aiReviewResultJson) as unknown
+          : aiReviewResultJson
+        post.ai_review_result = isRecord(nextAiReviewResult) ? nextAiReviewResult : null
         if (status === 'published' && !post.published_at) {
           post.published_at = '2026-06-30T04:00:00.000Z'
         }
