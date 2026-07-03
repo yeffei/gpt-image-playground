@@ -93,8 +93,37 @@ type AdminFilterField = {
   hideAllOption?: boolean
 }
 
+type AdminQuickFilter = {
+  label: string
+  values: Record<string, string>
+}
+
+type AdminRecentViewEntry = {
+  section: Exclude<AdminSectionKey, 'dashboard'>
+  scope: string
+  sectionLabel: string
+  subsectionLabel: string
+  filters: Record<string, string>
+  updatedAt: string
+}
+
 const ADMIN_SESSION_STORAGE_KEY = 'sst-admin-session-token'
+const ADMIN_FILTER_MEMORY_STORAGE_KEY = 'sst-admin-filter-memory'
+const ADMIN_RECENT_VIEWS_STORAGE_KEY = 'sst-admin-recent-views'
+const ADMIN_ACTIVE_SECTION_STORAGE_KEY = 'sst-admin-active-section'
 const PROMPT_LIBRARY_CATEGORY_FILTER_OPTIONS = PROMPT_LIBRARY_CATEGORIES.filter((category) => category !== '全部')
+const ADMIN_PRIMARY_FILTER_KEYS: Partial<Record<string, string[]>> = {
+  users: ['email', 'status'],
+  tasks: ['status', 'user'],
+  inspiration: ['queue', 'status', 'category', 'user'],
+  shares: ['status', 'user'],
+}
+const ADMIN_ADVANCED_FILTER_SUMMARY: Partial<Record<string, string>> = {
+  users: '邮箱验证、充值与生成行为',
+  tasks: '模型、线路、失败类型与扣点',
+  inspiration: 'AI 展示判断、审核结论与发布快照',
+  shares: 'Token、记录编号、访问码与时间',
+}
 const TASK_FAILURE_KIND_OPTIONS = [
   'no_route',
   'route_exhausted',
@@ -178,6 +207,7 @@ const ADMIN_VALUE_LABELS: Record<string, string> = {
   reject: '不适合公开',
   featured_candidates: 'AI 推荐精选',
   latest: '最新展示',
+  completed: '已完成',
   hero_featured: '主视觉精选',
   secondary_featured: '次级精选',
   latest_grid: '最新列表',
@@ -262,6 +292,19 @@ const ADMIN_HOME_ACTIONS: Array<{
   { key: 'shares', label: '去查看', title: '分享链接审计', description: '查看用户创建的结果分享、访问码要求、过期和撤销状态。' },
 ]
 
+function isAdminSectionKey(value: string): value is AdminSectionKey {
+  return ADMIN_SECTIONS.some((section) => section.key === value)
+}
+
+function getStoredAdminSection(): AdminSectionKey {
+  try {
+    const value = window.localStorage.getItem(ADMIN_ACTIVE_SECTION_STORAGE_KEY) || ''
+    return isAdminSectionKey(value) ? value : 'dashboard'
+  } catch {
+    return 'dashboard'
+  }
+}
+
 const ADMIN_MODULES: Record<Exclude<AdminSectionKey, 'dashboard'>, AdminModuleConfig> = {
   users: {
     summaryPath: '/api/admin/users/summary',
@@ -334,33 +377,14 @@ const ADMIN_MODULES: Record<Exclude<AdminSectionKey, 'dashboard'>, AdminModuleCo
     title: '任务与扣点',
     description: '查看生成任务、扣点流水、失败原因，并支持后续补偿与取消操作。',
     columns: [
-      { key: 'id', label: '任务编号' },
       { key: 'status', label: '状态' },
-      { key: 'userId', label: '用户' },
       { key: 'modelLabel', label: '模型' },
+      { key: 'userId', label: '用户' },
       { key: 'routeLabel', label: '线路' },
-      { key: 'failureKind', label: '失败类型' },
       { key: 'chargedPoints', label: '扣点' },
+      { key: 'failureKind', label: '失败类型' },
       { key: 'errorSummary', label: '错误摘要' },
-    ],
-  },
-  inspiration: {
-    summaryPath: '/api/admin/inspiration-posts/summary',
-    listPath: '/api/admin/inspiration-posts?limit=25&offset=0',
-    listKey: 'posts',
-    detailBasePath: '/api/admin/inspiration-posts',
-    detailIdKey: 'id',
-    title: '灵感广场',
-    description: '管理广场公开作品、AI 展示判断，以及发布信息修正与展示状态流转。',
-    columns: [
-      { key: 'title', label: '标题' },
-      { key: 'category', label: '分类' },
-      { key: 'status', label: '状态' },
-      { key: 'featured', label: '精选' },
-      { key: 'aiDecision', label: 'AI 结论' },
-      { key: 'qualityScore', label: '质量分' },
-      { key: 'userLabel', label: '发布账号' },
-      { key: 'publishedAt', label: '发布时间' },
+      { key: 'id', label: '任务编号' },
     ],
   },
   gateway: {
@@ -388,8 +412,8 @@ const ADMIN_MODULES: Record<Exclude<AdminSectionKey, 'dashboard'>, AdminModuleCo
     description: '已发布模板、候选审核和导入任务都在这里管理，候选通过后才会进入前台。',
     columns: [
       { key: 'title', label: '标题' },
-      { key: 'category', label: '分类' },
       { key: 'status', label: '状态' },
+      { key: 'category', label: '分类' },
       { key: 'imagePath', label: '本地图片' },
       { key: 'sourceUrl', label: '来源' },
     ],
@@ -408,6 +432,25 @@ const ADMIN_MODULES: Record<Exclude<AdminSectionKey, 'dashboard'>, AdminModuleCo
       { key: 'status', label: '状态' },
       { key: 'inviterUserId', label: '邀请人' },
       { key: 'inviteeUserId', label: '被邀请人' },
+    ],
+  },
+  inspiration: {
+    summaryPath: '/api/admin/inspiration-posts/summary',
+    listPath: '/api/admin/inspiration-posts?limit=25&offset=0',
+    listKey: 'posts',
+    detailBasePath: '/api/admin/inspiration-posts',
+    detailIdKey: 'id',
+    title: '灵感广场',
+    description: '管理广场公开作品、AI 展示判断，以及发布信息修正与展示状态流转。',
+    columns: [
+      { key: 'title', label: '标题' },
+      { key: 'category', label: '分类' },
+      { key: 'status', label: '状态' },
+      { key: 'featured', label: '精选' },
+      { key: 'aiDecision', label: 'AI 结论' },
+      { key: 'qualityScore', label: '质量分' },
+      { key: 'userLabel', label: '发布账号' },
+      { key: 'publishedAt', label: '发布时间' },
     ],
   },
   shares: {
@@ -506,10 +549,10 @@ const GATEWAY_MODULES: Record<GatewaySubsectionKey, AdminModuleConfig> = {
       { key: 'modelDisplayName', label: '模型' },
       { key: 'routeName', label: '线路' },
       { key: 'healthStatus', label: '健康状态' },
+      { key: 'enabled', label: '启用' },
       { key: 'restoresAt', label: '预计恢复' },
       { key: 'priority', label: '线路顺序' },
       { key: 'weight', label: '分流比例' },
-      { key: 'enabled', label: '启用' },
     ],
   },
   strategy: {
@@ -568,8 +611,8 @@ const CONTENT_MODULES: Record<ContentSubsectionKey, AdminModuleConfig> = {
     description: '导入后只保留候选精品，人工确认通过后才进入网站模板库。',
     columns: [
       { key: 'title', label: '标题' },
-      { key: 'category', label: '分类' },
       { key: 'status', label: '状态' },
+      { key: 'category', label: '分类' },
       { key: 'imagePath', label: '本地图片' },
       { key: 'sourceUrl', label: '来源' },
     ],
@@ -625,14 +668,18 @@ const ADMIN_FILTERS: Partial<Record<Exclude<AdminSectionKey, 'dashboard'> | User
     { key: 'dateTo', label: '结束日期', type: 'date' },
   ],
   modelSkus: [
+    { key: 'name', label: '模型标识' },
+    { key: 'displayName', label: '显示名称' },
     { key: 'enabled', label: '启用', type: 'select', options: ['true', 'false'] },
     { key: 'supportsEdit', label: '支持编辑', type: 'select', options: ['true', 'false'] },
     { key: 'supportsMask', label: '支持蒙版', type: 'select', options: ['true', 'false'] },
   ],
   routes: [
+    { key: 'name', label: '线路名称' },
     { key: 'enabled', label: '启用', type: 'select', options: ['true', 'false'] },
   ],
   bindings: [
+    { key: 'enabled', label: '启用', type: 'select', options: ['true', 'false'] },
     { key: 'modelSkuId', label: '模型' },
     { key: 'routeId', label: '线路' },
   ],
@@ -680,8 +727,8 @@ const ADMIN_FILTERS: Partial<Record<Exclude<AdminSectionKey, 'dashboard'> | User
     { key: 'dateTo', label: '结束日期', type: 'date' },
   ],
   shares: [
-    { key: 'reviewStatus', label: '审核', type: 'select', options: ['auto_pass', 'attention', 'blocked'] },
     { key: 'status', label: '状态', type: 'select', options: ['shareActive', 'shareExpired', 'shareRevoked'] },
+    { key: 'reviewStatus', label: '审核', type: 'select', options: ['auto_pass', 'attention', 'blocked'] },
     { key: 'user', label: '用户', placeholder: '邮箱 / 昵称 / 用户ID' },
     { key: 'token', label: 'Token' },
     { key: 'outputId', label: '输出编号' },
@@ -1046,7 +1093,7 @@ function humanizeAdminKey(key: string) {
 
 function getStatusTone(value: unknown) {
   const text = String(value ?? '').toLowerCase()
-  if (['active', 'enabled', 'published', 'succeeded', 'success', 'redeemed', 'ok', 'available', 'healthy', 'publish', 'recommend_featured'].includes(text)) return 'good'
+  if (['active', 'enabled', 'published', 'succeeded', 'success', 'redeemed', 'ok', 'available', 'healthy', 'publish', 'recommend_featured', 'completed'].includes(text)) return 'good'
   if ([
     'disabled',
     'expired',
@@ -1074,13 +1121,13 @@ function getStatusTone(value: unknown) {
     'auto_hidden',
     'reject',
   ].includes(text)) return 'bad'
-  if (['queued', 'running', 'draft', 'pending', 'cooling', 'degraded', 'ai_reviewing', 'needs_review', 'featured_candidates', 'latest', 'attention'].includes(text)) return 'warn'
+  if (['queued', 'running', 'draft', 'pending', 'cooling', 'degraded', 'ai_reviewing', 'needs_review', 'featured_candidates', 'latest'].includes(text)) return 'warn'
   return 'neutral'
 }
 
 function shouldRenderAsBadge(key: string, value: unknown) {
   if (typeof value === 'boolean') return true
-  return ['status', 'enabled', 'featured', 'result', 'failureKind', 'healthStatus', 'supportsEdit', 'supportsMask', 'cooldownActive', 'reviewStatus', 'aiDecision'].includes(key)
+  return ['status', 'enabled', 'featured', 'result', 'failureKind', 'healthStatus', 'supportsEdit', 'supportsMask', 'cooldownActive', 'aiDecision', 'aiReviewStatus', 'queue'].includes(key)
 }
 
 function formatAdminDate(value: string) {
@@ -1166,11 +1213,11 @@ function getShareAuditSummaryCards(summary: unknown) {
   const record = isRecord(summary) && isRecord(summary.summary)
     ? summary.summary
     : isRecord(summary)
-      ? summary
-      : null
+    ? summary
+    : null
   if (!record) return [] as Array<{ label: string; value: string; note?: string }>
 
-  const readCount = (key: string) => {
+  const toCount = (key: string) => {
     const value = record[key]
     if (typeof value === 'number' && Number.isFinite(value)) return String(value)
     if (typeof value === 'string' && value.trim()) return value
@@ -1178,10 +1225,10 @@ function getShareAuditSummaryCards(summary: unknown) {
   }
 
   return [
-    { label: '总分享', value: readCount('totalShareCount'), note: '当前筛选结果' },
-    { label: '有效', value: readCount('activeCount'), note: '仍可访问' },
-    { label: '已标记', value: readCount('attentionCount'), note: '边界内容' },
-    { label: '已拦截', value: readCount('blockedCount'), note: '禁止公开分享' },
+    { label: '总分享', value: toCount('totalShareCount'), note: '当前筛选结果' },
+    { label: '有效', value: toCount('activeCount'), note: '仍可访问' },
+    { label: '已标记', value: toCount('attentionCount'), note: '边界内容' },
+    { label: '已拦截', value: toCount('blockedCount'), note: '禁止公开分享' },
   ]
 }
 
@@ -1264,14 +1311,75 @@ function AdminTableCell(props: { row: Record<string, unknown>; column: AdminTabl
   return <AdminValue fieldKey={props.column.key} value={getDisplayValueForColumn(props.row, props.column)} />
 }
 
-function AdminBusinessFieldList(props: { record: Record<string, unknown>; fields: Array<{ key: string; label: string }> }) {
+function getTableShellClassName(section: Exclude<AdminSectionKey, 'dashboard'>, actionScope: string) {
+  const names = ['admin-table-shell']
+  if (section === 'tasks') names.push('is-task-list')
+  if (actionScope === 'routes') names.push('is-route-list')
+  if (actionScope === 'modelSkus') names.push('is-model-list')
+  if (actionScope === 'bindings') names.push('is-binding-list')
+  if (actionScope === 'templates' || actionScope === 'candidates') names.push('is-template-list')
+  if (section === 'users' && actionScope === 'users') names.push('is-user-list')
+  return names.join(' ')
+}
+
+function hasMeaningfulAdminValue(value: unknown) {
+  if (value == null) return false
+  if (typeof value === 'string') return value.trim().length > 0
+  if (Array.isArray(value)) return value.length > 0
+  if (isRecord(value)) return Object.keys(value).length > 0
+  return true
+}
+
+function getFirstDetailRecord(detail: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = getValueByPath(detail, key)
+    if (isRecord(value)) return value
+  }
+  return detail
+}
+
+function getArrayCount(value: unknown) {
+  return Array.isArray(value) ? value.length : 0
+}
+
+function getDetailMetricValue(record: Record<string, unknown>, key: string) {
+  return getDisplayValueForKey(record, key) ?? getValueByPath(record, key)
+}
+
+function AdminDetailMetricList(props: { items: Array<{ key: string; label: string; value: unknown }> }) {
+  const items = props.items.filter((item) => hasMeaningfulAdminValue(item.value))
+  if (!items.length) return null
+  return (
+    <div className="admin-summary-grid">
+      {items.map((item) => (
+        <article key={`${item.key}-${item.label}`} className="admin-summary-card">
+          <span>{item.label}</span>
+          <strong>
+            <AdminValue fieldKey={item.key} value={item.value} />
+          </strong>
+        </article>
+      ))}
+    </div>
+  )
+}
+
+function AdminBusinessFieldList(props: { record: Record<string, unknown>; fields: Array<{ key: string; label: string }>; hideEmpty?: boolean }) {
+  const items = props.fields
+    .map((field) => ({
+      field,
+      value: getDisplayValueForKey(props.record, field.key) ?? getValueByPath(props.record, field.key),
+    }))
+    .filter((item) => !props.hideEmpty || hasMeaningfulAdminValue(item.value))
+
+  if (!items.length) return <p className="admin-empty">暂无可直接展示的字段。</p>
+
   return (
     <div className="admin-field-grid admin-field-grid-compact">
-      {props.fields.map((field) => (
+      {items.map(({ field, value }) => (
         <div key={field.key} className="admin-field-item">
           <span>{field.label}</span>
           <strong>
-            <AdminValue fieldKey={field.key} value={getDisplayValueForKey(props.record, field.key) ?? getValueByPath(props.record, field.key)} />
+            <AdminValue fieldKey={field.key} value={value} />
           </strong>
         </div>
       ))}
@@ -1425,6 +1533,209 @@ function AdminContentDetailView(props: { detail: Record<string, unknown>; select
   )
 }
 
+function getTaskDetailRecord(detail: Record<string, unknown>) {
+  const task = getValueByPath(detail, 'task')
+  return isRecord(task) ? task : detail
+}
+
+function parseAdminTaskFailureSummary(errorSummary: unknown) {
+  if (typeof errorSummary !== 'string' || !errorSummary.trim()) {
+    return { message: '', attempts: [] as Array<Record<string, unknown>> }
+  }
+  try {
+    const parsed = JSON.parse(errorSummary)
+    if (!isRecord(parsed)) return { message: errorSummary, attempts: [] as Array<Record<string, unknown>> }
+    return {
+      message: typeof parsed.message === 'string' ? parsed.message : errorSummary,
+      attempts: Array.isArray(parsed.attempts) ? parsed.attempts.filter(isRecord) : [],
+    }
+  } catch {
+    return { message: errorSummary, attempts: [] as Array<Record<string, unknown>> }
+  }
+}
+
+function AdminTaskDetailView(props: { detail: Record<string, unknown>; selectedId: string }) {
+  const task = getTaskDetailRecord(props.detail)
+  const failureSummary = parseAdminTaskFailureSummary(getValueByPath(task, 'errorSummary'))
+  const attempts = failureSummary.attempts
+  const lastAttempt = [...attempts].reverse().find((attempt) => !getValueByPath(attempt, 'skippedByCooldown')) ?? attempts[attempts.length - 1]
+  const resolvedRouteId = getValueByPath(task, 'routeId') ?? getValueByPath(lastAttempt ?? {}, 'routeId')
+  const resolvedUpstreamModel = getValueByPath(task, 'upstreamModel') ?? getValueByPath(lastAttempt ?? {}, 'upstreamModel')
+  const taskView = {
+    ...task,
+    routeId: resolvedRouteId,
+    upstreamModel: resolvedUpstreamModel,
+  }
+  const outputs = getValueByPath(props.detail, 'outputs')
+  const ledger = getValueByPath(props.detail, 'ledger')
+  const auditLogs = getValueByPath(props.detail, 'auditLogs')
+
+  return (
+    <div className="admin-detail-stack">
+      <section className="admin-detail-block">
+        <div className="admin-detail-title">
+          <span>任务详情</span>
+          <strong>{props.selectedId || formatCellValue(getValueByPath(task, 'id'))}</strong>
+        </div>
+        <AdminBusinessFieldList
+          record={taskView}
+          fields={[
+            { key: 'id', label: '任务编号' },
+            { key: 'userLabel', label: '用户' },
+            { key: 'status', label: '状态' },
+            { key: 'modelLabel', label: '模型' },
+            { key: 'routeLabel', label: '线路' },
+            { key: 'routeId', label: '线路标识' },
+            { key: 'upstreamModel', label: '上游模型' },
+            { key: 'requestId', label: '请求编号' },
+            { key: 'outputCount', label: '出图张数' },
+            { key: 'chargedPoints', label: '扣点' },
+            { key: 'ledgerId', label: '流水编号' },
+            { key: 'failureKind', label: '失败类型' },
+          ]}
+        />
+      </section>
+
+      <section className="admin-detail-block">
+        <div className="admin-detail-title">
+          <span>失败上下文</span>
+          <strong>{attempts.length ? `${attempts.length} 次尝试` : '无尝试记录'}</strong>
+        </div>
+        <div className="admin-strategy-list admin-record-list">
+          <div><span>错误信息</span><strong>{formatAdminValue(failureSummary.message || getValueByPath(task, 'errorSummary'))}</strong></div>
+          <div><span>线路标识</span><strong>{formatAdminValue(resolvedRouteId)}</strong></div>
+          <div><span>上游模型</span><strong>{formatAdminValue(resolvedUpstreamModel)}</strong></div>
+          <div><span>尝试次数</span><strong>{attempts.length ? `${attempts.length} 次` : '-'}</strong></div>
+        </div>
+        {attempts.length ? (
+          <div className="admin-activity-list">
+            {attempts.map((attempt, index) => (
+              <article key={`${String(getValueByPath(attempt, 'routeId') ?? 'attempt')}-${index}`} className="admin-activity-item">
+                <AdminBusinessFieldList
+                  record={attempt}
+                  fields={[
+                    { key: 'routeId', label: '线路标识' },
+                    { key: 'upstreamModel', label: '上游模型' },
+                    { key: 'success', label: '成功' },
+                    { key: 'latencyMs', label: '耗时(ms)' },
+                    { key: 'failureKind', label: '失败类型' },
+                    { key: 'errorMessage', label: '错误信息' },
+                    { key: 'skippedByCooldown', label: '冷却跳过' },
+                  ]}
+                />
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="admin-empty">这条任务没有解析出额外尝试记录。</p>
+        )}
+      </section>
+
+      <section className="admin-detail-block">
+        <div className="admin-detail-title">
+          <span>关联记录</span>
+        </div>
+        <div className="admin-strategy-list admin-record-list">
+          <div><span>出图记录</span><strong>{Array.isArray(outputs) ? `${outputs.length} 条` : '0 条'}</strong></div>
+          <div><span>账务流水</span><strong>{Array.isArray(ledger) ? `${ledger.length} 条` : '0 条'}</strong></div>
+          <div><span>审计日志</span><strong>{Array.isArray(auditLogs) ? `${auditLogs.length} 条` : '0 条'}</strong></div>
+        </div>
+      </section>
+
+      <AdminRawData payload={props.detail} />
+    </div>
+  )
+}
+
+function AdminUserDetailView(props: { detail: Record<string, unknown>; selectedId: string }) {
+  const user = getFirstDetailRecord(props.detail, ['user'])
+  const billingLedger = getValueByPath(props.detail, 'billingLedger') ?? getValueByPath(props.detail, 'ledger')
+  const referrals = getValueByPath(props.detail, 'referrals')
+  const creditRecords = getValueByPath(props.detail, 'creditRecords')
+  const tasks = getValueByPath(props.detail, 'tasks')
+  const shares = getValueByPath(props.detail, 'shares')
+  const userLabel = props.selectedId || formatCellValue(getDetailMetricValue(user, 'email') ?? getValueByPath(user, 'id'))
+
+  return (
+    <div className="admin-detail-stack">
+      <section className="admin-detail-block">
+        <div className="admin-detail-title">
+          <span>账号状态</span>
+          <strong>{userLabel}</strong>
+        </div>
+        <AdminDetailMetricList
+          items={[
+            { key: 'status', label: '状态', value: getDetailMetricValue(user, 'status') },
+            { key: 'balance', label: '当前余额', value: getDetailMetricValue(user, 'balance') },
+            { key: 'emailVerified', label: '邮箱验证', value: getDetailMetricValue(user, 'emailVerified') },
+            { key: 'createdAt', label: '注册时间', value: getDetailMetricValue(user, 'createdAt') },
+          ]}
+        />
+        <AdminBusinessFieldList
+          record={user}
+          hideEmpty
+          fields={[
+            { key: 'email', label: '邮箱' },
+            { key: 'displayName', label: '显示名' },
+            { key: 'status', label: '账号状态' },
+            { key: 'emailVerified', label: '邮箱验证' },
+            { key: 'createdAt', label: '注册时间' },
+            { key: 'updatedAt', label: '更新时间' },
+          ]}
+        />
+      </section>
+
+      <section className="admin-detail-block">
+        <div className="admin-detail-title">
+          <span>余额与充值</span>
+          <strong>{formatAdminValue(getDetailMetricValue(user, 'balance'))}</strong>
+        </div>
+        <AdminDetailMetricList
+          items={[
+            { key: 'balance', label: '当前余额', value: getDetailMetricValue(user, 'balance') },
+            { key: 'totalRechargePoints', label: '累计充值', value: getDetailMetricValue(user, 'totalRechargePoints') },
+            { key: 'totalChargedPoints', label: '累计扣点', value: getDetailMetricValue(user, 'totalChargedPoints') },
+            { key: 'creditRecords', label: '奖励流水', value: getArrayCount(creditRecords) },
+          ]}
+        />
+        <div className="admin-strategy-list admin-record-list">
+          <div><span>账务流水</span><strong>{getArrayCount(billingLedger)} 条</strong></div>
+          <div><span>邀请奖励</span><strong>{getArrayCount(creditRecords)} 条</strong></div>
+          <div><span>邀请关系</span><strong>{getArrayCount(referrals)} 条</strong></div>
+          <div><span>分享记录</span><strong>{getArrayCount(shares)} 条</strong></div>
+        </div>
+      </section>
+
+      <section className="admin-detail-block">
+        <div className="admin-detail-title">
+          <span>生成与消耗</span>
+          <strong>{getArrayCount(tasks)} 条任务</strong>
+        </div>
+        <AdminDetailMetricList
+          items={[
+            { key: 'tasks', label: '任务数', value: getArrayCount(tasks) },
+            { key: 'totalChargedPoints', label: '累计扣点', value: getDetailMetricValue(user, 'totalChargedPoints') },
+            { key: 'billingLedger', label: '流水数', value: getArrayCount(billingLedger) },
+          ]}
+        />
+        {Array.isArray(tasks) && tasks.length ? (
+          <div className="admin-activity-list">
+            {tasks.slice(0, 3).map((task, index) => isRecord(task) ? (
+              <article key={`${String(getValueByPath(task, 'id') ?? 'task')}-${index}`} className="admin-activity-item">
+                <AdminRecordPreview record={task} />
+              </article>
+            ) : null)}
+          </div>
+        ) : (
+          <p className="admin-empty">当前没有关联任务列表。</p>
+        )}
+      </section>
+
+      <AdminRawData payload={props.detail} />
+    </div>
+  )
+}
+
 function getInspirationDetailRecord(detail: Record<string, unknown>) {
   const post = getValueByPath(detail, 'post')
   return isRecord(post) ? post : detail
@@ -1437,6 +1748,7 @@ function AdminInspirationDetailView(props: { detail: Record<string, unknown>; se
   const strengths = Array.isArray(aiReviewRecord?.strengths) ? aiReviewRecord.strengths : []
   const risks = Array.isArray(aiReviewRecord?.risks) ? aiReviewRecord.risks : []
   const imageUrl = typeof getValueByPath(post, 'imageUrl') === 'string' ? String(getValueByPath(post, 'imageUrl')) : ''
+  const postLabel = String(getValueByPath(post, 'title') || getValueByPath(post, 'id') || props.selectedId || '未命名帖子')
 
   return (
     <div className="admin-detail-stack">
@@ -1449,22 +1761,31 @@ function AdminInspirationDetailView(props: { detail: Record<string, unknown>; se
       <section className="admin-detail-block">
         <div className="admin-detail-title">
           <span>展示决策</span>
-          <strong>{props.selectedId || formatCellValue(getValueByPath(post, 'id'))}</strong>
+          <strong>{postLabel}</strong>
         </div>
+        <AdminDetailMetricList
+          items={[
+            { key: 'category', label: '分类', value: getValueByPath(post, 'category') },
+            { key: 'processingLabel', label: '处理方式', value: getValueByPath(post, 'processingLabel') },
+            { key: 'status', label: '展示状态', value: getValueByPath(post, 'status') },
+            { key: 'featured', label: '精选状态', value: getValueByPath(post, 'featured') },
+            { key: 'featuredRank', label: '精选位次', value: getValueByPath(post, 'featuredRank') },
+            { key: 'aiDecision', label: 'AI 结论', value: getValueByPath(post, 'aiDecision') },
+            { key: 'qualityScore', label: '质量分', value: getValueByPath(post, 'qualityScore') },
+            { key: 'riskScore', label: '风险分', value: getValueByPath(post, 'riskScore') },
+            { key: 'shareUrlPath', label: '公开链接', value: getValueByPath(post, 'shareUrlPath') },
+            { key: 'viewCount', label: '浏览量', value: getValueByPath(post, 'viewCount') },
+            { key: 'detailOpenCount', label: '详情打开', value: getValueByPath(post, 'detailOpenCount') },
+            { key: 'enterStudioClickCount', label: '进入工作台', value: getValueByPath(post, 'enterStudioClickCount') },
+          ]}
+        />
         <AdminBusinessFieldList
           record={post}
           fields={[
             { key: 'title', label: '标题' },
-            { key: 'category', label: '分类' },
-            { key: 'status', label: '状态' },
-            { key: 'featured', label: '精选' },
-            { key: 'featuredRank', label: '精选位次' },
-            { key: 'aiDecision', label: 'AI 结论' },
-            { key: 'qualityScore', label: '质量分' },
-            { key: 'riskScore', label: '风险分' },
-            { key: 'processingLabel', label: '处理方式' },
-            { key: 'publishedAt', label: '发布时间' },
+            { key: 'caption', label: '说明' },
           ]}
+          hideEmpty
         />
       </section>
 
@@ -1475,14 +1796,31 @@ function AdminInspirationDetailView(props: { detail: Record<string, unknown>; se
         <AdminBusinessFieldList
           record={post}
           fields={[
-            { key: 'caption', label: '说明' },
-            { key: 'authorNameSnapshot', label: '发布显示名' },
+            { key: 'authorNameSnapshot', label: '发布昵称快照' },
             { key: 'userLabel', label: '发布账号' },
+            { key: 'publishedAt', label: '发布时间' },
             { key: 'shareUrlPath', label: '公开链接' },
-            { key: 'viewCount', label: '浏览量' },
-            { key: 'detailOpenCount', label: '详情打开' },
-            { key: 'enterStudioClickCount', label: '进入工作台' },
           ]}
+          hideEmpty
+        />
+      </section>
+
+      <section className="admin-detail-block">
+        <div className="admin-detail-title">
+          <span>技术信息</span>
+          <strong>{props.selectedId || formatCellValue(getValueByPath(post, 'id'))}</strong>
+        </div>
+        <AdminBusinessFieldList
+          record={post}
+          fields={[
+            { key: 'outputId', label: '输出编号' },
+            { key: 'shareId', label: '分享编号' },
+            { key: 'width', label: '宽度' },
+            { key: 'height', label: '高度' },
+            { key: 'createdAt', label: '创建时间' },
+            { key: 'updatedAt', label: '更新时间' },
+          ]}
+          hideEmpty
         />
       </section>
 
@@ -1495,27 +1833,42 @@ function AdminInspirationDetailView(props: { detail: Record<string, unknown>; se
             record={aiReviewRecord}
             fields={[
               { key: 'decision', label: '决策' },
-              { key: 'reviewStatus', label: '审核状态' },
-              { key: 'reviewSummary', label: '审核摘要' },
+              { key: 'displayFit', label: '推荐展示位' },
+              { key: 'categorySuggestion', label: '分类建议' },
+              { key: 'internalNote', label: '内部备注' },
+              { key: 'reviewedAt', label: '审核时间' },
             ]}
+            hideEmpty
           />
           {strengths.length ? (
-            <div className="admin-activity-list">
-              {strengths.map((item, index) => (
-                <article key={`strength-${index}`} className="admin-activity-item">
-                  <strong>{String(item)}</strong>
-                </article>
-              ))}
-            </div>
+            <section className="admin-detail-block">
+              <div className="admin-detail-title">
+                <span>优点</span>
+                <strong>{strengths.length} 条</strong>
+              </div>
+              <div className="admin-activity-list">
+                {strengths.map((item, index) => (
+                  <article key={`strength-${index}`} className="admin-activity-item">
+                    <strong>{formatAdminValue(item)}</strong>
+                  </article>
+                ))}
+              </div>
+            </section>
           ) : null}
           {risks.length ? (
-            <div className="admin-activity-list">
-              {risks.map((item, index) => (
-                <article key={`risk-${index}`} className="admin-activity-item">
-                  <strong>{String(item)}</strong>
-                </article>
-              ))}
-            </div>
+            <section className="admin-detail-block">
+              <div className="admin-detail-title">
+                <span>风险提示</span>
+                <strong>{risks.length} 条</strong>
+              </div>
+              <div className="admin-activity-list">
+                {risks.map((item, index) => (
+                  <article key={`risk-${index}`} className="admin-activity-item">
+                    <strong>{formatAdminValue(item)}</strong>
+                  </article>
+                ))}
+              </div>
+            </section>
           ) : null}
         </section>
       ) : null}
@@ -1525,9 +1878,270 @@ function AdminInspirationDetailView(props: { detail: Record<string, unknown>; se
   )
 }
 
-function AdminDetailView(props: { detail: unknown; selectedId: string; detailLoading: boolean; contentSubsection?: ContentSubsectionKey }) {
+function AdminGatewayRouteDetailView(props: { detail: Record<string, unknown>; selectedId: string }) {
+  const route = getFirstDetailRecord(props.detail, ['route'])
+  const diagnostics = getValueByPath(props.detail, 'diagnostics')
+  const diagnosticsRecord = isRecord(diagnostics) ? diagnostics : null
+  const routeView = {
+    ...route,
+    cooldownActive: getValueByPath(diagnosticsRecord ?? {}, 'cooldownActive') ?? getValueByPath(route, 'cooldownActive'),
+    cooldownUntil: getValueByPath(diagnosticsRecord ?? {}, 'cooldownUntil') ?? getValueByPath(route, 'cooldownUntil'),
+    restoresAt: getValueByPath(diagnosticsRecord ?? {}, 'restoresAt') ?? getValueByPath(route, 'restoresAt') ?? getValueByPath(route, 'diagnostics.restoresAt'),
+    lastFailureKind: getValueByPath(diagnosticsRecord ?? {}, 'lastFailureKind') ?? getValueByPath(route, 'lastFailureKind'),
+  }
+  const routeLabel = props.selectedId || formatCellValue(getDetailMetricValue(route, 'name') ?? getValueByPath(route, 'id'))
+
+  return (
+    <div className="admin-detail-stack">
+      <section className="admin-detail-block">
+        <div className="admin-detail-title">
+          <span>线路状态</span>
+          <strong>{routeLabel}</strong>
+        </div>
+        <AdminDetailMetricList
+          items={[
+            { key: 'healthStatus', label: '健康状态', value: getDetailMetricValue(routeView, 'healthStatus') },
+            { key: 'isOfficial', label: '线路类型', value: getDetailMetricValue(routeView, 'isOfficial') },
+            { key: 'enabled', label: '启用状态', value: getDetailMetricValue(routeView, 'enabled') },
+            { key: 'cooldownActive', label: '失败冷却', value: getDetailMetricValue(routeView, 'cooldownActive') },
+            { key: 'restoresAt', label: '预计恢复', value: getDetailMetricValue(routeView, 'restoresAt') },
+          ]}
+        />
+        <AdminBusinessFieldList
+          record={routeView}
+          hideEmpty
+          fields={[
+            { key: 'name', label: '线路名称' },
+            { key: 'isOfficial', label: '线路类型' },
+            { key: 'healthStatus', label: '健康状态' },
+            { key: 'enabled', label: '启用状态' },
+            { key: 'cooldownActive', label: '失败冷却' },
+            { key: 'cooldownUntil', label: '冷却到' },
+            { key: 'restoresAt', label: '预计恢复' },
+            { key: 'lastFailureKind', label: '最近失败类型' },
+          ]}
+        />
+      </section>
+
+      <section className="admin-detail-block">
+        <div className="admin-detail-title">
+          <span>接入信息</span>
+          <strong>{formatAdminValue(getDetailMetricValue(route, 'apiKeyRef'))}</strong>
+        </div>
+        <AdminBusinessFieldList
+          record={route}
+          hideEmpty
+          fields={[
+            { key: 'name', label: '线路名称' },
+            { key: 'isOfficial', label: '线路类型' },
+            { key: 'apiKeyRef', label: '密钥环境变量' },
+            { key: 'baseUrl', label: '基础地址' },
+            { key: 'endpoint', label: '接口地址' },
+            { key: 'provider', label: '服务商' },
+            { key: 'notes', label: '备注' },
+          ]}
+        />
+      </section>
+
+      <section className="admin-detail-block">
+        <div className="admin-detail-title">
+          <span>健康与恢复信息</span>
+          <strong>{diagnosticsRecord ? '已返回诊断数据' : '暂无诊断数据'}</strong>
+        </div>
+        {diagnosticsRecord ? <AdminFieldGrid record={diagnosticsRecord} limit={12} /> : <p className="admin-empty">当前详情里没有额外诊断字段。</p>}
+      </section>
+
+      <AdminRawData payload={props.detail} />
+    </div>
+  )
+}
+
+function AdminGatewayBindingDetailView(props: { detail: Record<string, unknown>; selectedId: string }) {
+  const binding = getFirstDetailRecord(props.detail, ['binding'])
+  const route = getValueByPath(props.detail, 'route')
+  const routeRecord = isRecord(route) ? route : null
+  const model = getValueByPath(props.detail, 'modelSku') ?? getValueByPath(props.detail, 'model')
+  const modelRecord = isRecord(model) ? model : null
+  const bindingView = {
+    ...binding,
+    modelDisplayName: getValueByPath(modelRecord ?? {}, 'displayName') ?? getValueByPath(binding, 'modelDisplayName'),
+    routeName: getValueByPath(routeRecord ?? {}, 'name') ?? getValueByPath(binding, 'routeName'),
+    healthStatus: getValueByPath(routeRecord ?? {}, 'healthStatus') ?? getValueByPath(binding, 'healthStatus'),
+    restoresAt: getValueByPath(routeRecord ?? {}, 'restoresAt') ?? getValueByPath(binding, 'restoresAt') ?? getValueByPath(routeRecord ?? {}, 'diagnostics.restoresAt'),
+  }
+  const bindingLabel = props.selectedId || `${formatCellValue(getDetailMetricValue(bindingView, 'modelDisplayName'))} / ${formatCellValue(getDetailMetricValue(bindingView, 'routeName'))}`
+
+  return (
+    <div className="admin-detail-stack">
+      <section className="admin-detail-block">
+        <div className="admin-detail-title">
+          <span>模型与线路</span>
+          <strong>{bindingLabel}</strong>
+        </div>
+        <AdminDetailMetricList
+          items={[
+            { key: 'enabled', label: '启用', value: getDetailMetricValue(bindingView, 'enabled') },
+            { key: 'healthStatus', label: '线路健康', value: getDetailMetricValue(bindingView, 'healthStatus') },
+            { key: 'priority', label: '优先级', value: getDetailMetricValue(bindingView, 'priority') },
+            { key: 'weight', label: '分流比例', value: getDetailMetricValue(bindingView, 'weight') },
+          ]}
+        />
+        <AdminBusinessFieldList
+          record={bindingView}
+          hideEmpty
+          fields={[
+            { key: 'modelDisplayName', label: '模型' },
+            { key: 'routeName', label: '线路' },
+            { key: 'enabled', label: '启用' },
+            { key: 'healthStatus', label: '健康状态' },
+            { key: 'restoresAt', label: '预计恢复' },
+          ]}
+        />
+      </section>
+
+      <section className="admin-detail-block">
+        <div className="admin-detail-title">
+          <span>调度参数</span>
+          <strong>调度侧配置</strong>
+        </div>
+        <AdminBusinessFieldList
+          record={binding}
+          hideEmpty
+          fields={[
+            { key: 'priority', label: '线路顺序' },
+            { key: 'weight', label: '分流比例' },
+            { key: 'modelSkuId', label: '模型编号' },
+            { key: 'routeId', label: '线路编号' },
+            { key: 'createdAt', label: '创建时间' },
+            { key: 'updatedAt', label: '更新时间' },
+          ]}
+        />
+      </section>
+
+      {(modelRecord || routeRecord) ? (
+        <section className="admin-detail-block">
+          <div className="admin-detail-title">
+            <span>关联对象</span>
+            <strong>{modelRecord && routeRecord ? '模型 + 线路' : '单侧对象'}</strong>
+          </div>
+          <div className="admin-activity-list">
+            {modelRecord ? (
+              <article className="admin-activity-item">
+                <AdminRecordPreview record={modelRecord} />
+              </article>
+            ) : null}
+            {routeRecord ? (
+              <article className="admin-activity-item">
+                <AdminRecordPreview record={routeRecord} />
+              </article>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
+      <AdminRawData payload={props.detail} />
+    </div>
+  )
+}
+
+function AdminBillingLedgerDetailView(props: { detail: Record<string, unknown>; selectedId: string }) {
+  const entry = getFirstDetailRecord(props.detail, ['ledger', 'entry'])
+  const entryLabel = props.selectedId || formatCellValue(getDetailMetricValue(entry, 'id'))
+
+  return (
+    <div className="admin-detail-stack">
+      <section className="admin-detail-block">
+        <div className="admin-detail-title">
+          <span>流水摘要</span>
+          <strong>{entryLabel}</strong>
+        </div>
+        <AdminDetailMetricList
+          items={[
+            { key: 'amount', label: '点数', value: getDetailMetricValue(entry, 'amount') },
+            { key: 'type', label: '类型', value: getDetailMetricValue(entry, 'type') },
+            { key: 'createdAt', label: '时间', value: getDetailMetricValue(entry, 'createdAt') },
+          ]}
+        />
+        <AdminBusinessFieldList
+          record={entry}
+          hideEmpty
+          fields={[
+            { key: 'id', label: '流水编号' },
+            { key: 'type', label: '类型' },
+            { key: 'amount', label: '点数' },
+            { key: 'userLabel', label: '用户' },
+            { key: 'relatedId', label: '关联记录' },
+            { key: 'createdByAdminLabel', label: '管理员' },
+            { key: 'createdAt', label: '时间' },
+          ]}
+        />
+      </section>
+
+      <AdminRawData payload={props.detail} />
+    </div>
+  )
+}
+
+function AdminAuditLogDetailView(props: { detail: Record<string, unknown>; selectedId: string }) {
+  const log = getFirstDetailRecord(props.detail, ['auditLog', 'log'])
+  const before = getValueByPath(props.detail, 'before') ?? getValueByPath(log, 'before')
+  const after = getValueByPath(props.detail, 'after') ?? getValueByPath(log, 'after')
+
+  return (
+    <div className="admin-detail-stack">
+      <section className="admin-detail-block">
+        <div className="admin-detail-title">
+          <span>操作摘要</span>
+          <strong>{props.selectedId || formatCellValue(getDetailMetricValue(log, 'id'))}</strong>
+        </div>
+        <AdminDetailMetricList
+          items={[
+            { key: 'action', label: '动作', value: getDetailMetricValue(log, 'action') },
+            { key: 'targetType', label: '目标类型', value: getDetailMetricValue(log, 'targetType') },
+            { key: 'adminUserId', label: '管理员', value: getDetailMetricValue(log, 'adminUserId') },
+            { key: 'createdAt', label: '时间', value: getDetailMetricValue(log, 'createdAt') },
+          ]}
+        />
+        <AdminBusinessFieldList
+          record={log}
+          hideEmpty
+          fields={[
+            { key: 'action', label: '动作' },
+            { key: 'targetType', label: '目标类型' },
+            { key: 'targetId', label: '目标记录' },
+            { key: 'adminUserId', label: '管理员' },
+            { key: 'createdAt', label: '时间' },
+            { key: 'reason', label: '原因' },
+          ]}
+        />
+      </section>
+
+      {isRecord(before) ? (
+        <section className="admin-detail-block">
+          <div className="admin-detail-title">
+            <span>变更前</span>
+          </div>
+          <AdminFieldGrid record={before} limit={12} />
+        </section>
+      ) : null}
+
+      {isRecord(after) ? (
+        <section className="admin-detail-block">
+          <div className="admin-detail-title">
+            <span>变更后</span>
+          </div>
+          <AdminFieldGrid record={after} limit={12} />
+        </section>
+      ) : null}
+
+      <AdminRawData payload={props.detail} />
+    </div>
+  )
+}
+
+function AdminDetailView(props: { detail: unknown; selectedId: string; detailLoading: boolean; emptyText: string; section: AdminSectionKey; actionScope: string; contentSubsection?: ContentSubsectionKey }) {
   if (props.detailLoading) return <p className="admin-empty">正在加载详情...</p>
-  if (!props.detail) return <p className="admin-empty">从左侧列表选择一条记录查看业务详情。</p>
+  if (!props.detail) return <p className="admin-empty">{props.emptyText}</p>
   if (!isRecord(props.detail)) {
     return (
       <div className="admin-detail-stack">
@@ -1538,6 +2152,34 @@ function AdminDetailView(props: { detail: unknown; selectedId: string; detailLoa
   }
   if (props.contentSubsection) {
     return <AdminContentDetailView detail={props.detail} selectedId={props.selectedId} contentSubsection={props.contentSubsection} />
+  }
+
+  if (props.section === 'tasks') {
+    return <AdminTaskDetailView detail={props.detail} selectedId={props.selectedId} />
+  }
+
+  if (props.section === 'inspiration') {
+    return <AdminInspirationDetailView detail={props.detail} selectedId={props.selectedId} />
+  }
+
+  if (props.actionScope === 'users') {
+    return <AdminUserDetailView detail={props.detail} selectedId={props.selectedId} />
+  }
+
+  if (props.actionScope === 'routes') {
+    return <AdminGatewayRouteDetailView detail={props.detail} selectedId={props.selectedId} />
+  }
+
+  if (props.actionScope === 'bindings') {
+    return <AdminGatewayBindingDetailView detail={props.detail} selectedId={props.selectedId} />
+  }
+
+  if (props.actionScope === 'billingLedger') {
+    return <AdminBillingLedgerDetailView detail={props.detail} selectedId={props.selectedId} />
+  }
+
+  if (props.actionScope === 'auditLogs') {
+    return <AdminAuditLogDetailView detail={props.detail} selectedId={props.selectedId} />
   }
 
   const primary = pickPrimaryRecord(props.detail)
@@ -1642,6 +2284,176 @@ function getDefaultFiltersForScope(scope: string): Record<string, string> {
   return {}
 }
 
+function readAdminFilterMemory(): Record<string, Record<string, string>> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = window.localStorage.getItem(ADMIN_FILTER_MEMORY_STORAGE_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw)
+    if (!isRecord(parsed)) return {}
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .filter(([, value]) => isRecord(value))
+        .map(([key, value]) => {
+          const recordValue = value as Record<string, unknown>
+          return [key, Object.fromEntries(Object.entries(recordValue).map(([fieldKey, fieldValue]) => [fieldKey, String(fieldValue ?? '')]))]
+        }),
+    )
+  } catch {
+    return {}
+  }
+}
+
+function writeAdminFilterMemory(scope: string, filters: Record<string, string>) {
+  if (typeof window === 'undefined') return
+  try {
+    const memory = readAdminFilterMemory()
+    memory[scope] = filters
+    window.localStorage.setItem(ADMIN_FILTER_MEMORY_STORAGE_KEY, JSON.stringify(memory))
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function getRememberedFilters(scope: string) {
+  const memory = readAdminFilterMemory()
+  return memory[scope] ?? null
+}
+
+function readAdminRecentViews(): AdminRecentViewEntry[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(ADMIN_RECENT_VIEWS_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .filter((item): item is Record<string, unknown> => isRecord(item))
+      .map((item) => {
+        const section = String(item.section ?? '')
+        if (!section || section === 'dashboard') return null
+        return {
+          section: section as Exclude<AdminSectionKey, 'dashboard'>,
+          scope: String(item.scope ?? ''),
+          sectionLabel: String(item.sectionLabel ?? ''),
+          subsectionLabel: String(item.subsectionLabel ?? ''),
+          filters: isRecord(item.filters)
+            ? Object.fromEntries(Object.entries(item.filters).map(([key, value]) => [key, String(value ?? '')]))
+            : {},
+          updatedAt: String(item.updatedAt ?? ''),
+        }
+      })
+      .filter((item): item is AdminRecentViewEntry => Boolean(item?.scope))
+  } catch {
+    return []
+  }
+}
+
+function writeAdminRecentView(entry: AdminRecentViewEntry) {
+  if (typeof window === 'undefined') return
+  try {
+    const current = readAdminRecentViews()
+    const next = [
+      entry,
+      ...current.filter((item) => !(item.section === entry.section && item.scope === entry.scope)),
+    ].slice(0, 8)
+    window.localStorage.setItem(ADMIN_RECENT_VIEWS_STORAGE_KEY, JSON.stringify(next))
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function getRecentAdminViews(section: Exclude<AdminSectionKey, 'dashboard'>) {
+  return readAdminRecentViews().filter((item) => item.section === section)
+}
+
+function areAdminFiltersEqual(left: Record<string, string>, right: Record<string, string>) {
+  const leftEntries = Object.entries(left).filter(([, value]) => value)
+  const rightEntries = Object.entries(right).filter(([, value]) => value)
+  if (leftEntries.length !== rightEntries.length) return false
+  return leftEntries.every(([key, value]) => (right[key] ?? '') === value)
+}
+
+function formatAdminRecentViewSubtitle(entry: AdminRecentViewEntry) {
+  const filters = getActiveFilterEntries(entry.filters)
+  if (!filters.length) return '恢复默认列表范围'
+  return filters.slice(0, 2).map(([key, value]) => formatAdminFilterLabel(key, value)).join(' · ')
+}
+
+function getAdminQuickFilters(scope: string): AdminQuickFilter[] {
+  if (scope === 'users') {
+    return [
+      { label: '全部用户', values: {} },
+      { label: '仅停用', values: { status: 'disabled' } },
+      { label: '未验证邮箱', values: { emailVerified: 'false' } },
+      { label: '有充值', values: { hasRecharged: 'true' } },
+      { label: '有生成', values: { hasGenerated: 'true' } },
+    ]
+  }
+  if (scope === 'billingLedger') {
+    return [
+      { label: '全部流水', values: {} },
+      { label: '生图扣点', values: { type: 'image_generation_charge' } },
+      { label: '后台调整', values: { type: 'admin_adjustment' } },
+      { label: '充值兑换', values: { type: 'recharge_code_redeem' } },
+    ]
+  }
+  if (scope === 'routes') {
+    return [
+      { label: '全部线路', values: {} },
+      { label: '仅启用', values: { enabled: 'true' } },
+    ]
+  }
+  if (scope === 'modelSkus') {
+    return [
+      { label: '全部模型', values: {} },
+      { label: '仅启用', values: { enabled: 'true' } },
+      { label: '支持编辑', values: { supportsEdit: 'true' } },
+      { label: '支持蒙版', values: { supportsMask: 'true' } },
+    ]
+  }
+  if (scope === 'bindings') {
+    return [
+      { label: '全部绑定', values: {} },
+      { label: '按模型查', values: { modelSkuId: '' } },
+      { label: '按线路查', values: { routeId: '' } },
+    ]
+  }
+  if (scope === 'tasks') {
+    return [
+      { label: '全部任务', values: {} },
+      { label: '失败任务', values: { status: 'failed' } },
+      { label: '执行中', values: { status: 'running' } },
+      { label: '仅扣点', values: { chargedOnly: 'true' } },
+    ]
+  }
+  if (scope === 'inspiration') {
+    return [
+      { label: '全部帖子', values: {} },
+      { label: 'AI 推荐精选', values: { queue: 'featured_candidates' } },
+      { label: '待复核', values: { queue: 'needs_review' } },
+      { label: '自动隐藏', values: { queue: 'auto_hidden' } },
+      { label: '最新展示', values: { queue: 'latest' } },
+    ]
+  }
+  if (scope === 'templates') {
+    return [
+      { label: '全部模板', values: {} },
+      { label: '海报插画', values: { category: '海报插画' } },
+      { label: '人像摄影', values: { category: '人像摄影' } },
+      { label: '产品静物', values: { category: '产品静物' } },
+    ]
+  }
+  if (scope === 'candidates') {
+    return [
+      { label: '待审核', values: { status: 'pending' } },
+      { label: '已通过', values: { status: 'approved' } },
+      { label: '已拒绝', values: { status: 'rejected' } },
+    ]
+  }
+  return []
+}
+
 function getSelectedLabel(section: Exclude<AdminSectionKey, 'dashboard'>, selectedId: string, selectedLabel: string, actionScope: string) {
   if (!selectedId) {
     if (actionScope === 'redemptionAttempts') return '查看、筛选和打开详情即可追踪兑换记录。'
@@ -1720,11 +2532,134 @@ function getFilterTitle(config: AdminModuleConfig, section: Exclude<AdminSection
 }
 
 function getFilterHint(config: AdminModuleConfig, section: Exclude<AdminSectionKey, 'dashboard'>, filterCount: number) {
-  if (config.listKey === 'posts') return '按队列、状态、分类或发布来源查找广场帖子'
+  if (config.listKey === 'posts') return '按队列、状态、分类或发布来源快速定位广场作品'
   if (config.listKey === 'shares') return '按分享状态、用户、任务或时间查找记录'
   if (config.listKey === 'attempts') return '按充值码、用户、结果或时间查找兑换记录'
   if (section === 'rechargeCodes') return '按状态、批次或兑换用户查找兑换码'
   return filterCount ? `定位要处理的 ${config.title} 记录` : '调整每页数量后浏览记录'
+}
+
+function getActiveFilterEntries(filters: Record<string, string>) {
+  return Object.entries(filters).filter(([, value]) => value.trim())
+}
+
+function formatAdminFilterLabel(key: string, value: string) {
+  const labels: Record<string, string> = {
+    email: '邮箱',
+    status: '状态',
+    emailVerified: '邮箱验证',
+    hasRecharged: '有充值',
+    hasGenerated: '有生成',
+    user: '发布来源',
+    type: '类型',
+    relatedId: '关联记录',
+    createdByAdmin: '管理员',
+    dateFrom: '开始日期',
+    dateTo: '结束日期',
+    batchNo: '批次',
+    redeemedByUser: '兑换用户',
+    redeemedByUserLabel: '兑换用户',
+    result: '结果',
+    failureKind: '失败类型',
+    modelSku: '模型标识',
+    routeId: '线路标识',
+    healthStatus: '健康状态',
+    enabledOnly: '仅启用',
+    category: '分类',
+    title: '标题',
+    sourceType: '来源类型',
+    sourceUrl: '来源',
+    q: '关键词',
+    search: '搜索',
+    queue: '队列',
+    action: '动作',
+    targetType: '目标类型',
+    adminUserId: '管理员',
+    requiresAccessCode: '访问码',
+  }
+  return `${labels[key] ?? humanizeAdminKey(key)}：${value}`
+}
+
+function getSubsectionLabel(params: {
+  section: Exclude<AdminSectionKey, 'dashboard'>
+  userSubsection: UserSubsectionKey
+  rechargeSubsection: RechargeSubsectionKey
+  gatewaySubsection: GatewaySubsectionKey
+  contentSubsection: ContentSubsectionKey
+  growthSubsection: GrowthSubsectionKey
+}) {
+  if (params.section === 'users') return USER_SUBSECTIONS.find((item) => item.key === params.userSubsection)?.label ?? ''
+  if (params.section === 'rechargeCodes') return RECHARGE_SUBSECTIONS.find((item) => item.key === params.rechargeSubsection)?.label ?? ''
+  if (params.section === 'gateway') return GATEWAY_SUBSECTIONS.find((item) => item.key === params.gatewaySubsection)?.label ?? ''
+  if (params.section === 'content') return CONTENT_SUBSECTIONS.find((item) => item.key === params.contentSubsection)?.label ?? ''
+  if (params.section === 'growth') return GROWTH_SUBSECTIONS.find((item) => item.key === params.growthSubsection)?.label ?? ''
+  return ADMIN_SECTIONS.find((item) => item.key === params.section)?.label ?? ''
+}
+
+function getAdminSectionLabel(section: Exclude<AdminSectionKey, 'dashboard'>) {
+  return ADMIN_SECTIONS.find((item) => item.key === section)?.label ?? ''
+}
+
+function getAdminScopeEmptyText(params: { error: string; loading: boolean; hasFilters: boolean }) {
+  if (params.loading) return '正在加载列表，请稍候。'
+  if (params.error) return '列表加载失败，请先刷新当前列表；如仍失败，再检查筛选条件或接口状态。'
+  if (params.hasFilters) return '当前筛选下暂无记录，可清空筛选或切换快捷筛选后重试。'
+  return '当前列表暂无数据，可切换子模块或先创建第一条记录。'
+}
+
+function getAdminDetailEmptyText(params: { error: string; selectedId: string }) {
+  if (params.error && params.selectedId) return '详情加载失败，请重试或重新选择一条记录。'
+  if (params.selectedId) return '当前记录暂无可展示详情。'
+  return '从左侧列表选择一条记录查看业务详情。'
+}
+
+function getAdminSummaryFallback(params: { error: string; loading: boolean }) {
+  if (params.loading) return '模块摘要正在加载，请稍候。'
+  if (params.error) return '模块摘要暂时不可用，可先继续使用列表和详情区。'
+  return '当前模块暂无更多摘要。'
+}
+
+function getAdminModuleStatus(params: {
+  error: string
+  loading: boolean
+  detailLoading: boolean
+  hasRows: boolean
+  hasFilters: boolean
+  selectedId: string
+}) {
+  if (params.error) {
+    return {
+      tone: 'error' as const,
+      title: '当前请求失败',
+      detail: '建议先刷新当前列表；如果仍失败，再检查筛选条件、接口状态或数据库连接。',
+    }
+  }
+  if (params.loading) {
+    return {
+      tone: 'loading' as const,
+      title: '正在刷新当前列表',
+      detail: '后台正在拉取最新数据，当前筛选和分页会继续保留。',
+    }
+  }
+  if (params.detailLoading) {
+    return {
+      tone: 'loading' as const,
+      title: '正在加载右侧详情',
+      detail: '详情返回后会自动替换，无需重复点击。',
+    }
+  }
+  if (!params.hasRows) {
+    return {
+      tone: 'neutral' as const,
+      title: params.hasFilters ? '当前筛选下暂无结果' : '当前列表暂无数据',
+      detail: params.hasFilters ? '可以清空筛选、切换快捷筛选，或返回最近使用入口。' : '可以先创建数据，或切换到更常用的子模块继续处理。',
+    }
+  }
+  return {
+    tone: 'ready' as const,
+    title: params.selectedId ? '当前列表已可继续处理' : '当前列表已准备好',
+    detail: params.selectedId ? '左侧列表、右侧详情和批量勾选可以并行使用。' : '点击列表行查看详情；需要批量操作时先勾选记录。',
+  }
 }
 
 function getListTitle(config: AdminModuleConfig, section: Exclude<AdminSectionKey, 'dashboard'>) {
@@ -1743,6 +2678,119 @@ function getActionPanelTitle(actionScope: string) {
   if (actionScope === 'candidates') return '候选审核 / 发布'
   if (actionScope === 'importRuns') return '导入任务'
   return '主要操作'
+}
+
+function shouldShowActionPanelInWorkspace(actionScope: string) {
+  return ['strategy'].includes(actionScope)
+}
+
+function getAdminDataLayoutClassName(params: {
+  section: Exclude<AdminSectionKey, 'dashboard'>
+  actionScope: string
+  isContentModule: boolean
+}) {
+  const names = ['admin-data-layout']
+  if (params.isContentModule) names.push('admin-content-data-layout')
+  if (params.section === 'users' && params.actionScope === 'users') names.push('admin-user-workbench-layout')
+  if (params.section === 'rechargeCodes') names.push('admin-recharge-workbench-layout')
+  if (params.section === 'tasks') names.push('admin-task-workbench-layout')
+  if (params.section === 'gateway') names.push('admin-gateway-data-layout')
+  if (params.section === 'content') names.push('admin-content-workbench-layout')
+  if (params.section === 'inspiration') names.push('admin-audit-workbench-layout')
+  if (params.section === 'shares') names.push('admin-audit-workbench-layout')
+  return names.join(' ')
+}
+
+function shouldUseInlineWorkbench(params: {
+  section: Exclude<AdminSectionKey, 'dashboard'>
+  actionScope: string
+}) {
+  return (params.section === 'users' && params.actionScope === 'users') || params.section === 'tasks' || params.section === 'shares' || params.section === 'inspiration'
+}
+
+function AdminDetailQuickActions(props: {
+  title?: string
+  actions: Array<{ label: string; onClick: () => void }>
+}) {
+  if (!props.actions.length) return null
+  return (
+    <details className="admin-detail-actions-disclosure">
+      <summary>
+        <strong>{props.title || '关联操作'}</strong>
+        <span>{props.actions.length} 项</span>
+      </summary>
+      <div className="admin-detail-actions">
+        {props.actions.map((action) => (
+          <button key={action.label} type="button" onClick={action.onClick}>
+            {action.label}
+          </button>
+        ))}
+      </div>
+    </details>
+  )
+}
+
+function isReadOnlyActionScope(actionScope: string) {
+  return ['billingLedger', 'referrals', 'creditRecords', 'growth', 'shares', 'auditLogs', 'redemptionAttempts'].includes(actionScope)
+}
+
+function getBulkDeleteConfig(params: {
+  section: Exclude<AdminSectionKey, 'dashboard'>
+  contentSubsection: ContentSubsectionKey
+  gatewaySubsection: GatewaySubsectionKey
+  isOfficialTemplateView: boolean
+}) {
+  if (params.section === 'gateway' && params.gatewaySubsection === 'routes') {
+    return {
+      itemLabel: '线路',
+      hint: '将按当前勾选顺序逐条删除线路，并一并清理关联健康状态。',
+      confirmText: '批量删除线路',
+      actionName: '批量删除线路',
+      deleteOne: (id: string, token: string) => adminDelete(`/api/admin/gateway-routes/${encodeURIComponent(id)}`, token),
+    }
+  }
+
+  if (params.section === 'gateway' && params.gatewaySubsection === 'modelSkus') {
+    return {
+      itemLabel: '模型',
+      hint: '将按当前勾选顺序逐条删除模型；相关模型可用线路绑定会由后端约束一起处理。',
+      confirmText: '批量删除模型',
+      actionName: '批量删除模型',
+      deleteOne: (id: string, token: string) => adminDelete(`/api/admin/model-skus/${encodeURIComponent(id)}`, token),
+    }
+  }
+
+  if (params.section === 'gateway' && params.gatewaySubsection === 'bindings') {
+    return {
+      itemLabel: '线路绑定',
+      hint: '将按当前勾选顺序逐条删除模型和线路之间的可用绑定。',
+      confirmText: '批量删除绑定',
+      actionName: '批量删除绑定',
+      deleteOne: (id: string, token: string) => adminDelete(`/api/admin/model-route-bindings/${encodeURIComponent(id)}`, token),
+    }
+  }
+
+  if (params.section === 'content' && params.contentSubsection === 'templates') {
+    if (params.isOfficialTemplateView) {
+      return {
+        itemLabel: '官方模板',
+        hint: '将把勾选模板从后台官方模板列表隐藏，不会改动前台静态模板源码。',
+        confirmText: '批量删除官方模板',
+        actionName: '批量删除官方模板',
+        deleteOne: (id: string, token: string) => adminDelete(`/api/admin/content/official-templates/${encodeURIComponent(id)}`, token),
+      }
+    }
+
+    return {
+      itemLabel: '模板',
+      hint: '将按当前勾选顺序逐条删除已发布模板。',
+      confirmText: '批量删除模板',
+      actionName: '批量删除模板',
+      deleteOne: (id: string, token: string) => adminDelete(`/api/admin/content/templates/${encodeURIComponent(id)}`, token),
+    }
+  }
+
+  return null
 }
 
 function readOptionalText(value: string) {
@@ -2003,43 +3051,45 @@ function AdminDashboard(props: {
         <p>{props.loading ? '正在加载后台数据...' : props.error || '先从常用管理入口进入具体工作，指标和审计只做辅助观察。'}</p>
       </div>
 
-      <section className="admin-panel admin-home-actions">
-        <div className="admin-panel-head">
-          <h2>常用管理入口</h2>
-          <span>先选一件要处理的事</span>
-        </div>
-        <div className="admin-home-action-grid">
-          {ADMIN_HOME_ACTIONS.map((action) => (
-            <article key={action.key} className="admin-home-action-card">
-              <div>
-                <strong>{action.title}</strong>
-                <p>{action.description}</p>
-              </div>
-              <button type="button" onClick={() => props.onNavigate(action.key)}>
-                {action.label}
-              </button>
-            </article>
-          ))}
-        </div>
-      </section>
+      <div className="admin-dashboard-overview">
+        <section className="admin-panel admin-home-actions">
+          <div className="admin-panel-head">
+            <h2>常用管理入口</h2>
+            <span>先选一件要处理的事</span>
+          </div>
+          <div className="admin-home-action-grid">
+            {ADMIN_HOME_ACTIONS.map((action) => (
+              <article key={action.key} className="admin-home-action-card">
+                <div>
+                  <strong>{action.title}</strong>
+                  <p>{action.description}</p>
+                </div>
+                <button type="button" onClick={() => props.onNavigate(action.key)}>
+                  {action.label}
+                </button>
+              </article>
+            ))}
+          </div>
+        </section>
 
-      <section className="admin-panel admin-compact-metrics">
-        <div className="admin-panel-head">
-          <h2>运营摘要</h2>
-          <span>辅助判断</span>
-        </div>
-        <div className="admin-metric-grid">
-          {metrics.map(([label, value]) => (
-            <article key={label} className="admin-metric-card">
-              <span>{label}</span>
-              <strong>{formatMetricValue(value)}</strong>
-            </article>
-          ))}
-        </div>
-      </section>
+        <section className="admin-panel admin-compact-metrics">
+          <div className="admin-panel-head">
+            <h2>运营摘要</h2>
+            <span>今日概况</span>
+          </div>
+          <div className="admin-metric-grid">
+            {metrics.map(([label, value]) => (
+              <article key={label} className="admin-metric-card">
+                <span>{label}</span>
+                <strong>{formatMetricValue(value)}</strong>
+              </article>
+            ))}
+          </div>
+        </section>
+      </div>
 
       <div className="admin-dashboard-grid">
-        <section className="admin-panel">
+        <section className="admin-panel admin-dashboard-primary-panel">
           <div className="admin-panel-head">
             <h2>最近任务</h2>
             <span>{recentTasks.length} 条</span>
@@ -2060,7 +3110,7 @@ function AdminDashboard(props: {
             <p className="admin-empty">暂无生成任务。</p>
           )}
         </section>
-        <section className="admin-panel">
+        <section className="admin-panel admin-dashboard-secondary-panel">
           <div className="admin-panel-head">
             <h2>风险提醒</h2>
             <span>{riskReminders.length} 条</span>
@@ -2081,7 +3131,7 @@ function AdminDashboard(props: {
             <p className="admin-empty">暂无风险提醒。</p>
           )}
         </section>
-        <section className="admin-panel">
+        <section className="admin-panel admin-dashboard-secondary-panel">
           <div className="admin-panel-head">
             <h2>最近审计</h2>
             <span>{recentAuditLogs.length} 条</span>
@@ -2264,7 +3314,7 @@ function AdminActionPanel(props: {
           token={props.token}
         />
       ) : null}
-      {actionScope === 'billingLedger' || actionScope === 'referrals' || actionScope === 'creditRecords' || actionScope === 'growth' || actionScope === 'shares' || actionScope === 'auditLogs' || actionScope === 'redemptionAttempts' ? (
+      {isReadOnlyActionScope(actionScope) ? (
         <p className="admin-empty">当前模块后端以查看、筛选和详情追踪为主，没有额外写操作。</p>
       ) : null}
     </section>
@@ -2340,6 +3390,203 @@ function UserActions(props: {
   )
 }
 
+function InspirationPostActions(props: {
+  disabled: boolean
+  selectedId: string
+  selectedRecord: Record<string, unknown> | null
+  token: string
+  onRun: (actionName: string, action: () => Promise<void>) => Promise<void>
+}) {
+  const [category, setCategory] = useState(readRecordString(props.selectedRecord, 'category'))
+  const [title, setTitle] = useState(readRecordString(props.selectedRecord, 'title'))
+  const [caption, setCaption] = useState(readRecordString(props.selectedRecord, 'caption'))
+  const [secondaryRank, setSecondaryRank] = useState(readRecordString(props.selectedRecord, 'manualFeaturedRank') || '2')
+  const status = readRecordString(props.selectedRecord, 'status')
+  const featured = readRecordBoolean(props.selectedRecord, 'featured', false)
+  const displayFit = readRecordString(props.selectedRecord, 'displayFit')
+  const featuredRank = readRecordString(props.selectedRecord, 'featuredRank')
+  const manualFeaturedSlot = readRecordString(props.selectedRecord, 'manualFeaturedSlot')
+  const disabled = props.disabled || !props.selectedId
+
+  useEffect(() => {
+    setCategory(readRecordString(props.selectedRecord, 'category'))
+    setTitle(readRecordString(props.selectedRecord, 'title'))
+    setCaption(readRecordString(props.selectedRecord, 'caption'))
+    setSecondaryRank(readRecordString(props.selectedRecord, 'manualFeaturedRank') || '2')
+  }, [props.selectedId, props.selectedRecord])
+
+  return (
+    <div className="admin-action-grid">
+      <form
+        className="admin-action-form"
+        onSubmit={(event) => {
+          event.preventDefault()
+          void props.onRun('更新帖子信息', async () => {
+            await adminPatch(`/api/admin/inspiration-posts/${encodeURIComponent(props.selectedId)}`, props.token, {
+              category: category.trim(),
+              title: title.trim(),
+              caption: caption.trim(),
+            })
+          })
+        }}
+      >
+        <h3>公开信息修正</h3>
+        <label>
+          <span>分类</span>
+          <select value={category} onChange={(event) => setCategory(event.target.value)} disabled={disabled} required>
+            <option value="">选择分类</option>
+            {PROMPT_LIBRARY_CATEGORY_FILTER_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+          </select>
+        </label>
+        <label>
+          <span>标题</span>
+          <input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={80} disabled={disabled} />
+        </label>
+        <label>
+          <span>说明</span>
+          <textarea value={caption} onChange={(event) => setCaption(event.target.value)} maxLength={240} disabled={disabled} />
+        </label>
+        <button type="submit" disabled={disabled || !category.trim()}>保存修改</button>
+      </form>
+
+      <div className="admin-action-form">
+        <h3>AI 展示结果与人工覆盖</h3>
+        <p className="admin-form-hint">默认继续交给 AI 自动编排；只有首页门面需要干预时，才手动覆盖或恢复自动排序。</p>
+        <div className="admin-summary-grid">
+          <article className="admin-summary-card">
+            <span>精选状态</span>
+            <strong>{featured ? '已精选' : '未精选'}</strong>
+          </article>
+          <article className="admin-summary-card">
+            <span>自动展示位</span>
+            <strong>{displayFit ? formatAdminValue(displayFit) : '未计算'}</strong>
+          </article>
+          <article className="admin-summary-card">
+            <span>精选位次</span>
+            <strong>{featuredRank || '—'}</strong>
+          </article>
+          <article className="admin-summary-card">
+            <span>控制来源</span>
+            <strong>{manualFeaturedSlot ? `人工 ${manualFeaturedSlot === 'hero' ? '主视觉' : manualFeaturedSlot === 'secondary' ? '次级精选' : '排除精选'}` : 'AI 自动'}</strong>
+          </article>
+        </div>
+        <div className="admin-button-row">
+          <button
+            type="button"
+            disabled={disabled || status !== 'published'}
+            onClick={() => {
+              void props.onRun('设为主视觉', async () => {
+                await adminPost(`/api/admin/inspiration-posts/${encodeURIComponent(props.selectedId)}/feature`, props.token, { slot: 'hero' })
+              })
+            }}
+          >
+            设为主视觉
+          </button>
+          <div className="admin-inline-field">
+            <select value={secondaryRank} onChange={(event) => setSecondaryRank(event.target.value)} disabled={disabled || status !== 'published'}>
+              <option value="2">次级位 2</option>
+              <option value="3">次级位 3</option>
+              <option value="4">次级位 4</option>
+            </select>
+            <button
+              type="button"
+              disabled={disabled || status !== 'published'}
+              onClick={() => {
+                void props.onRun('设为次级精选', async () => {
+                  await adminPost(`/api/admin/inspiration-posts/${encodeURIComponent(props.selectedId)}/feature`, props.token, {
+                    slot: 'secondary',
+                    rank: Number(secondaryRank),
+                  })
+                })
+              }}
+            >
+              设为次级精选
+            </button>
+          </div>
+          <button
+            type="button"
+            disabled={disabled || status !== 'published'}
+            onClick={() => {
+              void props.onRun('移出精选池', async () => {
+                await adminPost(`/api/admin/inspiration-posts/${encodeURIComponent(props.selectedId)}/feature`, props.token, { slot: 'exclude' })
+              })
+            }}
+          >
+            移出精选池
+          </button>
+          <button
+            type="button"
+            disabled={disabled || !manualFeaturedSlot}
+            onClick={() => {
+              void props.onRun('恢复自动排序', async () => {
+                await adminDelete(`/api/admin/inspiration-posts/${encodeURIComponent(props.selectedId)}/feature`, props.token)
+              })
+            }}
+          >
+            恢复自动排序
+          </button>
+        </div>
+      </div>
+
+      <div className="admin-action-form">
+        <h3>可见性控制</h3>
+        <p className="admin-form-hint">隐藏后不会出现在广场前台；恢复公开会重新回到公开列表。</p>
+        <div className="admin-button-row">
+          <button
+            type="button"
+            disabled={disabled || status === 'hidden'}
+            onClick={() => {
+              void props.onRun('隐藏帖子', async () => {
+                await adminPatch(`/api/admin/inspiration-posts/${encodeURIComponent(props.selectedId)}`, props.token, { status: 'hidden' })
+              })
+            }}
+          >
+            隐藏
+          </button>
+          <button
+            type="button"
+            disabled={disabled || status === 'published'}
+            onClick={() => {
+              void props.onRun('恢复公开', async () => {
+                await adminPatch(`/api/admin/inspiration-posts/${encodeURIComponent(props.selectedId)}`, props.token, { status: 'published' })
+              })
+            }}
+          >
+            恢复公开
+          </button>
+          <button
+            type="button"
+            disabled={disabled || status === 'needs_review'}
+            onClick={() => {
+              void props.onRun('转待复核', async () => {
+                await adminPatch(`/api/admin/inspiration-posts/${encodeURIComponent(props.selectedId)}`, props.token, { status: 'needs_review' })
+              })
+            }}
+          >
+            转待复核
+          </button>
+        </div>
+      </div>
+
+      <div className="admin-action-form">
+        <h3>AI 初审</h3>
+        <p className="admin-form-hint">当标题、说明或分类被修正后，可以重新跑一次初审分流，系统会刷新 AI 结论、质量分和状态。</p>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => {
+            void props.onRun('重跑 AI 初审', async () => {
+              await adminPost(`/api/admin/inspiration-posts/${encodeURIComponent(props.selectedId)}/review-ai`, props.token)
+            })
+          }}
+        >
+          重跑 AI 初审
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function RechargeCodeActions(props: {
   disabled: boolean
   selectedId: string
@@ -2396,56 +3643,66 @@ function RechargeCodeActions(props: {
         <button type="submit" disabled={props.disabled}>生成新批次</button>
       </form>
 
-      <form
-        className="admin-action-form"
-        onSubmit={(event) => {
-          event.preventDefault()
-          void props.onRun('禁用充值码', async () => {
-            await adminPatch(`/api/admin/recharge-codes/${encodeURIComponent(props.selectedId)}`, props.token, {
-              status: 'disabled',
-              reason: disableReason.trim(),
-            })
-          })
-        }}
-      >
-        <h3>禁用选中的码</h3>
-        <p className="admin-empty">
-          {props.selectedId
-            ? selectedCanBeDisabled
-              ? `将禁用：${props.selectedLabel || props.selectedId}`
-              : '只有启用状态的充值码可以停用。'
-            : '先在左侧库存列表选择一条充值码。禁用后这条码不能再被用户兑换。'}
-        </p>
-        <label>
-          <span>禁用原因</span>
-          <textarea value={disableReason} onChange={(event) => setDisableReason(event.target.value)} required disabled={selectedDisabled} />
-        </label>
-        <button type="submit" disabled={selectedDisabled}>禁用充值码</button>
-      </form>
-
-      <form className="admin-action-form">
-        <h3>导出批次 TXT</h3>
-        <p className="admin-empty">按批次导出仍处于启用状态的完整兑换码，TXT 每行一个码，适合导入第三方店铺。</p>
-        <label>
-          <span>批次号</span>
-          <input value={exportBatchNo} onChange={(event) => setExportBatchNo(event.target.value)} placeholder="例如 RCB-20260609-001" disabled={props.disabled} />
-        </label>
-        <div className="admin-button-row">
-          <button
-            type="button"
-            disabled={props.disabled || !exportBatchNo.trim()}
-            onClick={() => {
-              void props.onRun('导出充值码 TXT', async () => {
-                const batchNo = exportBatchNo.trim()
-                const downloadedFilename = await downloadAdminFile(`/api/admin/recharge-codes/export?batchNo=${encodeURIComponent(batchNo)}`, props.token, `${batchNo}.txt`)
-                throw new AdminActionNotice(`导出已开始：${downloadedFilename}`)
+      <details className="admin-action-disclosure">
+        <summary>
+          <strong>禁用选中的码</strong>
+          <span>{props.selectedId ? selectedCanBeDisabled ? '可处理当前选中码' : '当前状态不可禁用' : '选择记录后处理'}</span>
+        </summary>
+        <form
+          className="admin-action-form"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void props.onRun('禁用充值码', async () => {
+              await adminPatch(`/api/admin/recharge-codes/${encodeURIComponent(props.selectedId)}`, props.token, {
+                status: 'disabled',
+                reason: disableReason.trim(),
               })
-            }}
-          >
-            导出 TXT
-          </button>
-        </div>
-      </form>
+            })
+          }}
+        >
+          <p className="admin-empty">
+            {props.selectedId
+              ? selectedCanBeDisabled
+                ? `将禁用：${props.selectedLabel || props.selectedId}`
+                : '只有启用状态的充值码可以停用。'
+              : '先在左侧库存列表选择一条充值码。禁用后这条码不能再被用户兑换。'}
+          </p>
+          <label>
+            <span>禁用原因</span>
+            <textarea value={disableReason} onChange={(event) => setDisableReason(event.target.value)} required disabled={selectedDisabled} />
+          </label>
+          <button type="submit" disabled={selectedDisabled}>禁用充值码</button>
+        </form>
+      </details>
+
+      <details className="admin-action-disclosure">
+        <summary>
+          <strong>导出批次 TXT</strong>
+          <span>{exportBatchNo.trim() ? exportBatchNo.trim() : '按批次导出启用兑换码'}</span>
+        </summary>
+        <form className="admin-action-form">
+          <p className="admin-empty">按批次导出仍处于启用状态的完整兑换码，TXT 每行一个码，适合导入第三方店铺。</p>
+          <label>
+            <span>批次号</span>
+            <input value={exportBatchNo} onChange={(event) => setExportBatchNo(event.target.value)} placeholder="例如 RCB-20260609-001" disabled={props.disabled} />
+          </label>
+          <div className="admin-button-row">
+            <button
+              type="button"
+              disabled={props.disabled || !exportBatchNo.trim()}
+              onClick={() => {
+                void props.onRun('导出充值码 TXT', async () => {
+                  const batchNo = exportBatchNo.trim()
+                  const downloadedFilename = await downloadAdminFile(`/api/admin/recharge-codes/export?batchNo=${encodeURIComponent(batchNo)}`, props.token, `${batchNo}.txt`)
+                  throw new AdminActionNotice(`导出已开始：${downloadedFilename}`)
+                })
+              }}
+            >
+              导出 TXT
+            </button>
+          </div>
+        </form>
+      </details>
     </div>
   )
 }
@@ -2499,182 +3756,6 @@ function TaskActions(props: {
           <div><span>错误摘要</span><strong>{errorSummary ? formatAdminValue(errorSummary) : '-'}</strong></div>
         </div>
       </section>
-    </div>
-  )
-}
-
-function InspirationPostActions(props: {
-  disabled: boolean
-  selectedId: string
-  selectedRecord: Record<string, unknown> | null
-  token: string
-  onRun: (actionName: string, action: () => Promise<void>) => Promise<void>
-}) {
-  const [category, setCategory] = useState(readRecordString(props.selectedRecord, 'category'))
-  const [title, setTitle] = useState(readRecordString(props.selectedRecord, 'title'))
-  const [caption, setCaption] = useState(readRecordString(props.selectedRecord, 'caption'))
-  const [secondaryRank, setSecondaryRank] = useState(readRecordString(props.selectedRecord, 'manualFeaturedRank') || '2')
-  const status = readRecordString(props.selectedRecord, 'status')
-  const disabled = props.disabled || !props.selectedId
-
-  useEffect(() => {
-    setCategory(readRecordString(props.selectedRecord, 'category'))
-    setTitle(readRecordString(props.selectedRecord, 'title'))
-    setCaption(readRecordString(props.selectedRecord, 'caption'))
-    setSecondaryRank(readRecordString(props.selectedRecord, 'manualFeaturedRank') || '2')
-  }, [props.selectedId, props.selectedRecord])
-
-  return (
-    <div className="admin-action-grid">
-      <form
-        className="admin-action-form"
-        onSubmit={(event) => {
-          event.preventDefault()
-          void props.onRun('更新帖子信息', async () => {
-            await adminPatch(`/api/admin/inspiration-posts/${encodeURIComponent(props.selectedId)}`, props.token, {
-              category: category.trim(),
-              title: title.trim(),
-              caption: caption.trim(),
-            })
-          })
-        }}
-      >
-        <h3>公开信息修正</h3>
-        <label>
-          <span>分类</span>
-          <select value={category} onChange={(event) => setCategory(event.target.value)} disabled={disabled} required>
-            <option value="">选择分类</option>
-            {PROMPT_LIBRARY_CATEGORY_FILTER_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-          </select>
-        </label>
-        <label>
-          <span>标题</span>
-          <input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={80} disabled={disabled} />
-        </label>
-        <label>
-          <span>说明</span>
-          <textarea value={caption} onChange={(event) => setCaption(event.target.value)} maxLength={240} disabled={disabled} />
-        </label>
-        <button type="submit" disabled={disabled || !category.trim()}>保存修改</button>
-      </form>
-
-      <div className="admin-action-form">
-        <h3>精选位与人工覆盖</h3>
-        <p className="admin-form-hint">只在首页展示位需要人工干预时才覆盖；否则保持 AI 自动排序。</p>
-        <label>
-          <span>次级精选位次</span>
-          <select value={secondaryRank} onChange={(event) => setSecondaryRank(event.target.value)} disabled={disabled || status !== 'published'}>
-            <option value="2">次级位 2</option>
-            <option value="3">次级位 3</option>
-            <option value="4">次级位 4</option>
-          </select>
-        </label>
-        <div className="admin-button-row">
-          <button
-            type="button"
-            disabled={disabled || status !== 'published'}
-            onClick={() => {
-              void props.onRun('设为主视觉', async () => {
-                await adminPost(`/api/admin/inspiration-posts/${encodeURIComponent(props.selectedId)}/feature`, props.token, { slot: 'hero' })
-              })
-            }}
-          >
-            设为主视觉
-          </button>
-          <button
-            type="button"
-            disabled={disabled || status !== 'published'}
-            onClick={() => {
-              void props.onRun('设为次级精选', async () => {
-                await adminPost(`/api/admin/inspiration-posts/${encodeURIComponent(props.selectedId)}/feature`, props.token, {
-                  slot: 'secondary',
-                  rank: Number(secondaryRank),
-                })
-              })
-            }}
-          >
-            设为次级精选
-          </button>
-          <button
-            type="button"
-            disabled={disabled || status !== 'published'}
-            onClick={() => {
-              void props.onRun('移出精选池', async () => {
-                await adminPost(`/api/admin/inspiration-posts/${encodeURIComponent(props.selectedId)}/feature`, props.token, { slot: 'exclude' })
-              })
-            }}
-          >
-            移出精选池
-          </button>
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => {
-              void props.onRun('恢复自动排序', async () => {
-                await adminDelete(`/api/admin/inspiration-posts/${encodeURIComponent(props.selectedId)}/feature`, props.token)
-              })
-            }}
-          >
-            恢复自动排序
-          </button>
-        </div>
-      </div>
-
-      <div className="admin-action-form">
-        <h3>可见性控制</h3>
-        <p className="admin-form-hint">隐藏后不会出现在广场前台；恢复公开会重新回到公开列表。</p>
-        <div className="admin-button-row">
-          <button
-            type="button"
-            disabled={disabled || status === 'hidden'}
-            onClick={() => {
-              void props.onRun('隐藏帖子', async () => {
-                await adminPatch(`/api/admin/inspiration-posts/${encodeURIComponent(props.selectedId)}`, props.token, { status: 'hidden' })
-              })
-            }}
-          >
-            隐藏
-          </button>
-          <button
-            type="button"
-            disabled={disabled || status === 'published'}
-            onClick={() => {
-              void props.onRun('恢复公开', async () => {
-                await adminPatch(`/api/admin/inspiration-posts/${encodeURIComponent(props.selectedId)}`, props.token, { status: 'published' })
-              })
-            }}
-          >
-            恢复公开
-          </button>
-          <button
-            type="button"
-            disabled={disabled || status === 'needs_review'}
-            onClick={() => {
-              void props.onRun('转待复核', async () => {
-                await adminPatch(`/api/admin/inspiration-posts/${encodeURIComponent(props.selectedId)}`, props.token, { status: 'needs_review' })
-              })
-            }}
-          >
-            转待复核
-          </button>
-        </div>
-      </div>
-
-      <div className="admin-action-form">
-        <h3>AI 初审</h3>
-        <p className="admin-form-hint">当标题、说明或分类被修正后，可以重新跑一次初审分流，刷新 AI 结论与审核状态。</p>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => {
-            void props.onRun('重跑 AI 初审', async () => {
-              await adminPost(`/api/admin/inspiration-posts/${encodeURIComponent(props.selectedId)}/review-ai`, props.token)
-            })
-          }}
-        >
-          重跑 AI 初审
-        </button>
-      </div>
     </div>
   )
 }
@@ -3695,6 +4776,78 @@ function DeleteRecordAction(props: {
   )
 }
 
+function BulkDeleteRecordsAction(props: {
+  disabled: boolean
+  selectedIds: string[]
+  itemLabel: string
+  hint: string
+  confirmText: string
+  actionName: string
+  onRun: (actionName: string, action: () => Promise<void>) => Promise<void>
+  onDelete: (selectedIds: string[]) => Promise<void>
+}) {
+  const [confirmText, setConfirmText] = useState('')
+  const disabled = props.disabled || !props.selectedIds.length || confirmText.trim() !== props.confirmText
+
+  return (
+    <form
+      className="admin-bulk-delete-bar"
+      onSubmit={(event) => {
+        event.preventDefault()
+        void props.onRun(props.actionName, async () => {
+          await props.onDelete(props.selectedIds)
+          setConfirmText('')
+        })
+      }}
+    >
+      <div className="admin-bulk-delete-copy">
+        <strong>{props.selectedIds.length ? `已勾选 ${props.selectedIds.length} 条${props.itemLabel}` : `先勾选要删除的${props.itemLabel}`}</strong>
+        <span>{props.selectedIds.length ? props.hint : '勾选后仍可点行查看详情，批量删除只处理已勾选记录。'}</span>
+      </div>
+      <label>
+        <span>确认文本</span>
+        <input value={confirmText} onChange={(event) => setConfirmText(event.target.value)} placeholder={props.confirmText} disabled={props.disabled || !props.selectedIds.length} />
+      </label>
+      <button type="submit" disabled={disabled}>{props.actionName}</button>
+    </form>
+  )
+}
+
+function BulkUpdateRecordsAction(props: {
+  disabled: boolean
+  selectedIds: string[]
+  itemLabel: string
+  actionName: string
+  hint: string
+  onRun: (actionName: string, action: () => Promise<void>) => Promise<void>
+  onUpdate: (selectedIds: string[]) => Promise<void>
+}) {
+  const disabled = props.disabled || !props.selectedIds.length
+  return (
+    <div className="admin-list-toolbar">
+      <div className="admin-list-toolbar-head">
+        <div>
+          <strong>{props.selectedIds.length ? `准备处理 ${props.selectedIds.length} 条${props.itemLabel}` : `先勾选要处理的${props.itemLabel}`}</strong>
+          <span>{props.selectedIds.length ? props.hint : '勾选后即可批量启用或停用。'}</span>
+        </div>
+      </div>
+      <div className="admin-list-toolbar-actions">
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => {
+            void props.onRun(props.actionName, async () => {
+              await props.onUpdate(props.selectedIds)
+            })
+          }}
+        >
+          {props.actionName}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function CandidateReviewActions(props: {
   disabled: boolean
   selectedId: string
@@ -3874,6 +5027,23 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
   const filterFields = ADMIN_FILTERS[filterScope] ?? []
   const isOfficialTemplateView = props.section === 'content' && contentSubsection === 'templates'
   const isContentModule = props.section === 'content'
+  const actionScope = props.section === 'content'
+    ? contentSubsection
+    : props.section === 'users'
+      ? userSubsection
+      : props.section === 'rechargeCodes'
+        ? rechargeSubsection
+        : props.section === 'gateway'
+          ? gatewaySubsection
+          : props.section
+  const showActionPanelInWorkspace = shouldShowActionPanelInWorkspace(actionScope)
+  const shouldRenderActionPanel = !isReadOnlyActionScope(actionScope)
+  const bulkDeleteConfig = getBulkDeleteConfig({
+    section: props.section,
+    contentSubsection,
+    gatewaySubsection,
+    isOfficialTemplateView,
+  })
   const [filters, setFilters] = useState<Record<string, string>>({})
   const [pageLimit, setPageLimit] = useState(25)
   const [pageOffset, setPageOffset] = useState(0)
@@ -3881,17 +5051,66 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
   const [listPayload, setListPayload] = useState<unknown>(null)
   const [detail, setDetail] = useState<unknown>(null)
   const [selectedId, setSelectedId] = useState('')
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [selectedLabel, setSelectedLabel] = useState('')
   const [selectedRecord, setSelectedRecord] = useState<Record<string, unknown> | null>(null)
   const [loading, setLoading] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
   const [error, setError] = useState('')
+  const [bulkSubmittingAction, setBulkSubmittingAction] = useState('')
+  const [bulkActionMessage, setBulkActionMessage] = useState('')
+  const [bulkActionTone, setBulkActionTone] = useState<'success' | 'error'>('success')
+  const [inlineWorkbenchMode, setInlineWorkbenchMode] = useState<'detail' | 'action'>('detail')
   const rows = useMemo(() => getListRows(listPayload, config.listKey), [config.listKey, listPayload])
+  const rowIds = useMemo(() => rows.map((row, index) => {
+    const rawId = getValueByPath(row, config.detailIdKey)
+    const id = typeof rawId === 'string' || typeof rawId === 'number' ? String(rawId) : ''
+    return id || `row-${index}`
+  }), [config.detailIdKey, rows])
   const pagination = useMemo(() => getPagination(listPayload), [listPayload])
+  const activeFilterEntries = useMemo(() => getActiveFilterEntries(filters), [filters])
+  const subsectionLabel = useMemo(() => getSubsectionLabel({
+    section: props.section,
+    userSubsection,
+    rechargeSubsection,
+    gatewaySubsection,
+    contentSubsection,
+    growthSubsection,
+  }), [contentSubsection, gatewaySubsection, growthSubsection, props.section, rechargeSubsection, userSubsection])
+  const selectableRowIds = useMemo(() => rowIds.filter((id) => !id.startsWith('row-')), [rowIds])
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds])
+  const selectedCount = selectedIds.length
+  const allSelectableRowsSelected = selectableRowIds.length > 0 && selectableRowIds.every((id) => selectedIdSet.has(id))
   const listPath = useMemo(() => buildPath(config.listPath, pageLimit, pageOffset, filters), [config.listPath, filters, pageLimit, pageOffset])
   const workflow = useMemo(() => getModuleWorkflow(config, props.section), [config, props.section])
-  const shareAuditSummaryCards = useMemo(() => props.section === 'shares' ? getShareAuditSummaryCards(summary) : [], [props.section, summary])
-  const inspirationSummaryCards = useMemo(() => props.section === 'inspiration' ? getInspirationSummaryCards(summary) : [], [props.section, summary])
+  const quickFilters = useMemo(() => getAdminQuickFilters(filterScope), [filterScope])
+  const recentViews = useMemo(() => getRecentAdminViews(props.section).filter((item) => !(item.scope === filterScope && areAdminFiltersEqual(item.filters, filters))).slice(0, 4), [filterScope, filters, props.section])
+  const primaryFilterKeys = ADMIN_PRIMARY_FILTER_KEYS[filterScope] ?? []
+  const splitFilterFields = primaryFilterKeys.length > 0
+  const primaryFilterFields = useMemo(() => (
+    splitFilterFields
+      ? filterFields.filter((field) => primaryFilterKeys.includes(field.key))
+      : filterFields
+  ), [filterFields, primaryFilterKeys, splitFilterFields])
+  const advancedFilterFields = useMemo(() => (
+    splitFilterFields
+      ? filterFields.filter((field) => !primaryFilterKeys.includes(field.key))
+      : []
+  ), [filterFields, primaryFilterKeys, splitFilterFields])
+  const advancedFilterCount = useMemo(() => (
+    advancedFilterFields.filter((field) => filters[field.key]?.trim()).length
+  ), [advancedFilterFields, filters])
+  const advancedFilterSummary = ADMIN_ADVANCED_FILTER_SUMMARY[filterScope] ?? '更多筛选条件'
+  const moduleStatus = useMemo(() => getAdminModuleStatus({
+    error,
+    loading,
+    detailLoading,
+    hasRows: rows.length > 0,
+    hasFilters: activeFilterEntries.length > 0,
+    selectedId,
+  }), [activeFilterEntries.length, detailLoading, error, loading, rows.length, selectedId])
+  const detailEmptyText = useMemo(() => getAdminDetailEmptyText({ error, selectedId }), [error, selectedId])
+  const summaryFallback = useMemo(() => getAdminSummaryFallback({ error, loading }), [error, loading])
 
   const loadDetail = useCallback(async (id: string) => {
     if (!id || !config.detailBasePath) return
@@ -3983,6 +5202,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
     setLoading(true)
     setError('')
     setSelectedId('')
+    setSelectedIds([])
     setSelectedLabel('')
     setSelectedRecord(null)
     setDetail(null)
@@ -4020,10 +5240,37 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
   }, [config.summaryPath, filters, isOfficialTemplateView, listPath, pageLimit, pageOffset, props.token])
 
   useEffect(() => {
-    setFilters(getDefaultFiltersForScope(filterScope))
+    const remembered = getRememberedFilters(filterScope)
+    setFilters(remembered ? { ...getDefaultFiltersForScope(filterScope), ...remembered } : getDefaultFiltersForScope(filterScope))
     setPageOffset(0)
     setPageLimit(25)
   }, [filterScope])
+
+  useEffect(() => {
+    writeAdminFilterMemory(filterScope, filters)
+  }, [filterScope, filters])
+
+  useEffect(() => {
+    setInlineWorkbenchMode('detail')
+  }, [filterScope])
+
+  useEffect(() => {
+    writeAdminRecentView({
+      section: props.section,
+      scope: filterScope,
+      sectionLabel: getAdminSectionLabel(props.section),
+      subsectionLabel,
+      filters,
+      updatedAt: new Date().toISOString(),
+    })
+  }, [filterScope, filters, props.section, subsectionLabel])
+
+  useEffect(() => {
+    setSelectedIds((current) => {
+      const next = current.filter((id) => rowIds.includes(id))
+      return next.length === current.length ? current : next
+    })
+  }, [rowIds])
 
   const openDetail = async (row: Record<string, unknown>) => {
     const rawId = getValueByPath(row, config.detailIdKey)
@@ -4056,11 +5303,39 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
     }
   }
 
+  const openLinkedList = (nextScope: string, nextFilters: Record<string, string>) => {
+    if (props.section === 'users') {
+      if (nextScope === 'billingLedger') setUserSubsection('billingLedger')
+      if (nextScope === 'referrals') setUserSubsection('referrals')
+      if (nextScope === 'creditRecords') setUserSubsection('creditRecords')
+    }
+    if (props.section === 'gateway') {
+      if (nextScope === 'routes') setGatewaySubsection('routes')
+      if (nextScope === 'bindings') setGatewaySubsection('bindings')
+      if (nextScope === 'modelSkus') setGatewaySubsection('modelSkus')
+    }
+    setSelectedId('')
+    setSelectedIds([])
+    setSelectedLabel('')
+    setSelectedRecord(null)
+    setDetail(null)
+    setPageOffset(0)
+    setFilters({ ...getDefaultFiltersForScope(nextScope), ...nextFilters })
+  }
+
+  const openLinkedUserLedger = () => openLinkedList('billingLedger', { user: selectedId })
+  const openLinkedUserReferrals = () => openLinkedList('referrals', { inviterUser: selectedId })
+  const openLinkedUserCredits = () => openLinkedList('creditRecords', { user: selectedId })
+  const openLinkedRouteBindings = () => openLinkedList('bindings', { routeId: selectedId })
+  const openLinkedModels = () => openLinkedList('modelSkus', { enabled: 'true' })
+  const openLinkedRoutes = () => openLinkedList('routes', { enabled: 'true' })
+
   const resetSubsectionState = () => {
     setFilters({})
     setPageOffset(0)
     setPageLimit(25)
     setSelectedId('')
+    setSelectedIds([])
     setSelectedLabel('')
     setSelectedRecord(null)
     setDetail(null)
@@ -4074,12 +5349,188 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
   }
 
   const handleActionComplete = async (actionName?: string) => {
-    if (actionName?.startsWith('删除')) {
+    if (actionName?.includes('删除')) {
       await loadModuleData()
       return
     }
     await loadModuleData({ keepSelectedId: selectedId })
   }
+
+  const runBulkAction = async (actionName: string, action: () => Promise<void>) => {
+    setBulkSubmittingAction(actionName)
+    setBulkActionMessage('')
+    setBulkActionTone('success')
+    try {
+      await action()
+      await handleActionComplete(actionName)
+      setSelectedIds([])
+      setBulkActionMessage(`${actionName}完成，已刷新列表。`)
+      setBulkActionTone('success')
+    } catch (requestError) {
+      setBulkActionMessage(getErrorMessage(requestError))
+      setBulkActionTone('error')
+    } finally {
+      setBulkSubmittingAction('')
+    }
+  }
+
+  const toggleRowSelection = useCallback((rowId: string, checked: boolean) => {
+    if (!rowId || rowId.startsWith('row-')) return
+    setSelectedIds((current) => checked ? Array.from(new Set([...current, rowId])) : current.filter((id) => id !== rowId))
+  }, [])
+
+  const toggleSelectAllRows = useCallback((checked: boolean) => {
+    setSelectedIds((current) => {
+      if (!checked) return current.filter((id) => !selectableRowIds.includes(id))
+      return Array.from(new Set([...current, ...selectableRowIds]))
+    })
+  }, [selectableRowIds])
+
+  const handleRefresh = async () => {
+    await loadModuleData({ keepSelectedId: selectedId })
+  }
+
+  const renderFilterField = (field: AdminFilterField) => (
+    <label key={field.key}>
+      <span>{field.label}</span>
+      {field.type === 'select' ? (
+        <select name={field.key} defaultValue={filters[field.key] ?? field.defaultValue ?? ''}>
+          {field.hideAllOption ? null : <option value="">全部</option>}
+          {field.options?.map((option) => <option key={option} value={option}>{getSelectOptionLabel(option)}</option>)}
+        </select>
+      ) : field.type === 'checkbox' ? (
+        <input name={field.key} type="checkbox" defaultChecked={filters[field.key] === 'true'} />
+      ) : (
+        <input name={field.key} type={field.type === 'date' ? 'date' : 'text'} placeholder={field.placeholder} defaultValue={filters[field.key] ?? ''} />
+      )}
+    </label>
+  )
+
+  const restoreRecentView = (entry: AdminRecentViewEntry) => {
+    writeAdminFilterMemory(entry.scope, entry.filters)
+    if (props.section === 'users' && USER_SUBSECTIONS.some((item) => item.key === entry.scope)) {
+      switchSubsection(userSubsection, entry.scope as UserSubsectionKey, setUserSubsection)
+    } else if (props.section === 'rechargeCodes' && RECHARGE_SUBSECTIONS.some((item) => item.key === entry.scope)) {
+      switchSubsection(rechargeSubsection, entry.scope as RechargeSubsectionKey, setRechargeSubsection)
+    } else if (props.section === 'gateway' && GATEWAY_SUBSECTIONS.some((item) => item.key === entry.scope)) {
+      switchSubsection(gatewaySubsection, entry.scope as GatewaySubsectionKey, setGatewaySubsection)
+    } else if (props.section === 'content' && CONTENT_SUBSECTIONS.some((item) => item.key === entry.scope)) {
+      switchSubsection(contentSubsection, entry.scope as ContentSubsectionKey, setContentSubsection)
+    } else if (props.section === 'growth' && GROWTH_SUBSECTIONS.some((item) => item.key === entry.scope)) {
+      switchSubsection(growthSubsection, entry.scope as GrowthSubsectionKey, setGrowthSubsection)
+    }
+
+    if (entry.scope === filterScope) {
+      setSelectedId('')
+      setSelectedIds([])
+      setSelectedLabel('')
+      setSelectedRecord(null)
+      setDetail(null)
+      setPageOffset(0)
+      setFilters({ ...getDefaultFiltersForScope(entry.scope), ...entry.filters })
+    }
+  }
+
+  const actionPanel = (
+    <AdminActionPanel
+      section={props.section}
+      contentSubsection={props.section === 'content' ? contentSubsection : undefined}
+      rechargeSubsection={props.section === 'rechargeCodes' ? rechargeSubsection : undefined}
+      userSubsection={props.section === 'users' ? userSubsection : undefined}
+      gatewaySubsection={props.section === 'gateway' ? gatewaySubsection : undefined}
+      token={props.token}
+      selectedId={selectedId}
+      selectedLabel={selectedLabel}
+      selectedRecord={selectedRecord}
+      onActionComplete={handleActionComplete}
+    />
+  )
+
+  const bulkStatusActions = actionScope === 'users' || actionScope === 'routes' || actionScope === 'modelSkus' || actionScope === 'bindings'
+  const useBottomDetailWorkbench = props.section === 'shares' || props.section === 'inspiration'
+  const useInlineWorkbench = shouldUseInlineWorkbench({ section: props.section, actionScope }) && !useBottomDetailWorkbench
+  const useCompactTopSummary = props.section === 'users' && actionScope === 'users'
+  const hasInlineActionPanel = useInlineWorkbench && shouldRenderActionPanel && !showActionPanelInWorkspace
+  const shareAuditSummaryCards = useMemo(() => useBottomDetailWorkbench ? getShareAuditSummaryCards(summary) : [], [summary, useBottomDetailWorkbench])
+  const inspirationSummaryCards = useMemo(() => props.section === 'inspiration' ? getInspirationSummaryCards(summary) : [], [props.section, summary])
+
+  const detailPanel = (
+    <section className={isContentModule ? 'admin-detail-panel admin-content-detail-panel' : `admin-panel admin-detail-panel${useInlineWorkbench ? ' admin-inline-detail-panel' : ''}`}>
+      <div className="admin-panel-head">
+        <h2>记录详情</h2>
+        <span>{detailLoading ? '加载中' : selectedLabel || selectedId || '未选择'}</span>
+      </div>
+      {props.section === 'users' && userSubsection === 'users' && selectedId ? (
+        <AdminDetailQuickActions
+          title="关联操作"
+          actions={[
+            { label: '用户流水', onClick: openLinkedUserLedger },
+            { label: '邀请关系', onClick: openLinkedUserReferrals },
+            { label: '奖励流水', onClick: openLinkedUserCredits },
+            { label: '基础详情', onClick: () => void loadDetail(selectedId) },
+          ]}
+        />
+      ) : null}
+      {props.section === 'gateway' && gatewaySubsection === 'routes' && selectedId ? (
+        <AdminDetailQuickActions
+          title="关联操作"
+          actions={[
+            { label: '查看线路绑定', onClick: openLinkedRouteBindings },
+            { label: '查看启用模型', onClick: openLinkedModels },
+            { label: '基础详情', onClick: () => void loadDetail(selectedId) },
+          ]}
+        />
+      ) : null}
+      {props.section === 'gateway' && gatewaySubsection === 'bindings' && selectedRecord ? (
+        <AdminDetailQuickActions
+          title="关联操作"
+          actions={[
+            { label: '查看模型列表', onClick: openLinkedModels },
+            { label: '查看线路列表', onClick: openLinkedRoutes },
+            { label: '基础详情', onClick: () => void loadDetail(selectedId) },
+          ]}
+        />
+      ) : null}
+      {props.section === 'inspiration' && selectedId ? (
+        <AdminDetailQuickActions
+          title="快捷操作"
+          actions={[
+            { label: '刷新帖子详情', onClick: () => void loadDetail(selectedId) },
+            { label: '查看最新展示', onClick: () => {
+              setPageOffset(0)
+              setFilters({ ...getDefaultFiltersForScope('inspiration'), queue: 'latest' })
+            } },
+            { label: '查看待复核', onClick: () => {
+              setPageOffset(0)
+              setFilters({ ...getDefaultFiltersForScope('inspiration'), queue: 'needs_review' })
+            } },
+          ]}
+        />
+      ) : null}
+      <AdminDetailView
+        detail={detail}
+        selectedId={selectedLabel || selectedId}
+        detailLoading={detailLoading}
+        emptyText={detailEmptyText}
+        section={props.section}
+        actionScope={actionScope}
+        contentSubsection={props.section === 'content' ? contentSubsection : undefined}
+      />
+    </section>
+  )
+
+  const summaryPanel = (
+    <details className="admin-panel admin-summary-panel">
+      <summary>
+        <strong>模块摘要</strong>
+        <span>{config.summaryPath ? '辅助数据，默认收起' : '当前模块暂无摘要'}</span>
+      </summary>
+      <AdminSummaryView
+        summary={summary}
+        fallback={summaryFallback}
+      />
+    </details>
+  )
 
   return (
     <section className="admin-section" aria-label={config.title}>
@@ -4091,14 +5542,32 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
         <p>{loading ? '正在加载数据...' : error || config.description}</p>
       </div>
 
-      <div className="admin-workflow-strip" aria-label="操作路径">
-        {workflow.map((item, index) => (
-          <div key={item} className={index === 0 ? 'is-primary' : ''}>
-            <span>{index + 1}</span>
-            <strong>{item}</strong>
-          </div>
-        ))}
-      </div>
+      <section className={`admin-view-summary${useCompactTopSummary ? ' admin-view-summary-compact' : ''}`} aria-label="当前视图状态">
+        <div className="admin-view-summary-grid">
+          <article className="admin-view-summary-card">
+            <span>当前视图</span>
+            <strong>{subsectionLabel || config.title}</strong>
+            {useCompactTopSummary ? null : <small>{config.title}</small>}
+          </article>
+          <article className="admin-view-summary-card">
+            <span>当前筛选</span>
+            <strong>{activeFilterEntries.length ? `${activeFilterEntries.length} 项已生效` : '未启用筛选'}</strong>
+            <small>{activeFilterEntries.length ? activeFilterEntries.map(([key, value]) => formatAdminFilterLabel(key, value)).join(' · ') : '正在显示默认列表范围'}</small>
+          </article>
+          <article className="admin-view-summary-card">
+            <span>当前选择</span>
+            <strong>{selectedLabel || selectedId || '未选择记录'}</strong>
+            <small>{selectedCount ? `已勾选 ${selectedCount} 条批量操作记录` : '当前没有批量勾选'}</small>
+          </article>
+        </div>
+        <div className={`admin-module-status is-${moduleStatus.tone}`} role={moduleStatus.tone === 'error' ? 'alert' : 'status'}>
+          <strong>{moduleStatus.title}</strong>
+          {useCompactTopSummary ? null : <span>{moduleStatus.detail}</span>}
+        </div>
+        <div className="admin-view-summary-actions">
+          <button type="button" onClick={() => void handleRefresh()} disabled={loading}>{loading ? '刷新中...' : '刷新当前列表'}</button>
+        </div>
+      </section>
 
       {props.section === 'inspiration' ? (
         <div className="admin-tabs" aria-label="灵感广场队列">
@@ -4112,10 +5581,10 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
             <button
               key={item.label}
               type="button"
-              className={(filters.queue || '') === (item.values.queue ?? '') ? 'is-active' : ''}
+              className={activeFilterEntries.some(([key, value]) => key === 'queue' && value === (item.values.queue ?? '')) ? 'is-active' : ''}
               onClick={() => {
-                setFilters({ ...item.values })
                 setPageOffset(0)
+                setFilters({ ...getDefaultFiltersForScope('inspiration'), ...item.values })
               }}
             >
               {item.label}
@@ -4123,6 +5592,49 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
           ))}
         </div>
       ) : null}
+
+      {recentViews.length ? (
+        <details className={`admin-recent-strip${useCompactTopSummary ? ' admin-inline-disclosure admin-recent-strip-compact' : ' admin-panel'}`} aria-label="最近使用入口">
+          <summary>
+            <strong>最近使用</strong>
+            <span>{useCompactTopSummary ? `${recentViews.length} 个可恢复入口` : `${recentViews.length} 个入口，可恢复筛选和子模块`}</span>
+          </summary>
+          <div className="admin-recent-grid">
+            {recentViews.map((item) => (
+              <button key={`${item.section}-${item.scope}`} type="button" className="admin-recent-card" onClick={() => restoreRecentView(item)}>
+                <strong>{item.subsectionLabel || item.sectionLabel}</strong>
+                <span>{formatAdminRecentViewSubtitle(item)}</span>
+              </button>
+            ))}
+          </div>
+        </details>
+      ) : null}
+
+      {useCompactTopSummary ? (
+        <details className="admin-inline-disclosure" aria-label="操作路径">
+          <summary>
+            <strong>操作路径</strong>
+            <span>{workflow[0] || '查看当前流程'}</span>
+          </summary>
+          <div className="admin-workflow-strip admin-workflow-strip-compact">
+            {workflow.map((item, index) => (
+              <div key={item} className={index === 0 ? 'is-primary' : ''}>
+                <span>{index + 1}</span>
+                <strong>{item}</strong>
+              </div>
+            ))}
+          </div>
+        </details>
+      ) : (
+        <div className="admin-workflow-strip" aria-label="操作路径">
+          {workflow.map((item, index) => (
+            <div key={item} className={index === 0 ? 'is-primary' : ''}>
+              <span>{index + 1}</span>
+              <strong>{item}</strong>
+            </div>
+          ))}
+        </div>
+      )}
 
       {props.section === 'users' ? (
         <div className="admin-tabs" aria-label="用户与余额子模块">
@@ -4199,8 +5711,9 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
         </div>
       ) : null}
 
-      <div className={isContentModule ? 'admin-data-layout admin-content-data-layout' : 'admin-data-layout'}>
+      <div className={getAdminDataLayoutClassName({ section: props.section, actionScope, isContentModule })}>
         <div className="admin-workspace-column">
+          {shouldRenderActionPanel && showActionPanelInWorkspace ? actionPanel : null}
           <form
             key={filterScope}
             className="admin-panel admin-filter-panel"
@@ -4214,22 +5727,30 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
               <h2>{getFilterTitle(config, props.section)}</h2>
               <span>{getFilterHint(config, props.section, filterFields.length)}</span>
             </div>
-            <div className="admin-filter-grid">
-              {filterFields.map((field) => (
-                <label key={field.key}>
-                  <span>{field.label}</span>
-                  {field.type === 'select' ? (
-                    <select name={field.key} defaultValue={filters[field.key] ?? field.defaultValue ?? ''}>
-                      {field.hideAllOption ? null : <option value="">全部</option>}
-                      {field.options?.map((option) => <option key={option} value={option}>{getSelectOptionLabel(option)}</option>)}
-                    </select>
-                  ) : field.type === 'checkbox' ? (
-                    <input name={field.key} type="checkbox" defaultChecked={filters[field.key] === 'true'} />
-                  ) : (
-                    <input name={field.key} type={field.type === 'date' ? 'date' : 'text'} placeholder={field.placeholder} defaultValue={filters[field.key] ?? ''} />
-                  )}
-                </label>
-              ))}
+            {quickFilters.length ? (
+              <div className="admin-filter-state" aria-label="快捷筛选">
+                {quickFilters.map((item) => (
+                  <button
+                    key={item.label}
+                    type="button"
+                    className="admin-link-button"
+                    onClick={() => {
+                      setFilters({ ...getDefaultFiltersForScope(filterScope), ...item.values })
+                      setPageOffset(0)
+                    }}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {activeFilterEntries.length ? (
+              <div className="admin-filter-state" aria-label="当前筛选条件">
+                {activeFilterEntries.map(([key, value]) => <span key={`${key}-${value}`}>{formatAdminFilterLabel(key, value)}</span>)}
+              </div>
+            ) : null}
+            <div className={`admin-filter-grid${splitFilterFields ? ' admin-filter-grid-primary' : ''}`}>
+              {primaryFilterFields.map(renderFilterField)}
               <label>
                 <span>每页</span>
                 <select value={pageLimit} onChange={(event) => {
@@ -4242,6 +5763,17 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
                 </select>
               </label>
             </div>
+            {advancedFilterFields.length ? (
+              <details className="admin-filter-advanced">
+                <summary>
+                  <strong>高级筛选</strong>
+                  <span>{advancedFilterCount ? `${advancedFilterCount} 项已生效` : advancedFilterSummary}</span>
+                </summary>
+                <div className="admin-filter-grid admin-filter-grid-secondary">
+                  {advancedFilterFields.map(renderFilterField)}
+                </div>
+              </details>
+            ) : null}
             <div className="admin-filter-actions">
               <button type="submit">应用筛选</button>
               <button
@@ -4257,7 +5789,46 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
             </div>
           </form>
 
-          {(props.section === 'shares' || props.section === 'inspiration') && (shareAuditSummaryCards.length || inspirationSummaryCards.length) ? (
+          {useInlineWorkbench ? (
+            <section className="admin-inline-workbench" aria-label="当前记录操作台">
+              <div className="admin-inline-workbench-toolbar">
+                <div className="admin-inline-workbench-selection">
+                  <strong>{selectedLabel || selectedId || '未选择记录'}</strong>
+                  <span>{selectedCount ? `已勾选 ${selectedCount} 条` : '点表格行查看详情或处理当前记录'}</span>
+                </div>
+                <div className="admin-inline-workbench-switch" role="tablist" aria-label="当前记录工作台视图">
+                  <button
+                    type="button"
+                    className={inlineWorkbenchMode === 'detail' ? 'is-active' : ''}
+                    onClick={() => setInlineWorkbenchMode('detail')}
+                  >
+                    详情
+                  </button>
+                  {hasInlineActionPanel ? (
+                    <button
+                      type="button"
+                      className={inlineWorkbenchMode === 'action' ? 'is-active' : ''}
+                      onClick={() => setInlineWorkbenchMode('action')}
+                    >
+                      操作
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              {inlineWorkbenchMode === 'detail' || !hasInlineActionPanel ? (
+                <div className="admin-inline-workbench-main">
+                  {detailPanel}
+                </div>
+              ) : null}
+              {hasInlineActionPanel && inlineWorkbenchMode === 'action' ? (
+                <div className="admin-inline-workbench-side">
+                  {actionPanel}
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+
+          {useBottomDetailWorkbench && (shareAuditSummaryCards.length || inspirationSummaryCards.length) ? (
             <section className="admin-panel admin-audit-overview-panel" aria-label={props.section === 'inspiration' ? '灵感广场概况' : '分享审计概况'}>
               <div className="admin-panel-head">
                 <h2>{props.section === 'inspiration' ? '运营概况' : '审计概况'}</h2>
@@ -4280,23 +5851,118 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
               <h2>{getListTitle(config, props.section)}</h2>
               <span>{pagination.total ? `${pagination.offset + 1}-${Math.min(pagination.offset + pagination.limit, pagination.total)} / ${pagination.total}` : `${rows.length} 条`}</span>
             </div>
-            <div className="admin-table-shell">
+            {bulkDeleteConfig ? (
+              <div className="admin-list-toolbar">
+                <div className="admin-list-toolbar-head">
+                  <div>
+                    <strong>{selectedCount ? `已勾选 ${selectedCount} 条` : `当前页 ${rows.length} 条`}</strong>
+                    <span>{selectedCount ? '批量删除只会处理勾选记录，单条编辑与详情选择互不影响。' : '勾选后可批量删除；点行仍然用于打开详情和编辑。'}</span>
+                  </div>
+                  <div className="admin-list-toolbar-actions">
+                    <button type="button" onClick={() => toggleSelectAllRows(true)} disabled={loading || !selectableRowIds.length || allSelectableRowsSelected}>全选本页</button>
+                    <button type="button" onClick={() => setSelectedIds([])} disabled={loading || !selectedCount}>清空勾选</button>
+                  </div>
+                </div>
+                <BulkDeleteRecordsAction
+                  disabled={loading || Boolean(bulkSubmittingAction)}
+                  selectedIds={selectedIds}
+                  itemLabel={bulkDeleteConfig.itemLabel}
+                  hint={bulkDeleteConfig.hint}
+                  confirmText={bulkDeleteConfig.confirmText}
+                  actionName={bulkSubmittingAction || bulkDeleteConfig.actionName}
+                  onRun={runBulkAction}
+                  onDelete={async (ids) => {
+                    for (const id of ids) {
+                      await bulkDeleteConfig.deleteOne(id, props.token)
+                    }
+                  }}
+                />
+                {bulkActionMessage ? <p className={bulkActionTone === 'success' ? 'admin-form-success' : 'admin-form-error'}>{bulkActionMessage}</p> : null}
+              </div>
+            ) : null}
+            {bulkStatusActions ? (
+              <div className="admin-button-row">
+                <button
+                  type="button"
+                  disabled={loading || Boolean(bulkSubmittingAction) || !selectedCount}
+                  onClick={() => {
+                    void runBulkAction('批量启用', async () => {
+                      for (const id of selectedIds) {
+                        if (actionScope === 'users') {
+                          await adminPatch(`/api/admin/users/${encodeURIComponent(id)}/status`, props.token, { status: 'active', reason: '批量启用' })
+                        } else if (actionScope === 'routes') {
+                          await adminPatch(`/api/admin/gateway-routes/${encodeURIComponent(id)}`, props.token, { enabled: true })
+                        } else if (actionScope === 'modelSkus') {
+                          await adminPatch(`/api/admin/model-skus/${encodeURIComponent(id)}`, props.token, { enabled: true })
+                        } else if (actionScope === 'bindings') {
+                          await adminPatch(`/api/admin/model-route-bindings/${encodeURIComponent(id)}`, props.token, { enabled: true })
+                        }
+                      }
+                    })
+                  }}
+                >
+                  批量启用
+                </button>
+                <button
+                  type="button"
+                  disabled={loading || Boolean(bulkSubmittingAction) || !selectedCount}
+                  onClick={() => {
+                    void runBulkAction('批量停用', async () => {
+                      for (const id of selectedIds) {
+                        if (actionScope === 'users') {
+                          await adminPatch(`/api/admin/users/${encodeURIComponent(id)}/status`, props.token, { status: 'disabled', reason: '批量停用' })
+                        } else if (actionScope === 'routes') {
+                          await adminPatch(`/api/admin/gateway-routes/${encodeURIComponent(id)}`, props.token, { enabled: false })
+                        } else if (actionScope === 'modelSkus') {
+                          await adminPatch(`/api/admin/model-skus/${encodeURIComponent(id)}`, props.token, { enabled: false })
+                        } else if (actionScope === 'bindings') {
+                          await adminPatch(`/api/admin/model-route-bindings/${encodeURIComponent(id)}`, props.token, { enabled: false })
+                        }
+                      }
+                    })
+                  }}
+                >
+                  批量停用
+                </button>
+              </div>
+            ) : null}
+            <div className={getTableShellClassName(props.section, actionScope)}>
               <table className="admin-table">
                 <thead>
                   <tr>
+                    {bulkDeleteConfig ? (
+                      <th data-field="select">
+                        <input
+                          type="checkbox"
+                          aria-label="全选本页"
+                          checked={allSelectableRowsSelected}
+                          onChange={(event) => toggleSelectAllRows(event.target.checked)}
+                        />
+                      </th>
+                    ) : null}
                     {config.columns.map((column) => <th key={column.key} data-field={column.key}>{column.label}</th>)}
                     {isContentModule ? null : <th data-field="detail">详情</th>}
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((row, index) => {
-                    const rowId = formatCellValue(getValueByPath(row, config.detailIdKey))
+                    const rowId = rowIds[index] ?? formatCellValue(getValueByPath(row, config.detailIdKey))
                     return (
                       <tr
                         key={`${rowId}-${index}`}
                         className={selectedId === rowId ? 'is-selected' : ''}
                         onClick={() => void openDetail(row)}
                       >
+                        {bulkDeleteConfig ? (
+                          <td data-field="select" onClick={(event) => event.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              aria-label={`勾选 ${getRecordReadableLabel(row, config) || rowId}`}
+                              checked={selectedIdSet.has(rowId)}
+                              onChange={(event) => toggleRowSelection(rowId, event.target.checked)}
+                            />
+                          </td>
+                        ) : null}
                           {config.columns.map((column) => (
                             <td key={column.key} data-field={column.key}>
                               <AdminTableCell row={row} column={column} />
@@ -4321,7 +5987,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
                   })}
                 </tbody>
               </table>
-              {!rows.length ? <p className="admin-empty">{loading ? '加载中...' : '暂无数据。'}</p> : null}
+              {!rows.length ? <p className="admin-empty">{getAdminScopeEmptyText({ error, loading, hasFilters: activeFilterEntries.length > 0 })}</p> : null}
             </div>
             <div className="admin-pagination">
               <button type="button" disabled={loading || pageOffset <= 0} onClick={() => setPageOffset(Math.max(0, pageOffset - pageLimit))}>上一页</button>
@@ -4329,82 +5995,28 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
               <button type="button" disabled={loading || pagination.offset + pagination.limit >= pagination.total} onClick={() => setPageOffset(pageOffset + pageLimit)}>下一页</button>
             </div>
           </section>
+
+          {useBottomDetailWorkbench ? (
+            <details className="admin-inline-disclosure admin-bottom-detail-disclosure" open={Boolean(selectedId)}>
+              <summary>
+                <strong>{selectedLabel || selectedId || '选中分享详情'}</strong>
+                <span>{selectedId ? '下方展示当前分享记录详情' : '先在上方列表选择一条记录'}</span>
+              </summary>
+              <div className="admin-bottom-detail-shell">
+                {shouldRenderActionPanel && selectedId ? actionPanel : null}
+                {detailPanel}
+              </div>
+            </details>
+          ) : null}
         </div>
 
-        <aside className="admin-side-column">
-          <AdminActionPanel
-            section={props.section}
-            contentSubsection={props.section === 'content' ? contentSubsection : undefined}
-            rechargeSubsection={props.section === 'rechargeCodes' ? rechargeSubsection : undefined}
-            userSubsection={props.section === 'users' ? userSubsection : undefined}
-            gatewaySubsection={props.section === 'gateway' ? gatewaySubsection : undefined}
-            token={props.token}
-            selectedId={selectedId}
-            selectedLabel={selectedLabel}
-            selectedRecord={selectedRecord}
-            onActionComplete={handleActionComplete}
-          />
-
-          <section className={isContentModule ? 'admin-detail-panel admin-content-detail-panel' : 'admin-panel admin-detail-panel'}>
-            <div className="admin-panel-head">
-              <h2>记录详情</h2>
-              <span>{detailLoading ? '加载中' : selectedLabel || selectedId || '未选择'}</span>
-            </div>
-            {props.section === 'users' && userSubsection === 'users' && selectedId ? (
-              <div className="admin-detail-actions">
-                <button type="button" onClick={() => void openRelatedDetail(`/api/admin/users/${encodeURIComponent(selectedId)}/ledger?limit=25&offset=0`)}>
-                  用户流水
-                </button>
-                <button type="button" onClick={() => void openRelatedDetail(`/api/admin/users/${encodeURIComponent(selectedId)}/referrals?limit=25&offset=0`)}>
-                  邀请关系
-                </button>
-                <button type="button" onClick={() => void loadDetail(selectedId)}>
-                  基础详情
-                </button>
-              </div>
-            ) : null}
-            {props.section === 'inspiration' && selectedId ? (
-              <div className="admin-detail-actions">
-                <button type="button" onClick={() => void loadDetail(selectedId)}>
-                  刷新帖子详情
-                </button>
-                <button type="button" onClick={() => {
-                  setFilters({ queue: 'latest' })
-                  setPageOffset(0)
-                }}>
-                  查看最新展示
-                </button>
-                <button type="button" onClick={() => {
-                  setFilters({ queue: 'needs_review' })
-                  setPageOffset(0)
-                }}>
-                  查看待复核
-                </button>
-              </div>
-            ) : null}
-            {props.section === 'inspiration' && isRecord(detail) ? (
-              <AdminInspirationDetailView detail={detail} selectedId={selectedLabel || selectedId} />
-            ) : (
-              <AdminDetailView
-                detail={detail}
-                selectedId={selectedLabel || selectedId}
-                detailLoading={detailLoading}
-                contentSubsection={props.section === 'content' ? contentSubsection : undefined}
-              />
-            )}
-          </section>
-
-          <section className="admin-panel admin-summary-panel">
-            <div className="admin-panel-head">
-              <h2>模块摘要</h2>
-              <span>{config.summaryPath ? '不作为主要操作入口' : '当前模块暂无摘要'}</span>
-            </div>
-            <AdminSummaryView
-              summary={summary}
-              fallback="当前模块暂无更多摘要。"
-            />
-          </section>
-        </aside>
+        {useInlineWorkbench || useBottomDetailWorkbench ? null : (
+          <aside className="admin-side-column">
+            {shouldRenderActionPanel && !showActionPanelInWorkspace ? actionPanel : null}
+            {detailPanel}
+            {summaryPanel}
+          </aside>
+        )}
       </div>
     </section>
   )
@@ -4413,7 +6025,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
 export default function AdminApp() {
   const [sessionToken, setSessionToken] = useState(() => localStorage.getItem(ADMIN_SESSION_STORAGE_KEY) || '')
   const [admin, setAdmin] = useState<AdminProfile | null>(null)
-  const [activeSection, setActiveSection] = useState<AdminSectionKey>('dashboard')
+  const [activeSection, setActiveSection] = useState<AdminSectionKey>(() => getStoredAdminSection())
   const [dashboard, setDashboard] = useState<AdminDashboardPayload | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -4458,7 +6070,13 @@ export default function AdminApp() {
     setAdmin(null)
     setDashboard(null)
     localStorage.removeItem(ADMIN_SESSION_STORAGE_KEY)
+    localStorage.removeItem(ADMIN_ACTIVE_SECTION_STORAGE_KEY)
     void logoutAdmin(token).catch(() => undefined)
+  }
+
+  const switchSection = (section: AdminSectionKey) => {
+    setActiveSection(section)
+    localStorage.setItem(ADMIN_ACTIVE_SECTION_STORAGE_KEY, section)
   }
 
   if (!sessionToken || !admin) {
@@ -4481,7 +6099,7 @@ export default function AdminApp() {
               key={section.key}
               type="button"
               className={activeSection === section.key ? 'is-active' : ''}
-              onClick={() => setActiveSection(section.key)}
+              onClick={() => switchSection(section.key)}
             >
               <span>{section.label}</span>
               <small>{section.meta}</small>
@@ -4496,7 +6114,7 @@ export default function AdminApp() {
           <strong>{admin.email}</strong>
         </header>
         {activeSection === 'dashboard' ? (
-          <AdminDashboard dashboard={dashboard} loading={loading} error={error} onNavigate={setActiveSection} />
+          <AdminDashboard dashboard={dashboard} loading={loading} error={error} onNavigate={switchSection} />
         ) : (
           <AdminDataModule section={activeSection} token={sessionToken} />
         )}
