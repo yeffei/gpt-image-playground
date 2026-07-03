@@ -49,3 +49,12 @@ docs/paid-creative-workbench-development-plan.md
 docs/phase-1-page-module-checklist.md
 docs/documentation-index.md
 docs/personal-image-studio-roadmap.md
+*.err.log
+*.out.log
+.env.local.bak-*
+server/.env.local.bak-*
+.tmp-tools-apply_patch.bat
+apply_patch_local.bat
+docs/archive/working-notes/
+src/lib/imageApiShared.js
+src/types.js
