@@ -1,12 +1,12 @@
 import { useEffect, useState, useRef, type ReactNode } from 'react'
 import type { TaskRecord } from '../types'
-import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, updateTaskInStore, retryTask, cancelServerTask } from '../store'
+import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, updateTaskInStore, retryTask, stopRunningTask } from '../store'
 import { formatImageRatio } from '../lib/size'
 import { getParamDisplay } from '../lib/paramDisplay'
 import { DEFAULT_IMAGES_MODEL, DEFAULT_FAL_MODEL } from '../lib/apiProfiles'
 import { getModelSku } from '../lib/modelSkus'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
-import { getFailureDisplay, SERVER_IMAGE_INTERRUPTED_MESSAGE, STOPPED_GENERATION_MESSAGE } from '../lib/taskResultDisplay'
+import { getFailureDisplay, getPublicTaskResultView, SERVER_IMAGE_INTERRUPTED_MESSAGE, STOPPED_GENERATION_MESSAGE } from '../lib/taskResultDisplay'
 import ViewportTooltip from './ViewportTooltip'
 
 interface Props {
@@ -106,6 +106,24 @@ function TaskActionButton({
       </ViewportTooltip>
     </span>
   )
+}
+
+export function getTaskCardResultSummary(task: TaskRecord) {
+  const publicResult = getPublicTaskResultView(task)
+  if (task.status === 'error') return null
+
+  const value = publicResult.chargeStatus === 'pending'
+    ? '扣点待确认'
+    : publicResult.chargeStatus === 'not_charged'
+    ? '未扣点'
+    : publicResult.chargeStatus === 'partial_charged'
+    ? `已扣 ${publicResult.chargedPoints} 点（按实际产出）`
+    : `已扣 ${publicResult.chargedPoints} 点`
+
+  return {
+    label: '扣点结果',
+    value,
+  }
 }
 
 export default function TaskCard({
@@ -372,12 +390,13 @@ export default function TaskCard({
   const showModel = displayModelName && displayModelName !== defaultModelForProvider
   const isInterrupted = task.status === 'error' && (task.error === STOPPED_GENERATION_MESSAGE || task.error === SERVER_IMAGE_INTERRUPTED_MESSAGE)
   const interruptedLabel = task.error === SERVER_IMAGE_INTERRUPTED_MESSAGE ? '已刷新' : '已停止'
-  const requestedOutputCount = Math.min(Math.max(Math.trunc(task.params.n || 1), 1), 4)
+  const publicResult = getPublicTaskResultView(task)
+  const requestedOutputCount = Math.min(Math.max(publicResult.requestedOutputCount, 1), 4)
   const compactModelName = modelSku?.label ?? (task.modelSku ? displayProfileName : showModel ? displayModelName : displayProfileName)
   const compactParamParts = [
     showQuality ? `质量 ${qualityDisplay.displayValue}` : null,
     task.status === 'done' || showFormat ? formatDisplay.displayValue : null,
-    !isAgentTask ? `${requestedOutputCount}张` : null,
+    !isAgentTask ? `${publicResult.outputCount}/${requestedOutputCount}张` : null,
     task.maskImageId ? '局部重绘' : null,
     compactModelName,
   ].filter(Boolean)
@@ -385,27 +404,18 @@ export default function TaskCard({
   const isFailedCard = task.status === 'error' && !isFalReconnecting
   const showFavoriteAction = !isFailedCard
   const failureDisplay = getFailureDisplay(task.error, isInterrupted, task.gatewayFailureKind)
+  const resultSummary = getTaskCardResultSummary(task)
   const outputPreviewIds = task.outputImages.slice(0, 4)
   const isMultiOutputTask = outputPreviewIds.length > 1
   const runningPreviewSlots = Array.from({ length: requestedOutputCount }, (_, index) => streamPreviewSlots[String(index)] || (index === 0 ? streamPreviewSrc : ''))
   const outputGridClass = outputPreviewIds.length === 2 ? 'is-two' : outputPreviewIds.length > 2 ? 'is-four' : 'is-one'
   const runningGridClass = requestedOutputCount === 2 ? 'is-two' : requestedOutputCount > 2 ? 'is-four' : 'is-one'
   const runningDisplay = getRunningDisplay(elapsedSeconds ?? 0, requestedOutputCount)
-  const stopRunningTask = () => {
-    const finishedAt = Date.now()
-    void cancelServerTask(task)
-    updateTaskInStore(task.id, {
-      status: 'error',
-      error: STOPPED_GENERATION_MESSAGE,
-      falRecoverable: false,
-      customRecoverable: false,
-      finishedAt,
-      elapsed: Math.max(0, finishedAt - task.createdAt),
-    })
-    showToast('已停止等待，可重新生成', 'info')
+  const handleStopRunningTask = () => {
+    void stopRunningTask(task)
   }
   const stopAndRetryTask = () => {
-    stopRunningTask()
+    handleStopRunningTask()
     retryTask(task)
   }
 
@@ -595,8 +605,8 @@ export default function TaskCard({
                 />
               </svg>
               <div className="task-failure-copy">
-                <strong>{failureDisplay.headline}</strong>
-                <span>{failureDisplay.summary}</span>
+                <strong>{publicResult.failureHeadline || failureDisplay.headline}</strong>
+                <span>{publicResult.failureSummary || failureDisplay.summary}</span>
               </div>
             </div>
           )}
@@ -732,6 +742,12 @@ export default function TaskCard({
               <div className="task-failure-note">
                 <strong>错误信息</strong>
                 <span>{failureDisplay.supportingDetail}</span>
+              </div>
+            )}
+            {resultSummary && (
+              <div className="task-failure-note">
+                <strong>{resultSummary.label}</strong>
+                <span>{resultSummary.value}</span>
               </div>
             )}
             <div className="prototype-result-footer">

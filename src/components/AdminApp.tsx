@@ -15,8 +15,20 @@ import {
   type AdminProfile,
 } from '../lib/adminApi'
 import { getInspirationSummaryCards } from '../lib/adminInspirationDisplay'
+import {
+  formatPreflightStatusLabel,
+  formatProbeAdmissionLabel,
+  getPreflightStatusTone,
+  getProbeAdmissionTone,
+} from '../lib/gatewayRouteAdmission'
 import { GPT_IMAGE_2_SUPPORTED_SIZES } from '../lib/modelSkus'
 import { PROMPT_LIBRARY_CATEGORIES, PROMPT_LIBRARY_TEMPLATES } from '../lib/promptLibrary'
+import type {
+  GatewayRoutePreflightResult,
+  GatewayRoutePreflightSummary,
+  GatewayRouteProbeBatchSummary,
+  GatewayRouteProbeResult,
+} from '../types'
 import { CopyIcon } from './icons'
 
 type AdminSectionKey =
@@ -357,11 +369,12 @@ const ADMIN_MODULES: Record<Exclude<AdminSectionKey, 'dashboard'>, AdminModuleCo
     detailBasePath: '/api/admin/gateway-routes',
     detailIdKey: 'id',
     title: '网关管理',
-    description: '管理中转站线路接入信息。每个模型能走哪些线路，在“模型可用线路”里设置。',
+    description: '管理生成线路接入信息。官方直连和常规中转都在这里维护，模型能走哪些线路在“模型可用线路”里设置。',
     columns: [
       { key: 'name', label: '线路名称' },
-      { key: 'enabled', label: '启用' },
+      { key: 'isOfficial', label: '线路类型' },
       { key: 'healthStatus', label: '健康状态' },
+      { key: 'enabled', label: '启用' },
       { key: 'diagnostics.restoresAt', label: '预计恢复' },
       { key: 'apiKeyRef', label: '密钥环境变量' },
     ],
@@ -692,6 +705,38 @@ function getErrorMessage(error: unknown) {
   return '后台请求失败，请稍后重试'
 }
 
+function summarizeProbeResult(probe: GatewayRouteProbeResult) {
+  const hasReal2k = probe.tests.some((test) => test.requestedSize === '2560x1440' && test.returnedImage && !test.shrunk)
+  const hasReal4k = probe.tests.some((test) => test.requestedSize === '3840x2160' && test.returnedImage && !test.shrunk)
+  if (hasReal4k) return '真实 2K / 4K'
+  if (hasReal2k) return '真实 2K，4K 不稳定'
+  const hasShrunk = probe.tests.some((test) => test.shrunk)
+  if (hasShrunk) return '存在缩水'
+  const allBroken = probe.tests.every((test) => !test.returnedImage)
+  if (allBroken) return '无有效图片返回'
+  return '需人工复核'
+}
+
+function formatProbeTestLine(test: GatewayRouteProbeResult['tests'][number]) {
+  const status = test.returnedImage
+    ? test.shrunk
+      ? '缩水'
+      : '正常'
+    : '失败'
+  const tier = test.requestedSize === '3840x2160' ? '4K' : test.requestedSize === '2560x1440' ? '2K' : '1K'
+  const actual = test.actualSize ?? '无图'
+  const http = test.statusCode == null ? 'HTTP -' : `HTTP ${test.statusCode}`
+  const extra = test.errorSummary ? ` · ${test.errorSummary}` : ''
+  return `${tier} ${test.requestedSize} -> ${actual} · ${status} · ${http} · ${test.latencyMs}ms${extra}`
+}
+
+function formatPreflightProbeLine(label: string, probe: GatewayRoutePreflightResult['baseProbe']) {
+  const status = probe.status == null ? 'HTTP -' : `HTTP ${probe.status}`
+  const result = probe.ok ? '正常' : '失败'
+  const extra = probe.error ? ` · ${probe.error}` : ''
+  return `${label} · ${result} · ${status} · ${probe.durationMs}ms${extra}`
+}
+
 function formatMetricValue(value: unknown) {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return Number.isInteger(value) ? String(value) : value.toFixed(2)
@@ -919,6 +964,7 @@ function humanizeAdminKey(key: string) {
     name: '名称',
     routeId: '线路标识',
     routeName: '线路名称',
+    isOfficial: '线路类型',
     provider: '接口类型',
     baseUrl: '接口地址',
     apiKeyRef: '密钥环境变量',
@@ -1140,6 +1186,10 @@ function getShareAuditSummaryCards(summary: unknown) {
 }
 
 function AdminValue(props: { fieldKey: string; value: unknown }) {
+  if (props.fieldKey === 'isOfficial') {
+    const isOfficial = props.value === true
+    return <span className={`admin-status-badge is-${isOfficial ? 'good' : 'neutral'}`}>{isOfficial ? '【官方】' : '常规'}</span>
+  }
   if (typeof props.value === 'string' && shouldMaskAdminField(props.fieldKey)) {
     return <span>{maskSecretValue(props.value)}</span>
   }
@@ -2642,6 +2692,67 @@ function GatewayActions(props: {
   const [showApiKeyRef, setShowApiKeyRef] = useState(false)
   const [notes, setNotes] = useState('')
   const [enabled, setEnabled] = useState(true)
+  const [isOfficial, setIsOfficial] = useState(false)
+  const [preflightSummary, setPreflightSummary] = useState<GatewayRoutePreflightSummary | null>(null)
+  const [preflightResults, setPreflightResults] = useState<GatewayRoutePreflightResult[]>([])
+  const [probeSummary, setProbeSummary] = useState<GatewayRouteProbeBatchSummary | null>(null)
+  const [probeResults, setProbeResults] = useState<GatewayRouteProbeResult[]>([])
+  const [admissionHint, setAdmissionHint] = useState('')
+  const selectedRouteName = readRecordString(props.selectedRecord, 'name') || props.selectedId
+
+  const runSelectedRoutePreflight = (label: string) => {
+    void props.onRun(label, async () => {
+      const payload = await adminPost<{ route: GatewayRoutePreflightResult }>(
+        `/api/admin/gateway-routes/${encodeURIComponent(props.selectedId)}/preflight`,
+        props.token,
+      )
+      setPreflightSummary(null)
+      setPreflightResults(payload.route ? [payload.route] : [])
+    })
+  }
+
+  const runBatchRoutePreflight = (label: string) => {
+    void props.onRun(label, async () => {
+      const payload = await adminPost<{
+        summary: GatewayRoutePreflightSummary
+        routes: GatewayRoutePreflightResult[]
+      }>('/api/admin/gateway-routes/preflight', props.token)
+      setPreflightSummary(payload.summary ?? null)
+      setPreflightResults(Array.isArray(payload.routes) ? payload.routes : [])
+    })
+  }
+
+  const runSelectedRouteProbe = (label: string, sizes?: string[]) => {
+    void props.onRun(label, async () => {
+      const payload = await adminPost<{ probe: GatewayRouteProbeResult }>(
+        `/api/admin/gateway-routes/${encodeURIComponent(props.selectedId)}/probe-high-res`,
+        props.token,
+        sizes ? { sizes } : undefined,
+      )
+      setProbeSummary(null)
+      setProbeResults(payload.probe ? [payload.probe] : [])
+    })
+  }
+
+  const runBatchRouteProbe = (label: string, sizes?: string[]) => {
+    void props.onRun(label, async () => {
+      const payload = await adminPost<{ summary: GatewayRouteProbeBatchSummary; probes: GatewayRouteProbeResult[] }>(
+        '/api/admin/gateway-routes/probe-high-res',
+        props.token,
+        sizes ? { sizes } : undefined,
+      )
+      setProbeSummary(payload.summary ?? null)
+      setProbeResults(Array.isArray(payload.probes) ? payload.probes : [])
+    })
+  }
+
+  useEffect(() => {
+    setAdmissionHint('')
+    setPreflightSummary(null)
+    setPreflightResults([])
+    setProbeSummary(null)
+    setProbeResults([])
+  }, [props.selectedId])
 
   useEffect(() => {
     if (!props.selectedId) {
@@ -2651,6 +2762,7 @@ function GatewayActions(props: {
       setShowApiKeyRef(false)
       setNotes('')
       setEnabled(true)
+      setIsOfficial(false)
       return
     }
     setName(readRecordString(props.selectedRecord, 'name'))
@@ -2659,6 +2771,7 @@ function GatewayActions(props: {
     setShowApiKeyRef(false)
     setNotes(readRecordString(props.selectedRecord, 'notes'))
     setEnabled(readRecordBoolean(props.selectedRecord, 'enabled', true))
+    setIsOfficial(readRecordBoolean(props.selectedRecord, 'isOfficial', false))
   }, [props.selectedId, props.selectedRecord])
 
   const buildRoutePayload = () => {
@@ -2669,12 +2782,14 @@ function GatewayActions(props: {
       apiKeyRef?: string
       notes?: string
       enabled: boolean
+      isOfficial: boolean
     } = {
       name: name.trim(),
       provider: 'openai-compatible',
       baseUrl: baseUrl.trim(),
       notes: readOptionalText(notes),
       enabled,
+      isOfficial,
     }
     const nextApiKeyRef = apiKeyRef.trim()
     if (!props.selectedId || nextApiKeyRef) {
@@ -2684,72 +2799,231 @@ function GatewayActions(props: {
   }
 
   return (
-    <div className="admin-action-grid">
-      <form
-        className="admin-action-form admin-action-form-wide"
-        onSubmit={(event) => {
-          event.preventDefault()
-          void props.onRun(props.selectedId ? '更新线路' : '创建线路', async () => {
-            const payload = buildRoutePayload()
-            if (props.selectedId) {
-              await adminPatch(`/api/admin/gateway-routes/${encodeURIComponent(props.selectedId)}`, props.token, payload)
-            } else {
-              await adminPost('/api/admin/gateway-routes', props.token, payload)
-            }
-          })
-        }}
-      >
-        <h3>{props.selectedId ? '更新选中线路' : '创建中转站线路'}</h3>
-        <div className="admin-form-row">
+    <div className="admin-action-grid admin-gateway-action-grid">
+      <div className="admin-gateway-action-column">
+        <form
+          className="admin-action-form admin-action-form-wide"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void props.onRun(props.selectedId ? '更新线路' : '创建线路', async () => {
+              const payload = buildRoutePayload()
+              if (props.selectedId) {
+                await adminPatch(`/api/admin/gateway-routes/${encodeURIComponent(props.selectedId)}`, props.token, payload)
+              } else {
+                await adminPost('/api/admin/gateway-routes', props.token, payload)
+                setAdmissionHint('线路已创建。请在左侧列表选中新线路，先做“检查选中连通性”；通过后再执行真实 2K / 4K 实测。')
+              }
+            })
+          }}
+        >
+          <h3>{props.selectedId ? '编辑选中线路' : '创建生成线路'}</h3>
+          <div className="admin-form-row">
+            <label>
+              <span>线路名称</span>
+              <input value={name} onChange={(event) => setName(event.target.value)} required={!props.selectedId} disabled={props.disabled} />
+            </label>
+          </div>
+          <p className="admin-form-hint">填写线路名称、接口地址和密钥环境变量名；官方 OpenAI Key 直连线路请勾选“官方线路”，方便后台和后续高清调度区分。</p>
           <label>
-            <span>线路名称</span>
-            <input value={name} onChange={(event) => setName(event.target.value)} required={!props.selectedId} disabled={props.disabled} />
+            <span>接口地址</span>
+            <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} required={!props.selectedId} disabled={props.disabled} />
           </label>
-        </div>
-        <p className="admin-form-hint">线路默认按 OpenAI 兼容接口调用，后台只需要填写中转站名称、接口地址和密钥环境变量名。</p>
-        <label>
-          <span>接口地址</span>
-          <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} required={!props.selectedId} disabled={props.disabled} />
-        </label>
-        <div className="admin-form-row">
+          <div className="admin-form-row">
+            <label>
+              <span>密钥环境变量名</span>
+              <input
+                value={apiKeyRef}
+                type={showApiKeyRef ? 'text' : 'password'}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder={props.selectedId ? '留空则保留当前密钥' : ''}
+                onChange={(event) => setApiKeyRef(event.target.value)}
+                required={!props.selectedId}
+                disabled={props.disabled}
+              />
+            </label>
+            <label className="admin-checkbox-row">
+              <input type="checkbox" checked={showApiKeyRef} onChange={(event) => setShowApiKeyRef(event.target.checked)} disabled={props.disabled} />
+              <span>显示密钥</span>
+            </label>
+          </div>
           <label>
-            <span>密钥环境变量名</span>
-            <input
-              value={apiKeyRef}
-              type={showApiKeyRef ? 'text' : 'password'}
-              autoComplete="off"
-              spellCheck={false}
-              placeholder={props.selectedId ? '留空则保留当前密钥' : ''}
-              onChange={(event) => setApiKeyRef(event.target.value)}
-              required={!props.selectedId}
-              disabled={props.disabled}
-            />
+            <span>备注</span>
+            <textarea value={notes} onChange={(event) => setNotes(event.target.value)} disabled={props.disabled} />
           </label>
-          <label className="admin-checkbox-row">
-            <input type="checkbox" checked={showApiKeyRef} onChange={(event) => setShowApiKeyRef(event.target.checked)} disabled={props.disabled} />
-            <span>显示密钥</span>
-          </label>
-        </div>
-        <label>
-          <span>备注</span>
-          <textarea value={notes} onChange={(event) => setNotes(event.target.value)} disabled={props.disabled} />
-        </label>
-        <label className="admin-checkbox-row">
-          <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} disabled={props.disabled} />
-          <span>启用线路</span>
-        </label>
-        <button type="submit" disabled={props.disabled}>{props.selectedId ? '更新线路' : '创建线路'}</button>
-      </form>
-      <DeleteRecordAction
-        disabled={props.disabled}
-        selectedId={props.selectedId}
-        label="删除选中线路"
-        hint="删除线路会同时删除它关联的模型可用线路和健康状态。"
-        confirmText="删除线路"
-        actionName="删除线路"
-        onRun={props.onRun}
-        onDelete={() => adminDelete(`/api/admin/gateway-routes/${encodeURIComponent(props.selectedId)}`, props.token)}
-      />
+          <div className="admin-checkbox-group">
+            <label className="admin-checkbox-row">
+              <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} disabled={props.disabled} />
+              <span>启用线路</span>
+            </label>
+            <label className="admin-checkbox-row">
+              <input type="checkbox" checked={isOfficial} onChange={(event) => setIsOfficial(event.target.checked)} disabled={props.disabled} />
+              <span>官方线路</span>
+            </label>
+          </div>
+          <button type="submit" disabled={props.disabled}>{props.selectedId ? '更新线路' : '创建线路'}</button>
+          {admissionHint ? <p className="admin-form-hint is-strong">{admissionHint}</p> : null}
+        </form>
+        <DeleteRecordAction
+          disabled={props.disabled}
+          selectedId={props.selectedId}
+          label="删除选中线路"
+          hint="删除线路会同时删除它关联的模型可用线路和健康状态。"
+          confirmText="删除线路"
+          actionName="删除线路"
+          onRun={props.onRun}
+          onDelete={() => adminDelete(`/api/admin/gateway-routes/${encodeURIComponent(props.selectedId)}`, props.token)}
+        />
+      </div>
+
+      <div className="admin-gateway-action-column admin-gateway-result-column">
+        <details className="admin-action-disclosure admin-gateway-probe-disclosure">
+          <summary>
+            <strong>新线路准入检查</strong>
+            <span>{preflightSummary ? `可烟测 ${preflightSummary.readyForSmokeCount} 条` : props.selectedId ? `当前选中：${selectedRouteName}` : '连通性检查'}</span>
+          </summary>
+          <section className="admin-action-form admin-action-form-wide">
+            <div className="admin-gateway-section-head">
+              <div>
+                <h3>新线路准入检查</h3>
+                <p className="admin-empty">先做非生图连通性检查，再决定是否值得跑真实 2K / 4K 实测。连通性检查只会访问 base URL 和 /models，不会消耗生图额度。</p>
+              </div>
+              {props.selectedId ? <span className="admin-gateway-selection-tag">当前选中：{selectedRouteName}</span> : null}
+            </div>
+            <div className="admin-admission-flow" aria-label="新线路准入流程">
+              <div><span>1</span><strong>创建线路</strong><small>填写名称、接口地址和密钥环境变量名。</small></div>
+              <div><span>2</span><strong>检查连通性</strong><small>结果为“可做真实烟测”后再继续。</small></div>
+              <div><span>3</span><strong>实测 2K / 4K</strong><small>真实出图后回写最高支持长边。</small></div>
+              <div><span>4</span><strong>绑定模型上线</strong><small>前台尺寸档位跟随后端聚合能力开放。</small></div>
+            </div>
+            <div className="admin-button-row">
+              <button
+                type="button"
+                disabled={props.disabled || !props.selectedId}
+                onClick={() => runSelectedRoutePreflight('检查选中线路连通性')}
+              >
+                检查选中连通性
+              </button>
+              <button
+                type="button"
+                disabled={props.disabled}
+                onClick={() => runBatchRoutePreflight('批量检查启用线路连通性')}
+              >
+                批量检查启用线路
+              </button>
+            </div>
+            {preflightSummary ? (
+              <div className="admin-strategy-list admin-record-list admin-probe-summary">
+                <div><span>启用线路</span><strong>{preflightSummary.totalRoutes}</strong></div>
+                <div><span>可做真实烟测</span><strong>{preflightSummary.readyForSmokeCount}</strong></div>
+                <div><span>鉴权失败</span><strong>{preflightSummary.authFailedCount}</strong></div>
+              </div>
+            ) : null}
+            {preflightResults.length ? (
+              <div className="admin-probe-result-list">
+                {preflightResults.map((route) => (
+                  <article key={route.id} className="admin-probe-result-card">
+                    <div className="admin-probe-result-head">
+                      <strong>{route.name || route.id}</strong>
+                      <span className={`admin-status-badge is-${getPreflightStatusTone(route)}`}>{formatPreflightStatusLabel(route)}</span>
+                    </div>
+                    <p>上游模型：{route.model || '-'} · 兼容策略：{route.compatibilityStrategy}</p>
+                    <ul>
+                      <li>{formatPreflightProbeLine('Base URL', route.baseProbe)}</li>
+                      <li>{formatPreflightProbeLine('/models', route.modelsProbe)}</li>
+                    </ul>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="admin-form-hint">还没有本次连通性结果。新增线路建议先跑一次，通过后再做真实 2K / 4K 实测。</p>
+            )}
+          </section>
+        </details>
+
+        <details className="admin-action-disclosure admin-gateway-probe-disclosure">
+          <summary>
+            <strong>2K / 4K 线路实测</strong>
+            <span>{probeSummary ? `2K ${probeSummary.available2kRouteCount} 条 · 4K ${probeSummary.available4kRouteCount} 条` : '真实请求上游，按需执行'}</span>
+          </summary>
+          <section className="admin-action-form admin-action-form-wide">
+            <h3>2K / 4K 线路实测</h3>
+            <p className="admin-empty">可单独测试 2K 或 4K，也可跑完整三档 1024x1024、2560x1440、3840x2160，并读取返回图片真实像素。</p>
+            <div className="admin-button-row">
+              <button
+                type="button"
+                disabled={props.disabled || !props.selectedId}
+                onClick={() => runSelectedRouteProbe('测试选中线路 2K', ['2560x1440'])}
+              >
+                只测选中 2K
+              </button>
+              <button
+                type="button"
+                disabled={props.disabled || !props.selectedId}
+                onClick={() => runSelectedRouteProbe('测试选中线路 4K', ['3840x2160'])}
+              >
+                只测选中 4K
+              </button>
+              <button
+                type="button"
+                disabled={props.disabled || !props.selectedId}
+                onClick={() => runSelectedRouteProbe('完整测试选中线路 1K / 2K / 4K')}
+              >
+                完整测试选中
+              </button>
+              <button
+                type="button"
+                disabled={props.disabled}
+                onClick={() => runBatchRouteProbe('批量筛选全部启用线路 2K', ['2560x1440'])}
+              >
+                批量只测 2K
+              </button>
+              <button
+                type="button"
+                disabled={props.disabled}
+                onClick={() => runBatchRouteProbe('批量筛选全部启用线路 4K', ['3840x2160'])}
+              >
+                批量只测 4K
+              </button>
+              <button
+                type="button"
+                disabled={props.disabled}
+                onClick={() => runBatchRouteProbe('批量完整筛选全部启用线路 1K / 2K / 4K')}
+              >
+                批量完整测试
+              </button>
+            </div>
+            {probeSummary ? (
+              <div className="admin-strategy-list admin-record-list admin-probe-summary admin-probe-summary-wide">
+                <div><span>启用线路</span><strong>{probeSummary.totalRoutes}</strong></div>
+                <div><span>真实 2K</span><strong>{probeSummary.available2kRouteCount}</strong></div>
+                <div><span>真实 4K</span><strong>{probeSummary.available4kRouteCount}</strong></div>
+                <div><span>无有效图片</span><strong>{probeSummary.brokenRouteCount}</strong></div>
+              </div>
+            ) : null}
+            {probeResults.length ? (
+              <div className="admin-probe-result-list">
+                {probeResults.map((probe) => (
+                  <article key={probe.routeId} className="admin-probe-result-card">
+                    <div className="admin-probe-result-head">
+                      <strong>{probe.routeName || probe.routeId}</strong>
+                      <span className={`admin-status-badge is-${getProbeAdmissionTone(probe)}`}>{formatProbeAdmissionLabel(probe)}</span>
+                    </div>
+                    <p>上游模型：{probe.upstreamModel || '-'} · 结果摘要：{summarizeProbeResult(probe)}</p>
+                    <ul>
+                      {probe.tests.map((test) => (
+                        <li key={`${probe.routeId}-${test.requestedSize}`}>{formatProbeTestLine(test)}</li>
+                      ))}
+                    </ul>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="admin-form-hint">还没有本次探测结果。测试会真实请求上游并可能消耗额度，请只在需要筛线时执行。</p>
+            )}
+          </section>
+        </details>
+      </div>
     </div>
   )
 }

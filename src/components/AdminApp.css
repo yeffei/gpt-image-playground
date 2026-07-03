@@ -1151,6 +1151,22 @@
   gap: 10px;
 }
 
+.admin-gateway-action-grid {
+  grid-template-columns: minmax(320px, 0.92fr) minmax(0, 1.28fr);
+  gap: 14px;
+}
+
+.admin-gateway-action-column {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.admin-gateway-result-column {
+  gap: 14px;
+}
+
 .admin-action-form {
   display: grid;
   align-content: start;
@@ -1159,6 +1175,64 @@
   border-radius: 8px;
   background: #fff;
   padding: 12px;
+}
+
+.admin-action-disclosure {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: #fbfdff;
+  padding: 9px 10px;
+}
+
+.admin-action-disclosure > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.admin-action-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.admin-action-disclosure > summary::after {
+  content: '+';
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid #d6deea;
+  border-radius: 999px;
+  background: #fff;
+  color: #64748b;
+  font-weight: 820;
+}
+
+.admin-action-disclosure[open] > summary::after {
+  content: '-';
+}
+
+.admin-action-disclosure > summary strong {
+  color: #1f2d44;
+  font-size: 13px;
+}
+
+.admin-action-disclosure > summary span {
+  margin-left: auto;
+  color: #6b7c93;
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: right;
+}
+
+.admin-action-disclosure .admin-action-form {
+  border: 0;
+  background: transparent;
+  padding: 0;
 }
 
 .admin-action-form-wide {
@@ -1181,6 +1255,77 @@
   color: #73839b;
   font-size: 12px;
   line-height: 1.55;
+}
+
+.admin-form-hint.is-strong {
+  border: 1px solid #c7eee9;
+  border-radius: 8px;
+  background: #f0fdfa;
+  padding: 8px 10px;
+  color: #0f766e;
+  font-weight: 700;
+}
+
+.admin-admission-flow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-gateway-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-gateway-selection-tag {
+  flex: 0 0 auto;
+  max-width: 240px;
+  overflow: hidden;
+  border: 1px solid #cfe6f8;
+  border-radius: 999px;
+  background: #f4faff;
+  padding: 6px 10px;
+  color: #0f4f7a;
+  font-size: 12px;
+  font-weight: 760;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-admission-flow > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  border: 1px solid #e6edf5;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 10px;
+}
+
+.admin-admission-flow span {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: #0f766e;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.admin-admission-flow strong {
+  color: #1f2d44;
+  font-size: 13px;
+}
+
+.admin-admission-flow small {
+  color: #73839b;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .admin-field-hint {
@@ -1308,6 +1453,57 @@
 
 .admin-record-list strong {
   overflow-wrap: anywhere;
+}
+
+.admin-probe-summary {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.admin-probe-summary-wide {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.admin-probe-result-list {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-probe-result-card {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: #fbfdff;
+  padding: 12px;
+}
+
+.admin-probe-result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.admin-probe-result-head strong {
+  color: #1f2d44;
+  font-size: 13px;
+}
+
+.admin-probe-result-head span,
+.admin-probe-result-card p {
+  margin: 0;
+  color: #66758d;
+  font-size: 12px;
+}
+
+.admin-probe-result-card ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: #1f2d44;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .admin-action-form button:disabled,
@@ -1531,6 +1727,19 @@
     grid-template-columns: 1fr;
   }
 
+  .admin-gateway-action-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-gateway-section-head {
+    display: grid;
+  }
+
+  .admin-gateway-selection-tag {
+    max-width: none;
+    white-space: normal;
+  }
+
   .admin-action-form-wide {
     grid-column: auto;
   }
@@ -1585,6 +1794,18 @@
   }
 
   .admin-form-row {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-probe-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-probe-summary-wide {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-admission-flow {
     grid-template-columns: 1fr;
   }
 

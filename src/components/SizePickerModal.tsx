@@ -6,6 +6,11 @@ import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import ViewportTooltip from './ViewportTooltip'
 
 const TIERS: SizeTier[] = ['1K', '2K', '4K']
+const TIER_LONG_EDGE: Record<SizeTier, number> = {
+  '1K': 1536,
+  '2K': 2560,
+  '4K': 3840,
+}
 const SIZE_LIMIT_TEXT = '最终输出会自动规整到可提交尺寸：\n宽高均为 16 的倍数，最大边长 3840px，总像素不超过 8294400。'
 const RATIOS = [
   { label: '1:1', value: '1:1' },
@@ -34,9 +39,11 @@ interface Props {
   onSelect: (size: string) => void
   onClose: () => void
   allowAuto?: boolean
+  supportedSizes?: string[]
+  maxSupportedLongEdge?: number | null
 }
 
-type Mode = 'auto' | 'ratio' | 'resolution'
+type Mode = 'auto' | 'ratio' | 'fixed'
 
 function parseSize(size: string) {
   const match = size.match(/^\s*(\d+)\s*[xX×]\s*(\d+)\s*$/)
@@ -56,6 +63,36 @@ function findPresetForSize(size: string) {
   return null
 }
 
+export function getAvailableSizeTiers(maxSupportedLongEdge?: number | null): SizeTier[] {
+  if (typeof maxSupportedLongEdge !== 'number' || !Number.isFinite(maxSupportedLongEdge) || maxSupportedLongEdge <= 0) {
+    return TIERS
+  }
+  const tiers = TIERS.filter((tier) => TIER_LONG_EDGE[tier] <= maxSupportedLongEdge)
+  return tiers.length ? tiers : ['1K']
+}
+
+export function getNearestAllowedSizeTier(tier: SizeTier, maxSupportedLongEdge?: number | null): SizeTier {
+  const available = getAvailableSizeTiers(maxSupportedLongEdge)
+  if (available.includes(tier)) return tier
+  return available[available.length - 1] ?? '1K'
+}
+
+export function getInitialSizePickerMode(input: {
+  hasSupportedSizeList: boolean
+  effectiveAllowAuto: boolean
+  isAutoSize: boolean
+  currentPreset: { tier: SizeTier; ratio: string } | null
+}): Mode {
+  if (input.hasSupportedSizeList) return 'fixed'
+  if (input.isAutoSize) return input.effectiveAllowAuto ? 'auto' : 'ratio'
+  return 'ratio'
+}
+
+export function getSizePickerModeLabels(input: { allowAuto: boolean; hasSupportedSizeList: boolean }) {
+  if (input.hasSupportedSizeList) return ['模型支持尺寸']
+  return input.allowAuto ? ['自动', '按比例'] : ['按比例']
+}
+
 function getReadableSizeLabel(size: string, allowAuto: boolean) {
   if (!size || size === 'auto') {
     return allowAuto ? '自动' : '智能适配'
@@ -67,7 +104,7 @@ function getReadableSizeLabel(size: string, allowAuto: boolean) {
   return ratio ? `${ratio} · ${normalizeImageSize(size)}` : normalizeImageSize(size)
 }
 
-export default function SizePickerModal({ currentSize, onSelect, onClose, allowAuto = true }: Props) {
+export default function SizePickerModal({ currentSize, onSelect, onClose, allowAuto = true, supportedSizes = [], maxSupportedLongEdge = null }: Props) {
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   usePreventBackgroundScroll(true, scrollAreaRef)
   const pushRecentSizePreset = useStore((s) => s.pushRecentSizePreset)
@@ -96,22 +133,25 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
   }
 
   const currentPreset = findPresetForSize(currentSize)
-  const currentParsedSize = parseSize(currentSize)
-  const currentSizeLabel = getReadableSizeLabel(currentSize, allowAuto)
-  const [mode, setMode] = useState<Mode>(() => {
-    if (!currentSize || currentSize === 'auto') return allowAuto ? 'auto' : 'ratio'
-    if (currentPreset) return 'ratio'
-    return 'resolution'
-  })
+  const hasSupportedSizeList = supportedSizes.length > 0
+  const effectiveAllowAuto = allowAuto && !hasSupportedSizeList
+  const currentSizeLabel = getReadableSizeLabel(currentSize, effectiveAllowAuto)
+  const [mode, setMode] = useState<Mode>(() => getInitialSizePickerMode({
+    hasSupportedSizeList,
+    effectiveAllowAuto,
+    isAutoSize: !currentSize || currentSize === 'auto',
+    currentPreset,
+  }))
 
   // Ratio mode state
-  const [tier, setTier] = useState<SizeTier>(currentPreset?.tier ?? '1K')
-  const [ratio, setRatio] = useState(currentPreset?.ratio ?? (allowAuto ? '1:1' : '4:3'))
+  const availableSizeTiers = useMemo(() => getAvailableSizeTiers(maxSupportedLongEdge), [maxSupportedLongEdge])
+  const [tier, setTier] = useState<SizeTier>(getNearestAllowedSizeTier(currentPreset?.tier ?? '1K', maxSupportedLongEdge))
+  const [ratio, setRatio] = useState(currentPreset?.ratio ?? (effectiveAllowAuto ? '1:1' : '4:3'))
   const [customRatio, setCustomRatio] = useState('16:9')
-
-  // Resolution mode state
-  const [customW, setCustomW] = useState(currentParsedSize?.width ?? '1024')
-  const [customH, setCustomH] = useState(currentParsedSize?.height ?? '1024')
+  const [selectedSupportedSize, setSelectedSupportedSize] = useState(() => {
+    const normalizedCurrent = normalizeImageSize(currentSize)
+    return supportedSizes.includes(normalizedCurrent) ? normalizedCurrent : normalizeImageSize(supportedSizes[0] ?? '')
+  })
 
   const [hintVisible, setHintVisible] = useState(false)
   const hintTimerRef = useRef<number | null>(null)
@@ -123,31 +163,31 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
   const activeRatio = ratio === 'custom' ? customRatio : ratio
   const parsedCustomRatio = parseRatio(customRatio)
   const customRatioValid = ratio !== 'custom' || Boolean(parsedCustomRatio)
+  const supportedSizeCards = useMemo(
+    () => supportedSizes.map((size) => ({
+      value: normalizeImageSize(size),
+      label: getReadableSizeLabel(size, false),
+    })),
+    [supportedSizes],
+  )
 
   const previewSize = useMemo(() => {
     if (mode === 'auto') return 'auto'
+
+    if (hasSupportedSizeList) return selectedSupportedSize || normalizeImageSize(supportedSizes[0] ?? '')
     
     if (mode === 'ratio') {
       const size = calculateImageSize(tier, activeRatio)
       return size ? normalizeImageSize(size) : ''
     }
     
-    if (mode === 'resolution') {
-      const w = parseInt(customW, 10)
-      const h = parseInt(customH, 10)
-      if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
-        return normalizeImageSize(`${w}x${h}`)
-      }
-      return ''
-    }
-    
     return ''
-  }, [activeRatio, customH, customW, mode, tier])
+  }, [activeRatio, hasSupportedSizeList, mode, selectedSupportedSize, supportedSizes, tier])
 
   const previewSizeLabel = useMemo(() => {
     if (!previewSize) return '尺寸无效'
-    return getReadableSizeLabel(previewSize, allowAuto)
-  }, [allowAuto, previewSize])
+    return getReadableSizeLabel(previewSize, effectiveAllowAuto)
+  }, [effectiveAllowAuto, previewSize])
 
   const previewRatioLabel = useMemo(() => {
     if (!previewSize || previewSize === 'auto') return '交由模型自行判断'
@@ -158,19 +198,13 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
 
   const isClamped = useMemo(() => {
     if (!previewSize || previewSize === 'auto') return false
+    if (hasSupportedSizeList) return false
     if (mode === 'ratio') {
       const rawSize = calculateImageSize(tier, activeRatio)
       return Boolean(rawSize && previewSize && rawSize !== previewSize)
     }
-    if (mode === 'resolution') {
-      const w = parseInt(customW, 10)
-      const h = parseInt(customH, 10)
-      if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
-        return `${w}x${h}` !== previewSize
-      }
-    }
     return false
-  }, [activeRatio, customW, customH, mode, previewSize, tier])
+  }, [activeRatio, hasSupportedSizeList, mode, previewSize, tier])
 
   const showHint = () => setHintVisible(true)
   const hideHint = () => {
@@ -206,7 +240,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
 
   const applyQuickPreset = (nextTier: SizeTier, nextRatio: string) => {
     setMode('ratio')
-    setTier(nextTier)
+    setTier(getNearestAllowedSizeTier(nextTier, maxSupportedLongEdge))
     setRatio(nextRatio)
   }
 
@@ -240,7 +274,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
 
         <div className="flex min-h-0 flex-1 flex-col gap-3">
           <div className="flex flex-shrink-0 rounded-xl bg-gray-100/80 p-1 dark:bg-white/[0.04]">
-            {allowAuto && (
+            {effectiveAllowAuto && (
               <button
                 onClick={() => setMode('auto')}
                 className={`flex-1 rounded-lg py-1.5 text-sm font-medium transition ${mode === 'auto' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-700 dark:text-gray-100' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}
@@ -248,18 +282,21 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                 自动
               </button>
             )}
-            <button
-              onClick={() => setMode('ratio')}
-              className={`flex-1 rounded-lg py-1.5 text-sm font-medium transition ${mode === 'ratio' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-700 dark:text-gray-100' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}
-            >
-              按比例
-            </button>
-            <button
-              onClick={() => setMode('resolution')}
-              className={`flex-1 rounded-lg py-1.5 text-sm font-medium transition ${mode === 'resolution' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-700 dark:text-gray-100' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}
-            >
-              自定义宽高
-            </button>
+            {hasSupportedSizeList ? (
+              <button
+                className="flex-1 rounded-lg bg-white py-1.5 text-sm font-medium text-gray-800 shadow-sm dark:bg-gray-700 dark:text-gray-100"
+                type="button"
+              >
+                模型支持尺寸
+              </button>
+            ) : (
+              <button
+                onClick={() => setMode('ratio')}
+                className={`flex-1 rounded-lg py-1.5 text-sm font-medium transition ${mode === 'ratio' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-700 dark:text-gray-100' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}
+              >
+                按比例
+              </button>
+            )}
           </div>
 
           <div
@@ -284,7 +321,30 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
               </div>
             )}
 
-            {mode === 'ratio' && (
+            {hasSupportedSizeList && (
+              <div className="space-y-4 animate-fade-in">
+                <section>
+                  <div className="mb-3 text-xs font-medium text-gray-400 dark:text-gray-500">当前模型仅支持以下尺寸</div>
+                  <div className="grid grid-cols-1 gap-2">
+                    {supportedSizeCards.map((item) => {
+                      const active = previewSize === item.value
+                      return (
+                        <button
+                          key={item.value}
+                          className={`${buttonClass(active)} text-left`}
+                          onClick={() => setSelectedSupportedSize(item.value)}
+                        >
+                          <div className="text-[13px] font-medium leading-tight">{item.label}</div>
+                          <div className="mt-0.5 text-[11px] opacity-70">仅展示模型返回的能力尺寸</div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </section>
+              </div>
+            )}
+
+            {!hasSupportedSizeList && mode === 'ratio' && (
               <div className="space-y-3 animate-fade-in">
                 <section>
                   <div className="mb-2 text-xs font-medium text-gray-400 dark:text-gray-500">常用预设</div>
@@ -308,13 +368,18 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                 <section>
                   <div className="mb-2 text-xs font-medium text-gray-400 dark:text-gray-500">分辨率档位</div>
                   <div className="grid grid-cols-3 gap-2">
-                    {TIERS.map((item) => (
+                    {availableSizeTiers.map((item) => (
                       <button key={item} className={`${buttonClass(tier === item)} text-left`} onClick={() => setTier(item)}>
                         <div className="text-[13px] font-medium">{item}</div>
                         <div className="mt-0.5 text-[11px] opacity-70">{TIER_HINTS[item]}</div>
                       </button>
                     ))}
                   </div>
+                  {availableSizeTiers.length < TIERS.length && (
+                    <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-700 dark:bg-amber-400/10 dark:text-amber-200">
+                      当前模型的后台线路实测最高支持 {availableSizeTiers.at(-1)}，更高档位暂不开放。
+                    </div>
+                  )}
                 </section>
 
                 <section>
@@ -367,48 +432,6 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
               </div>
             )}
 
-            {mode === 'resolution' && (
-              <div className="space-y-4 animate-fade-in">
-                <section>
-                  <div className="mb-3 text-xs font-medium text-gray-400 dark:text-gray-500">输入具体分辨率</div>
-                  <div className="flex items-center gap-4">
-                    <label className="flex-1">
-                      <span className="mb-1.5 block text-xs text-gray-500 dark:text-gray-400">宽度 (Width)</span>
-                      <input
-                        type="number"
-                        value={customW}
-                        onChange={(e) => setCustomW(e.target.value)}
-                        className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
-                        placeholder="例如 1024"
-                      />
-                    </label>
-                    <div className="mt-5 text-gray-300 dark:text-gray-600">
-                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </div>
-                    <label className="flex-1">
-                      <span className="mb-1.5 block text-xs text-gray-500 dark:text-gray-400">高度 (Height)</span>
-                      <input
-                        type="number"
-                        value={customH}
-                        onChange={(e) => setCustomH(e.target.value)}
-                        className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
-                        placeholder="例如 1024"
-                      />
-                    </label>
-                  </div>
-                </section>
-                <div className="rounded-xl border border-gray-200/80 bg-gray-50/80 p-3 text-xs text-gray-600 dark:border-white/[0.05] dark:bg-white/[0.02] dark:text-gray-400">
-                  <div className="flex items-start gap-2">
-                    <svg className="mt-[2px] h-4 w-4 flex-shrink-0 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    <div className="whitespace-pre-line leading-relaxed">{SIZE_LIMIT_TEXT}</div>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
 
           <div className="flex flex-shrink-0 items-center justify-between gap-3 rounded-2xl bg-gray-50 px-4 py-2.5 dark:bg-white/[0.03]">

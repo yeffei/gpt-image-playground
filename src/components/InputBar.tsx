@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { useStore, submitTask, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, updateTaskInStore, removeMultipleTasks, ensureImageCached, appendNegativePromptTerms, estimateBillingPoints, getWorkbenchAccessState, mergeNegativePromptValue, isTaskVisibleForAccount } from '../store'
 import { DEFAULT_PARAMS, type TaskParams } from '../types'
 import { getActiveApiProfile, normalizeSettings } from '../lib/apiProfiles'
-import { normalizeParamsForModelSku } from '../lib/modelSkus'
+import { getOutputImageLimitForModelSku, getSpecificSupportedModelSkuSizes, normalizeParamsForModelSku } from '../lib/modelSkus'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
 import { getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers } from '../lib/promptImageMentions'
 import { formatImageRatio, normalizeImageSize } from '../lib/size'
@@ -45,9 +45,6 @@ const WILDCARD_QUALITY_OPTIONS: Array<{ label: string; value: TaskParams['qualit
 function isSpecificQuality(value: TaskParams['quality'] | '*'): value is TaskParams['quality'] {
   return value !== '*'
 }
-
-const PRODUCT_GATEWAY_OUTPUT_LIMIT = 4
-
 
 function getMentionTagTextLength(el: Element) {
   return el.textContent?.length ?? 0
@@ -640,8 +637,16 @@ export default function InputBar() {
   const productGatewayUnavailableMessage = '暂无可用模型，请先在后台配置模型和线路。'
   const hasSubmitRoute = usesProductGateway ? Boolean(activeModelSku) : Boolean(activeProfile.apiKey)
   const isSubmitAccessBlocked = workbenchAccessState !== 'ready'
+  const editUnsupportedMessage = activeModelSku
+    ? '当前模型「' + activeModelSku.label + '」不支持参考图编辑，请切换支持编辑的模型。'
+    : ''
+  const maskUnsupportedMessage = activeModelSku
+    ? '当前模型「' + activeModelSku.label + '」不支持遮罩编辑，请切换支持遮罩的模型。'
+    : ''
+  const isEditCapabilityBlocked = usesProductGateway && Boolean(activeModelSku) && inputImages.length > 0 && activeModelSku?.supportsEdit === false
+  const isMaskCapabilityBlocked = usesProductGateway && Boolean(activeModelSku) && Boolean(maskDraft) && activeModelSku?.supportsMask === false
   const hasPromptContent = Boolean(prompt.trim())
-  const canSubmit = Boolean(hasPromptContent && hasSubmitRoute && !isSubmitAccessBlocked)
+  const canSubmit = Boolean(hasPromptContent && hasSubmitRoute && !isSubmitAccessBlocked && !isEditCapabilityBlocked && !isMaskCapabilityBlocked)
   const submitButtonAriaLabel = workbenchAccessState === 'guest'
     ? GUEST_SUBMIT_GENERATION_LABEL
     : workbenchAccessState === 'no_balance'
@@ -657,6 +662,10 @@ export default function InputBar() {
     ? usesProductGateway ? productGatewayUnavailableMessage : '当前生成服务暂不可用，请稍后重试。'
     : !hasPromptContent
     ? '请输入提示词'
+    : isMaskCapabilityBlocked
+    ? maskUnsupportedMessage
+    : isEditCapabilityBlocked
+    ? editUnsupportedMessage
     : ''
   const promptPlaceholder = '描述你想生成的图片，可输入 @ 来指定参考图...'
   const submitButtonLabel = workbenchAccessState === 'guest'
@@ -679,8 +688,16 @@ export default function InputBar() {
       showToast(usesProductGateway ? productGatewayUnavailableMessage : '当前生成服务暂不可用，请稍后重试。', 'error')
       return
     }
+    if (isMaskCapabilityBlocked) {
+      showToast(maskUnsupportedMessage, 'error')
+      return
+    }
+    if (isEditCapabilityBlocked) {
+      showToast(editUnsupportedMessage, 'error')
+      return
+    }
     void submitTask()
-  }, [hasSubmitRoute, openLoginDialog, openPlanDialog, showToast, usesProductGateway, workbenchAccessState])
+  }, [editUnsupportedMessage, hasSubmitRoute, isEditCapabilityBlocked, isMaskCapabilityBlocked, maskUnsupportedMessage, openLoginDialog, openPlanDialog, showToast, usesProductGateway, workbenchAccessState])
   const syncPromptFromContentEditable = useCallback(() => {
     const el = textareaRef.current
     if (!el) return
@@ -694,7 +711,18 @@ export default function InputBar() {
   const isFalProvider = activeProvider === 'fal'
   const negativePromptModeLabel = isFalProvider ? '独立发送' : '附加到主提示词'
   const compressionDisabled = params.output_format === 'png' || isFalProvider
-  const outputImageLimit = usesProductGateway ? PRODUCT_GATEWAY_OUTPUT_LIMIT : getOutputImageLimitForSettings(effectiveSettings)
+  const outputImageLimit = usesProductGateway
+    ? getOutputImageLimitForModelSku(selectedModelSkuId, modelSkus)
+    : getOutputImageLimitForSettings(effectiveSettings)
+  const outputCountOptions = useMemo(() => {
+    const options = new Set([1])
+    for (let count = 2; count <= outputImageLimit; count += 1) options.add(count)
+    return Array.from(options)
+  }, [outputImageLimit])
+  const supportedSizeOptions = useMemo(
+    () => usesProductGateway ? getSpecificSupportedModelSkuSizes(activeModelSku) : [],
+    [activeModelSku, usesProductGateway],
+  )
   const isFalTextToImage = isFalProvider && inputImages.length === 0
   const effectiveNValue = params.n
   const displaySize = isFalTextToImage && params.size === 'auto'
@@ -1115,6 +1143,10 @@ export default function InputBar() {
 
   const handleEditReferenceImage = useCallback((img: (typeof inputImages)[number], idx: number, isMaskTarget: boolean) => {
     if (isMaskTarget) {
+      if (usesProductGateway && activeModelSku?.supportsMask === false) {
+        showToast(maskUnsupportedMessage, 'error')
+        return
+      }
       setMaskEditorImageId(img.id)
       return
     }
@@ -1125,6 +1157,10 @@ export default function InputBar() {
     }
 
     if (settings.referenceImageEditAction === 'add-mask') {
+      if (usesProductGateway && activeModelSku?.supportsMask === false) {
+        showToast(maskUnsupportedMessage, 'error')
+        return
+      }
       setMaskEditorImageId(img.id)
       return
     }
@@ -1147,12 +1183,16 @@ export default function InputBar() {
           tone: 'primary',
           action: (remember) => {
             commitReferenceEditChoice('add-mask', remember)
+            if (usesProductGateway && activeModelSku?.supportsMask === false) {
+              showToast(maskUnsupportedMessage, 'error')
+              return
+            }
             setMaskEditorImageId(img.id)
           },
         },
       ],
     })
-  }, [commitReferenceEditChoice, openReplaceReferenceFilePicker, setConfirmDialog, setMaskEditorImageId, settings.referenceImageEditAction])
+  }, [activeModelSku?.supportsMask, commitReferenceEditChoice, maskUnsupportedMessage, openReplaceReferenceFilePicker, setConfirmDialog, setMaskEditorImageId, settings.referenceImageEditAction, showToast, usesProductGateway])
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     await handleFilesRef.current(e.target.files || [])
@@ -1939,11 +1979,16 @@ export default function InputBar() {
       </label>
     )
 
-    const quantityField = (
+    const quantityField = outputCountOptions.length <= 4 ? (
       <label className="prototype-param-quantity-field prototype-param-compact-field relative flex flex-col gap-1">
         <span className="prototype-param-compact-label ml-1 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-gray-500">数量</span>
-        <div className="prototype-quantity-segment" role="radiogroup" aria-label="数量">
-          {[1, 2, 4].map((value) => {
+        <div
+          className="prototype-quantity-segment"
+          role="radiogroup"
+          aria-label="数量"
+          style={{ gridTemplateColumns: 'repeat(' + Math.max(outputCountOptions.length, 1) + ', minmax(0, 1fr))' }}
+        >
+          {outputCountOptions.map((value) => {
             const disabled = value > outputImageLimit
             const active = params.n === value
             return (
@@ -1961,6 +2006,16 @@ export default function InputBar() {
             )
           })}
         </div>
+      </label>
+    ) : (
+      <label className="prototype-param-quantity-field prototype-param-compact-field relative flex flex-col gap-1">
+        <span className="prototype-param-compact-label ml-1 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-gray-500">数量</span>
+        <Select
+          value={String(params.n)}
+          onChange={(val) => handleQuantitySelect(Number(val))}
+          options={outputCountOptions.map((value) => ({ label: value + ' 张', value: String(value) }))}
+          className={selectClass}
+        />
       </label>
     )
 
@@ -2136,6 +2191,8 @@ export default function InputBar() {
             onSelect={(size) => setParams({ size })}
             onClose={() => setShowSizePicker(false)}
             allowAuto={!isFalTextToImage}
+            supportedSizes={supportedSizeOptions}
+            maxSupportedLongEdge={usesProductGateway ? activeModelSku?.maxSupportedLongEdge ?? null : null}
           />
         </Suspense>
       )}

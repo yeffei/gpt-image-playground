@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
-import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey, retryTask, isTaskVisibleForAccount } from '../store'
+import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, stopRunningTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey, retryTask, isTaskVisibleForAccount } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useTooltip } from '../hooks/useTooltip'
@@ -8,7 +8,8 @@ import { DetailParamValue } from '../lib/paramDisplay'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import { getModelSku } from '../lib/modelSkus'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
-import { getFailureDisplay, SERVER_IMAGE_INTERRUPTED_MESSAGE, STOPPED_GENERATION_MESSAGE } from '../lib/taskResultDisplay'
+import { getFailureDisplay, getPublicTaskResultView, SERVER_IMAGE_INTERRUPTED_MESSAGE, STOPPED_GENERATION_MESSAGE } from '../lib/taskResultDisplay'
+import { getOutputResolutionWarning } from '../lib/outputResolutionQuality'
 import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
 import type { OwnerImageShare } from '../types'
 
@@ -262,6 +263,21 @@ export default function DetailModal() {
   const currentImageRatio = currentOutputImageId ? imageRatios[currentOutputImageId] : ''
   const currentImageSize = currentOutputImageId ? imageSizes[currentOutputImageId] : ''
   const currentActualParams = currentOutputImageId ? task.actualParamsByImage?.[currentOutputImageId] : undefined
+  const deliveryPlan = task.deliveryPlan
+  const deliveryStrategyLabel = deliveryPlan?.strategy === 'direct'
+    ? '直接交付'
+    : deliveryPlan?.strategy === 'upscale'
+    ? '先生成底图，再放大交付'
+    : deliveryPlan?.strategy === 'crop_then_upscale'
+    ? '先按近似比例生成底图，再裁切放大交付'
+    : deliveryPlan?.strategy === 'pad_then_upscale'
+    ? '先补边生成底图，再放大交付'
+    : ''
+  const outputResolutionWarning = getOutputResolutionWarning({
+    requestedSize: task.params.size,
+    actualSize: currentActualParams?.size,
+    deliveryPlan,
+  })
   const currentRevisedPrompt = currentOutputImageId ? task.revisedPromptByImage?.[currentOutputImageId]?.trim() ?? '' : ''
   const showRevisedPrompt = Boolean(currentRevisedPrompt && currentRevisedPrompt !== task.prompt.trim())
   const shouldCollapseRevisedPrompt = currentRevisedPrompt.length > 180 || currentRevisedPrompt.split(/\r?\n/).length > 3
@@ -283,9 +299,42 @@ export default function DetailModal() {
     task.error === STOPPED_GENERATION_MESSAGE ||
     task.error === SERVER_IMAGE_INTERRUPTED_MESSAGE
   )
+  const publicResult = getPublicTaskResultView(task)
   const failureDisplay = task.status === 'error'
     ? getFailureDisplay(task.error, isInterruptedFailure, task.gatewayFailureKind)
     : null
+  const resultStatusLabel = publicResult.status === 'running'
+    ? '生成中'
+    : publicResult.status === 'succeeded'
+    ? '已完成'
+    : publicResult.status === 'cancelled'
+    ? '已取消'
+    : publicResult.status === 'timeout'
+    ? '已超时'
+    : '失败'
+  const chargeStatusLabel = publicResult.chargeStatus === 'pending'
+    ? '扣点待确认'
+    : publicResult.chargeStatus === 'not_charged'
+    ? '未扣点'
+    : publicResult.chargeStatus === 'partial_charged'
+    ? `已扣 ${publicResult.chargedPoints} 点（按实际产出）`
+    : `已扣 ${publicResult.chargedPoints} 点`
+  const retryActionLabel = publicResult.retryAction === 'adjust_params'
+    ? '调整后重试'
+    : publicResult.retryAction === 'wait'
+    ? '继续等待'
+    : publicResult.retryAction === 'contact_support'
+    ? '联系支持'
+    : publicResult.retryAction === 'reuse_or_tune'
+    ? '复用或微调'
+    : '直接重试'
+  const compactRequestId = publicResult.requestId
+    ? publicResult.requestId.length > 20
+      ? `...${publicResult.requestId.slice(-16)}`
+      : publicResult.requestId
+    : ''
+  const gatewayAttemptCount = task.attempts?.length ?? 0
+  const hasGatewayContext = Boolean(publicResult.requestId || task.routeId || task.upstreamModel || gatewayAttemptCount > 0)
   const rawImageUrls = task.rawImageUrls ?? []
   const streamPreviewLen = streamPreviewItems.length
   const currentStreamPreviewSrc = activeStreamPreviewSrc
@@ -321,14 +370,15 @@ export default function DetailModal() {
   }
 
   const handleDelete = () => {
+    const isRunningTask = task.status === 'running'
     setDetailTaskId(null)
     setConfirmDialog({
-      title: '删除记录',
-      message: '确定要删除这条记录吗？关联的图片资源也会被清理（如果没有其他任务引用）。',
-      action: () => removeTask(task),
+      title: isRunningTask ? '停止生成' : '删除记录',
+      message: isRunningTask ? '这条任务仍在生成中。停止后会保留当前记录，但不会继续等待服务端结果。' : '确定要删除这条记录吗？关联的图片资源也会被清理（如果没有其他任务引用）。',
+      confirmText: isRunningTask ? '停止生成' : undefined,
+      action: () => (isRunningTask ? stopRunningTask(task) : removeTask(task)),
     })
   }
-
   const handleToggleFavorite = () => {
     updateTaskInStore(task.id, { isFavorite: !task.isFavorite })
   }
@@ -730,8 +780,8 @@ export default function DetailModal() {
                   WebkitLineClamp: 10,
                 }}
               >
-                <strong className="block text-base font-semibold">{failureDisplay?.headline ?? '生成失败'}</strong>
-                <span className="mt-1 block text-red-500/90">{failureDisplay?.summary ?? task.error ?? '生成失败'}</span>
+                <strong className="block text-base font-semibold">{publicResult.failureHeadline ?? failureDisplay?.headline ?? '生成失败'}</strong>
+                <span className="mt-1 block text-red-500/90">{publicResult.failureSummary ?? failureDisplay?.summary ?? task.error ?? '生成失败'}</span>
                 {failureDisplay?.supportingDetail && (
                   <span className="mt-1 block text-xs text-red-400">{failureDisplay.supportingDetail}</span>
                 )}
@@ -914,6 +964,34 @@ export default function DetailModal() {
                 )}
               </div>
             )}
+            <h3 className="text-xs font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">
+              结果摘要
+            </h3>
+            <div className="mb-4 rounded-lg bg-gray-50 px-3 py-2 text-xs dark:bg-white/[0.03]">
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-lg bg-white/70 px-3 py-2 dark:bg-white/[0.04]">
+                  <span className="text-gray-400 dark:text-gray-500">状态</span>
+                  <br />
+                  <span className="font-medium text-gray-700 dark:text-gray-200">{resultStatusLabel}</span>
+                </div>
+                <div className="rounded-lg bg-white/70 px-3 py-2 dark:bg-white/[0.04]">
+                  <span className="text-gray-400 dark:text-gray-500">结果</span>
+                  <br />
+                  <span className="font-medium text-gray-700 dark:text-gray-200">{publicResult.outputCount} / {publicResult.requestedOutputCount}</span>
+                </div>
+                <div className="rounded-lg bg-white/70 px-3 py-2 dark:bg-white/[0.04]">
+                  <span className="text-gray-400 dark:text-gray-500">扣点</span>
+                  <br />
+                  <span className="font-medium text-gray-700 dark:text-gray-200">{chargeStatusLabel}</span>
+                </div>
+                <div className="rounded-lg bg-white/70 px-3 py-2 dark:bg-white/[0.04]">
+                  <span className="text-gray-400 dark:text-gray-500">建议</span>
+                  <br />
+                  <span className="font-medium text-gray-700 dark:text-gray-200">{retryActionLabel}</span>
+                </div>
+              </div>
+            </div>
+
             {showRevisedPrompt && currentRevisedPrompt && (
               <div className="mb-4 rounded-lg bg-yellow-50 px-3 py-2 text-yellow-900 ring-1 ring-yellow-100 dark:bg-yellow-500/10 dark:text-yellow-200 dark:ring-yellow-500/20">
                 <div className="mb-1 flex items-center justify-between gap-3">
@@ -1004,9 +1082,9 @@ export default function DetailModal() {
               </div>
             )}
 
-            {/* 参数 */}
+            {/* 参数与技术 */}
             <h3 className="text-xs font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">
-              参数配置
+              参数与技术
             </h3>
             {showSourceInfo && (
               <div className="mb-2 rounded-lg bg-gray-50 px-3 py-2 text-xs dark:bg-white/[0.03]">
@@ -1038,11 +1116,20 @@ export default function DetailModal() {
                 <DetailParamValue task={task} paramKey="moderation" className="font-medium" actualParams={currentActualParams} />
               </div>
               {!isAgentTask && (
-                <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
-                  <span className="text-gray-400 dark:text-gray-500">数量</span>
-                  <br />
-                  <DetailParamValue task={task} paramKey="n" className="font-medium" />
-                </div>
+                <>
+                  <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
+                    <span className="text-gray-400 dark:text-gray-500">数量</span>
+                    <br />
+                    <DetailParamValue task={task} paramKey="n" className="font-medium" />
+                  </div>
+                  {deliveryPlan && deliveryStrategyLabel && (
+                    <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
+                      <span className="text-gray-400 dark:text-gray-500">处理方式</span>
+                      <br />
+                      <span className="font-medium text-gray-700 dark:text-gray-200">{deliveryStrategyLabel}</span>
+                    </div>
+                  )}
+                </>
               )}
               {task.params.output_compression != null && (
                 <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
@@ -1052,7 +1139,47 @@ export default function DetailModal() {
                 </div>
               )}
             </div>
-
+            {outputResolutionWarning && (
+              <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-200">
+                <div className="font-medium">实际输出低于请求分辨率</div>
+                <div className="mt-0.5">{outputResolutionWarning.message}</div>
+              </div>
+            )}
+            {hasGatewayContext && (
+              <div className="mb-4 rounded-lg border border-gray-200 bg-white/70 px-3 py-2 text-xs dark:border-white/[0.08] dark:bg-white/[0.02]">
+                <div className="mb-2 font-medium text-gray-500 dark:text-gray-400">技术上下文</div>
+                <div className="space-y-2">
+                  {publicResult.requestId && (
+                    <div>
+                      <span className="text-gray-400 dark:text-gray-500">请求编号</span>
+                      <br />
+                      <span className="font-mono font-medium text-gray-700 dark:text-gray-200" title={publicResult.requestId}>{compactRequestId}</span>
+                    </div>
+                  )}
+                  {task.routeId && (
+                    <div>
+                      <span className="text-gray-400 dark:text-gray-500">线路标识</span>
+                      <br />
+                      <span className="font-mono font-medium text-gray-700 dark:text-gray-200" title={task.routeId}>{task.routeId}</span>
+                    </div>
+                  )}
+                  {task.upstreamModel && (
+                    <div>
+                      <span className="text-gray-400 dark:text-gray-500">上游模型</span>
+                      <br />
+                      <span className="font-medium text-gray-700 dark:text-gray-200" title={task.upstreamModel}>{task.upstreamModel}</span>
+                    </div>
+                  )}
+                  {gatewayAttemptCount > 0 && (
+                    <div>
+                      <span className="text-gray-400 dark:text-gray-500">尝试次数</span>
+                      <br />
+                      <span className="font-medium text-gray-700 dark:text-gray-200">{gatewayAttemptCount}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
             {/* 时间 */}
             <div className="text-xs text-gray-400 dark:text-gray-500 mb-4">
               <span>创建于 {formatTime(task.createdAt)}</span>
@@ -1180,7 +1307,7 @@ export default function DetailModal() {
               className="col-span-3 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-500/20 transition text-sm font-medium whitespace-nowrap"
             >
               <TrashIcon className="w-4 h-4 flex-shrink-0" />
-              删除记录
+              {task.status === 'running' ? '停止生成' : '删除记录'}
             </button>
             <button
               onClick={handleToggleFavorite}

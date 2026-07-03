@@ -672,6 +672,22 @@ export async function cancelServerTask(task: TaskRecord) {
   }
 }
 
+export async function stopRunningTask(task: TaskRecord) {
+  if (task.status !== 'running') return false
+  const finishedAt = Date.now()
+  updateTaskInStore(task.id, {
+    status: 'error',
+    error: '已停止生成。',
+    falRecoverable: false,
+    customRecoverable: false,
+    finishedAt,
+    elapsed: Math.max(0, finishedAt - task.createdAt),
+  })
+  useStore.getState().showToast('已停止等待，可重新生成', 'info')
+  await cancelServerTask(task)
+  return true
+}
+
 export async function ensureImageThumbnailCached(id: string): Promise<{ dataUrl: string; width?: number; height?: number } | undefined> {
   const cached = getCachedThumbnail(id)
   if (cached) return cached

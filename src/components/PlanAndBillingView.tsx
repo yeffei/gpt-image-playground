@@ -2,18 +2,19 @@ import { useEffect, useMemo, useState } from 'react'
 import './PlanAndBillingView.css'
 import { useStore } from '../store'
 import { getAccountLedger, getMyReferralInfo, type AccountLedgerRecord } from '../lib/authApi'
+import type { PlatformCapabilities } from '../types'
+import { fetchPlatformCapabilities } from '../lib/platformCapabilitiesApi'
+import {
+  getPlatformBillingExample,
+  getPlatformBillingPriceMatrix,
+  getPlatformImageCapabilitySummary,
+} from '../lib/platformCapabilitiesDisplay'
 import RechargeAndResultView from './RechargeAndResultView'
 
 type LedgerFilter = 'all' | 'income' | 'expense'
 type LedgerRecordType = 'income' | 'expense' | 'neutral'
 
 const LEDGER_PAGE_SIZE = 10
-const PRICE_MATRIX = [
-  { tier: '1K', copy: '轻量草图、社媒配图', points: 1 },
-  { tier: '2K', copy: '常规成片、详情预览', points: 3 },
-  { tier: '4K', copy: '高清海报、精修输出', points: 6 },
-] as const
-
 function formatDateTime(timestamp: number | null) {
   if (!timestamp) return '刚刚还没有充值记录'
   return new Intl.DateTimeFormat('zh-CN', {
@@ -77,6 +78,7 @@ export default function PlanAndBillingView() {
   const [accountLedger, setAccountLedger] = useState<AccountLedgerRecord[] | null>(null)
   const [accountLedgerError, setAccountLedgerError] = useState<string | null>(null)
   const [accountLedgerLoading, setAccountLedgerLoading] = useState(false)
+  const [platformCapabilities, setPlatformCapabilities] = useState<PlatformCapabilities | null>(null)
 
   useEffect(() => {
     const token = authSessionToken?.trim()
@@ -128,6 +130,26 @@ export default function PlanAndBillingView() {
       cancelled = true
     }
   }, [account.inviteCode, account.isLoggedIn, authSessionToken, setAccountState, showToast])
+
+  useEffect(() => {
+    let cancelled = false
+
+    void fetchPlatformCapabilities()
+      .then((payload) => {
+        if (!cancelled) setPlatformCapabilities(payload)
+      })
+      .catch(() => {
+        if (!cancelled) setPlatformCapabilities(null)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const priceMatrix = useMemo(() => getPlatformBillingPriceMatrix(platformCapabilities), [platformCapabilities])
+  const billingExample = useMemo(() => getPlatformBillingExample(platformCapabilities), [platformCapabilities])
+  const imageCapabilitySummary = useMemo(() => getPlatformImageCapabilitySummary(platformCapabilities), [platformCapabilities])
 
   const inviteCode = account.inviteCode?.trim() ?? ''
   const hasBackendSession = Boolean(account.isLoggedIn && authSessionToken?.trim())
@@ -224,7 +246,7 @@ export default function PlanAndBillingView() {
           <section className="plan-card plan-rule-card">
             <div className="plan-card-head">
               <h2>扣费规则</h2>
-              <p>按生成规格和成功返回的图片张数结算。</p>
+              <p>按平台能力契约中的规格档位和成功返回的图片张数结算。</p>
               <span className="plan-rule-badge">成功出图才扣点，失败 / 取消 / 超时不扣点</span>
             </div>
             <div className="plan-rule-layout">
@@ -233,7 +255,7 @@ export default function PlanAndBillingView() {
                   <span>规格</span>
                   <span>单价</span>
                 </div>
-                {PRICE_MATRIX.map((row) => (
+                {priceMatrix.map((row) => (
                   <div key={row.tier} className="plan-price-row">
                     <span>
                       <strong>{row.tier}</strong>
@@ -245,7 +267,11 @@ export default function PlanAndBillingView() {
               </div>
               <div className="plan-rule-footnote">
                 <span>示例</span>
-                <strong>2K · 2 张 = 6 点</strong>
+                <strong>{billingExample}</strong>
+              </div>
+              <div className="plan-rule-footnote">
+                <span>能力</span>
+                <strong>{imageCapabilitySummary}</strong>
               </div>
             </div>
           </section>
