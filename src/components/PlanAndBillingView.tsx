@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import './PlanAndBillingView.css'
 import { useStore } from '../store'
-import { getAccountLedger, getMyReferralInfo, type AccountLedgerRecord } from '../lib/authApi'
+import type { AccountLedgerRecord } from '../lib/authApi'
 import type { PlatformCapabilities } from '../types'
 import { fetchPlatformCapabilities } from '../lib/platformCapabilitiesApi'
 import {
@@ -15,6 +15,7 @@ type LedgerFilter = 'all' | 'income' | 'expense'
 type LedgerRecordType = 'income' | 'expense' | 'neutral'
 
 const LEDGER_PAGE_SIZE = 10
+
 function formatDateTime(timestamp: number | null) {
   if (!timestamp) return '刚刚还没有充值记录'
   return new Intl.DateTimeFormat('zh-CN', {
@@ -71,65 +72,23 @@ export default function PlanAndBillingView() {
   const account = useStore((s) => s.account)
   const authSessionToken = useStore((s) => s.authSessionToken)
   const billing = useStore((s) => s.billing)
-  const setAccountState = useStore((s) => s.setAccountState)
+  const refreshAccountLedger = useStore((s) => s.refreshAccountLedger)
+  const refreshReferralInfo = useStore((s) => s.refreshReferralInfo)
+  const accountLedger = useStore((s) => s.accountLedger)
+  const accountLedgerError = useStore((s) => s.accountLedgerError)
+  const accountLedgerLoading = useStore((s) => s.accountLedgerLoading)
   const showToast = useStore((s) => s.showToast)
   const [ledgerFilter, setLedgerFilter] = useState<LedgerFilter>('all')
   const [ledgerPage, setLedgerPage] = useState(1)
-  const [accountLedger, setAccountLedger] = useState<AccountLedgerRecord[] | null>(null)
-  const [accountLedgerError, setAccountLedgerError] = useState<string | null>(null)
-  const [accountLedgerLoading, setAccountLedgerLoading] = useState(false)
   const [platformCapabilities, setPlatformCapabilities] = useState<PlatformCapabilities | null>(null)
 
   useEffect(() => {
-    const token = authSessionToken?.trim()
-    if (!account.isLoggedIn || !token) {
-      setAccountLedger(null)
-      setAccountLedgerError(null)
-      setAccountLedgerLoading(false)
-      return
-    }
-
-    let cancelled = false
-    setAccountLedger(null)
-    setAccountLedgerError(null)
-    setAccountLedgerLoading(true)
-    getAccountLedger(token, 100)
-      .then((records) => {
-        if (cancelled) return
-        setAccountLedger(records)
-        setAccountLedgerError(null)
-      })
-      .catch((error) => {
-        if (cancelled) return
-        setAccountLedger(null)
-        setAccountLedgerError(error instanceof Error ? error.message : '余额流水加载失败')
-      })
-      .finally(() => {
-        if (!cancelled) setAccountLedgerLoading(false)
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [account.isLoggedIn, account.userId, authSessionToken])
+    void refreshAccountLedger()
+  }, [account.isLoggedIn, account.userId, authSessionToken, refreshAccountLedger])
 
   useEffect(() => {
-    const token = authSessionToken?.trim()
-    if (!account.isLoggedIn || account.inviteCode?.trim() || !token) return
-
-    let cancelled = false
-    getMyReferralInfo(token)
-      .then((payload) => {
-        if (!cancelled) setAccountState({ inviteCode: payload.referral.inviteCode })
-      })
-      .catch(() => {
-        if (!cancelled) showToast('邀请信息加载失败，请稍后刷新账号状态', 'info')
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [account.inviteCode, account.isLoggedIn, authSessionToken, setAccountState, showToast])
+    void refreshReferralInfo()
+  }, [account.inviteCode, account.isLoggedIn, authSessionToken, refreshReferralInfo])
 
   useEffect(() => {
     let cancelled = false
@@ -147,9 +106,18 @@ export default function PlanAndBillingView() {
     }
   }, [])
 
-  const priceMatrix = useMemo(() => getPlatformBillingPriceMatrix(platformCapabilities), [platformCapabilities])
-  const billingExample = useMemo(() => getPlatformBillingExample(platformCapabilities), [platformCapabilities])
-  const imageCapabilitySummary = useMemo(() => getPlatformImageCapabilitySummary(platformCapabilities), [platformCapabilities])
+  const priceMatrix = useMemo(
+    () => getPlatformBillingPriceMatrix(platformCapabilities),
+    [platformCapabilities],
+  )
+  const billingExample = useMemo(
+    () => getPlatformBillingExample(platformCapabilities),
+    [platformCapabilities],
+  )
+  const imageCapabilitySummary = useMemo(
+    () => getPlatformImageCapabilitySummary(platformCapabilities),
+    [platformCapabilities],
+  )
 
   const inviteCode = account.inviteCode?.trim() ?? ''
   const hasBackendSession = Boolean(account.isLoggedIn && authSessionToken?.trim())
