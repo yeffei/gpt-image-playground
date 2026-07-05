@@ -18,7 +18,7 @@ export default function HelpModal({ onClose }: HelpModalProps) {
   const helpSections = [
     {
       title: '生成与保存',
-      body: '选择模型、尺寸、格式和张数后提交。图片保存在本地浏览器，重要结果请及时下载。',
+      body: '当前设备会保留工作台草稿；登录后生成的任务与结果会同步到账号，重要图片请及时下载。',
     },
     {
       title: '参考图与重绘',
@@ -56,7 +56,7 @@ export default function HelpModal({ onClose }: HelpModalProps) {
       >
         <div className="mb-4 flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <h3 className="flex items-center gap-2 text-lg font-semibold text-gray-900 dark:text-gray-100">
+            <h3 className="frontend-section-title flex items-center gap-2 text-gray-900 dark:text-gray-100">
               <svg className="h-5 w-5 shrink-0 text-blue-500" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
                 <circle cx="12" cy="12" r="10" />
                 <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
@@ -64,8 +64,8 @@ export default function HelpModal({ onClose }: HelpModalProps) {
               </svg>
               使用说明
             </h3>
-            <p className="mt-1.5 max-w-xl text-sm leading-relaxed text-gray-500 dark:text-gray-400">
-              只保留高频流程：生成、复用、下载和本地保存。
+            <p className="frontend-body-copy mt-1.5 max-w-xl text-gray-500 dark:text-gray-400">
+              只保留高频流程：生成、复用、下载和结果整理。
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -84,14 +84,14 @@ export default function HelpModal({ onClose }: HelpModalProps) {
         <div className="custom-scrollbar mb-4 flex-1 overflow-y-auto overscroll-contain pr-1 text-sm text-gray-600 dark:text-gray-300 sm:pr-2">
           {!account.isLoggedIn && (
             <section className="mb-4 rounded-2xl border border-blue-100 bg-blue-50/70 p-4 text-blue-900/75 dark:border-blue-500/15 dark:bg-blue-500/10 dark:text-blue-100/80">
-              <h4 className="mb-1.5 text-sm font-semibold text-blue-950 dark:text-blue-100">访客说明</h4>
+              <h4 className="frontend-card-title mb-1.5 text-blue-950 dark:text-blue-100">访客说明</h4>
               <p className="leading-relaxed">{GUEST_HELP_INTRO_COPY}</p>
             </section>
           )}
           <div className="grid gap-2.5 sm:grid-cols-2">
             {helpSections.map((section) => (
               <section key={section.title} className="rounded-2xl border border-gray-100 bg-white/65 p-3.5 dark:border-white/[0.06] dark:bg-white/[0.03]">
-                <h4 className="mb-1.5 text-sm font-semibold text-gray-900 dark:text-gray-100">{section.title}</h4>
+                <h4 className="frontend-card-title mb-1.5 text-gray-900 dark:text-gray-100">{section.title}</h4>
                 <p className="leading-relaxed text-gray-600 dark:text-gray-300">{section.body}</p>
               </section>
             ))}

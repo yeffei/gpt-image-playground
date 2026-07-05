@@ -77,13 +77,13 @@ export function InspirationHomeContent(props: {
           </button>
           <div className="flex min-w-0 flex-col justify-center gap-2.5 p-3.5 sm:p-4 lg:p-4.5">
             <div className="space-y-1.5">
-              <span className="inline-flex w-fit rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-semibold text-amber-700">
+              <span className="inline-flex w-fit rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-700">
                 精选主视觉
               </span>
-              <h2 className="max-w-[16ch] text-[clamp(1.15rem,1.32vw,1.55rem)] font-semibold leading-[1.08] tracking-[-0.04em] text-slate-900">
+              <h2 className="max-w-[16ch] text-[clamp(1.25rem,1.45vw,1.65rem)] font-semibold leading-[1.1] tracking-[-0.01em] text-slate-900">
                 {props.state.heroFeatured.title ?? '本期精选作品'}
               </h2>
-              <div className="flex flex-wrap gap-1.5 text-[10px] text-slate-600">
+              <div className="flex flex-wrap gap-1.5 text-[11px] text-slate-600">
                 <span className="rounded-full bg-white/90 px-2.5 py-1">{props.state.heroFeatured.category}</span>
                 <span className="rounded-full bg-white/90 px-2.5 py-1">{props.state.heroFeatured.processingLabel}</span>
               </div>
@@ -101,8 +101,8 @@ export function InspirationHomeContent(props: {
                       <img src={item.imageUrl} alt={item.title ?? item.category} className="h-full w-full object-cover" />
                     </div>
                     <div className="min-w-0 space-y-0.5 pr-1">
-                      <div className="text-[9.5px] font-semibold text-slate-500">{item.category}</div>
-                      <div className="line-clamp-1 text-[12px] font-medium leading-4 text-slate-900">{item.title ?? '入选作品'}</div>
+                      <div className="text-[11px] font-semibold text-slate-500">{item.category}</div>
+                      <div className="line-clamp-1 text-[13px] font-medium leading-[1.15rem] text-slate-900">{item.title ?? '入选作品'}</div>
                     </div>
                   </button>
                 ))}
@@ -115,7 +115,7 @@ export function InspirationHomeContent(props: {
       <section className="space-y-2.5">
         <div className="flex items-end justify-between gap-3">
           <div className="space-y-1">
-            <h3 className="text-lg font-semibold tracking-[-0.03em] text-slate-900">专题精选</h3>
+            <h3 className="frontend-section-title text-slate-900">专题精选</h3>
           </div>
         </div>
         <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
@@ -131,17 +131,17 @@ export function InspirationHomeContent(props: {
               }`}
             >
               <div className="flex items-center gap-3">
-                <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${props.activeCategory === topic.category ? 'bg-white/15 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${props.activeCategory === topic.category ? 'bg-white/15 text-white' : 'bg-slate-100 text-slate-600'}`}>
                   {topic.category}
                 </span>
               </div>
-              <div className="mt-2.5 text-[14px] font-medium leading-5 tracking-[-0.02em]">{topic.title}</div>
-              <p className={`mt-1 text-[12.5px] leading-5 ${props.activeCategory === topic.category ? 'text-white/78' : 'text-slate-600'} line-clamp-2`}>{topic.description}</p>
+              <div className="frontend-card-title mt-2.5">{topic.title}</div>
+              <p className={`mt-1 text-[13px] leading-5 ${props.activeCategory === topic.category ? 'text-white/78' : 'text-slate-600'} line-clamp-2`}>{topic.description}</p>
               <div className="mt-2.5 flex flex-wrap gap-1.5">
                 {topic.highlights.slice(0, 2).map((item) => (
                   <span
                     key={item}
-                    className={`rounded-full px-2.5 py-1 text-[10px] font-medium ${
+                    className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${
                       props.activeCategory === topic.category
                         ? 'bg-white/12 text-white/88'
                         : 'bg-slate-100 text-slate-600'
@@ -179,7 +179,7 @@ export function InspirationHomeContent(props: {
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2.5">
           <div className="flex items-center gap-2">
-            <h3 className="text-[18px] font-semibold tracking-[-0.03em] text-slate-900">{props.state.sections.latest.label}</h3>
+            <h3 className="frontend-section-title text-slate-900">{props.state.sections.latest.label}</h3>
             <span className="rounded-full bg-white/78 px-2.5 py-1 text-[11px] font-medium text-slate-500">
               {cards.length} 张
             </span>
@@ -274,7 +274,7 @@ export default function InspirationView() {
       <section className="prototype-canvas-panel mx-auto w-full max-w-[1440px] rounded-[28px] px-4 py-4 lg:px-6 lg:py-5">
         <div className="prototype-canvas-content space-y-6">
           <div className="space-y-1.5">
-            <h1 className="text-[clamp(1.6rem,2.1vw,2.35rem)] font-semibold tracking-[-0.04em] text-slate-900">SST 创作工作台 · 灵感广场</h1>
+            <h1 className="frontend-page-title text-slate-900">SST 创作工作台 · 灵感广场</h1>
           </div>
           {loading ? (
             <div className="rounded-[28px] border border-white/60 bg-white/72 px-6 py-12 text-center text-sm text-slate-500 shadow-[0_18px_44px_rgba(15,23,42,0.06)]">

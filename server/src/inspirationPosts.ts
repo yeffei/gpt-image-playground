@@ -8,7 +8,7 @@ import type { Db } from './db.js'
 import { withTransaction } from './db.js'
 import type { ServerEnv } from './env.js'
 import { createSharpImageSizeReader } from './imageDeliveryProcessor.js'
-import { buildDefaultInspirationTitle } from './inspirationReview.js'
+import { buildDefaultInspirationCaption, buildDefaultInspirationTitle } from './inspirationReview.js'
 import { inferInspirationCategory } from './inspirationReview.js'
 import { markInspirationAiReviewFailed, reconcileInspirationFeaturedSlots, runInspirationAiReview } from './inspirationReview.js'
 import { reviewShareContent } from './shareModeration.js'
@@ -395,6 +395,12 @@ async function createInspirationPost(
     output.task_prompt,
     output.revised_prompt,
   )
+  const caption = normalizeTextField(payload.caption, 240) ?? buildDefaultInspirationCaption(
+    category,
+    processingLabel,
+    output.task_prompt,
+    output.revised_prompt,
+  )
   return (await tx.query<InspirationPostRow>(`
     INSERT INTO inspiration_posts (
       id, share_id, output_id, user_id, author_name_snapshot, category, title, caption,
@@ -412,7 +418,7 @@ async function createInspirationPost(
     output.author_name_snapshot,
     category,
     title,
-    normalizeTextField(payload.caption, 240),
+    caption,
     processingLabel,
     createdAt,
   ])).rows[0]

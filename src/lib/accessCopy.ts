@@ -1,7 +1,7 @@
 export const GUEST_VIEW_BALANCE_LABEL = '登录后查看额度'
 export const GUEST_SUBMIT_GENERATION_LABEL = '登录后提交生成'
 export const GUEST_VIEW_RESULTS_LABEL = '登录并继续'
-export const GUEST_VIEW_YOUR_RESULTS_TITLE = '结果区将在登录后同步'
+export const GUEST_VIEW_YOUR_RESULTS_TITLE = '登录后查看个人结果'
 export const GUEST_VIEW_LIBRARY_LABEL = '登录后查看作品库'
 export const GUEST_VIEW_FAVORITES_LABEL = '登录后查看收藏与历史结果'
 export const GUEST_LOGIN_CONTINUE_LABEL = '登录后继续'
@@ -26,7 +26,7 @@ export const GUEST_HELP_INTRO_COPY =
   '当前帮助里的多选、批量收藏、批量下载和详情整理，都会在你登录后对个人结果区开放。访客现在主要先使用试填入口与官方模板浏览。'
 
 export const GUEST_LIBRARY_ACCESS_COPY =
-  '作品库会集中承接你自己的生成结果、筛选记录和详情查看。当前先保留试填入口，不直接暴露个人资产。'
+  '作品库会集中承接你自己的生成结果、筛选记录和详情查看。当前先保留试填入口，不直接暴露账号结果。'
 
 export const GUEST_FAVORITES_ACCESS_COPY =
   '收藏、历史结果和二次复用都属于个人沉淀区。先登录，后面这页再承接你的个人结果。'

@@ -55,6 +55,32 @@ export interface PromptTemplateSearchableItem extends PromptTemplateItem {
   searchText: string
 }
 
+export function createPromptTemplateSearchText(item: PromptTemplateItem) {
+  return [item.title, item.summary, item.category, item.tags.join(' '), item.prompt].join(' ').toLowerCase()
+}
+
+export function ensureSearchablePromptTemplate(item: PromptTemplateItem | PromptTemplateSearchableItem): PromptTemplateSearchableItem {
+  if ('searchText' in item && typeof item.searchText === 'string') {
+    return item
+  }
+
+  return {
+    ...item,
+    searchText: createPromptTemplateSearchText(item),
+  }
+}
+
+export function mergeOfficialPromptTemplates(
+  staticTemplates: PromptTemplateSearchableItem[],
+  serverTemplates: PromptTemplateSearchableItem[],
+) {
+  const serverIds = new Set(serverTemplates.map((item) => item.id))
+  return [
+    ...serverTemplates,
+    ...staticTemplates.filter((item) => !serverIds.has(item.id)),
+  ]
+}
+
 function createWuyoscarLocalImage(filename: string) {
   return `/prompt-library-source/wuyoscar/${filename}`
 }
@@ -2449,10 +2475,6 @@ function resolvePromptLibraryTemplateImages(templates: PromptTemplateItem[]) {
   })
 }
 
-function createPromptTemplateSearchText(item: PromptTemplateItem) {
-  return [item.title, item.summary, item.category, item.tags.join(' '), item.prompt].join(' ').toLowerCase()
-}
-
 export const PROMPT_LIBRARY_TEMPLATES: PromptTemplateSearchableItem[] =
   resolvePromptLibraryTemplateImages(
     dedupeOfficialTemplatesByPreview(
@@ -2460,10 +2482,7 @@ export const PROMPT_LIBRARY_TEMPLATES: PromptTemplateSearchableItem[] =
         (item) => isApprovedOfficialTemplate(item) && (item.source !== 'official' || hasMeaningfulPromptTemplateContent(item)),
       ),
     ),
-  ).map((item) => ({
-    ...item,
-    searchText: createPromptTemplateSearchText(item),
-  }))
+  ).map(ensureSearchablePromptTemplate)
 
 export const PROMPT_LIBRARY_CATEGORIES = ['全部', ...new Set(PROMPT_LIBRARY_TEMPLATES.map((item) => item.category))] as const
 

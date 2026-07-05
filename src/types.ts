@@ -7,12 +7,10 @@ export type WorkbenchReturnSource = Exclude<GalleryView, 'workbench'>
 export type AuthRedirectView = 'workbench' | 'plan' | 'library' | 'promptLibrary'
 export type AuthReturnSource = Exclude<AuthRedirectView, 'workbench'>
 export type AuthViewMode = 'login' | 'register' | 'recover'
-export type RechargeReturnView = 'workbench' | 'plan'
 export type RechargePaymentMethod = 'wechat' | 'alipay' | 'card'
 export type RechargeFlowStatus = 'idle' | 'processing' | 'success' | 'failed' | 'cancelled'
-export type LibraryViewMode = 'all' | 'favorites'
+export type LibraryViewMode = 'all' | 'favorites' | 'trash'
 export type WorkbenchAccessState = 'guest' | 'no_balance' | 'ready'
-export type RechargeResultStatus = 'idle' | 'success' | 'failed' | 'interrupted'
 export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask'
 export type BuiltInApiProvider = 'openai' | 'fal'
 export type ApiProvider = BuiltInApiProvider | string
@@ -37,6 +35,8 @@ export interface ModelSku {
   supportsMask?: boolean
   maxOutputCount: number
   maxSupportedLongEdge?: number | null
+  maxBaseGenerationLongEdge?: number | null
+  maxDeliveryLongEdge?: number | null
 }
 
 export interface PlatformCapabilities {
@@ -50,6 +50,8 @@ export interface PlatformCapabilities {
     defaultModelSku: string
     maxOutputCount: number
     maxSupportedLongEdge?: number | null
+    maxBaseGenerationLongEdge?: number | null
+    maxDeliveryLongEdge?: number | null
     supportsEdit: boolean
     supportsMask: boolean
     supportsAsyncTasks: boolean
@@ -184,6 +186,9 @@ export interface ServerPersistedImageOutput {
   storageKey?: string
   mimeType?: string
   byteSize?: number
+  storageStatus?: 'active' | 'pending_delete' | 'deleted' | 'purge_failed'
+  deletedAt?: string | null
+  purgeAfter?: string | null
 }
 
 export interface OwnerImageShare {
@@ -518,20 +523,14 @@ export interface AccountState {
 }
 
 export interface BillingState {
-  lastRechargeAmount: number | null
-  lastRechargeStatus: RechargeResultStatus
-  lastRechargeAt: number | null
-  lastRechargeErrorMessage?: string | null
   pendingRechargeAmount: number | null
-  selectedPaymentMethod: RechargePaymentMethod
   rechargeFlowStatus: RechargeFlowStatus
-  rechargeReturnView: RechargeReturnView
   rechargeHistory: Array<{
     id: string
     amount: number
     status: Extract<RechargeFlowStatus, 'success' | 'failed' | 'cancelled'>
     paymentMethod: RechargePaymentMethod
-    channel?: 'recharge_code' | 'mock_payment'
+    channel?: 'recharge_code'
     code?: string
     createdAt: number
     balanceAfter?: number
@@ -676,7 +675,7 @@ export interface TaskRecord {
     requestedTier: '1K' | '2K' | '4K'
     requestedRatio: string
     baseSize: string
-    baseRatio: '1:1' | '3:2' | '2:3'
+    baseRatio: string
     strategy: 'direct' | 'upscale' | 'crop_then_upscale' | 'pad_then_upscale'
     deliveryLabel: string
   }
@@ -696,6 +695,12 @@ export interface TaskRecord {
     taskId?: string
     outputIndex: number
   }>
+  /** 作品库状态：正常 / 回收站 */
+  libraryState?: 'active' | 'trashed'
+  /** 进入回收站时间 */
+  libraryDeletedAt?: number | null
+  /** 预计永久清理时间 */
+  libraryPurgeAfter?: number | null
   /** 流式生成的中间步骤图片 id 列表，仅失败时保留供排查/下载 */
   streamPartialImageIds?: string[]
   /** API 返回的原始图片 HTTP URL（非 base64 时记录） */

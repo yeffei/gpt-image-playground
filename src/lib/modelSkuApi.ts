@@ -55,6 +55,12 @@ function parseModelSku(value: unknown): ModelSku | null {
     maxSupportedLongEdge: typeof value.maxSupportedLongEdge === 'number' && Number.isFinite(value.maxSupportedLongEdge)
       ? Math.max(1, Math.trunc(value.maxSupportedLongEdge))
       : null,
+    maxBaseGenerationLongEdge: typeof value.maxBaseGenerationLongEdge === 'number' && Number.isFinite(value.maxBaseGenerationLongEdge)
+      ? Math.max(1, Math.trunc(value.maxBaseGenerationLongEdge))
+      : null,
+    maxDeliveryLongEdge: typeof value.maxDeliveryLongEdge === 'number' && Number.isFinite(value.maxDeliveryLongEdge)
+      ? Math.max(1, Math.trunc(value.maxDeliveryLongEdge))
+      : null,
   }
 }
 

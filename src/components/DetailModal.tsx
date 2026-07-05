@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
-import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, stopRunningTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey, retryTask, isTaskVisibleForAccount } from '../store'
+import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, restoreTaskFromTrash, stopRunningTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey, retryTask, isTaskVisibleForAccount } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useTooltip } from '../hooks/useTooltip'
@@ -11,7 +11,13 @@ import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { getFailureDisplay, getPublicTaskResultView, SERVER_IMAGE_INTERRUPTED_MESSAGE, STOPPED_GENERATION_MESSAGE } from '../lib/taskResultDisplay'
 import { getOutputResolutionWarning } from '../lib/outputResolutionQuality'
 import { getInspirationEligibilityMessage, getInspirationStatusBadge, getInspirationStatusMessage } from '../lib/inspirationDisplay'
-import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
+import {
+  buildDefaultInspirationCaption as buildSharedDefaultInspirationCaption,
+  buildDefaultInspirationTitle as buildSharedDefaultInspirationTitle,
+  inferInspirationCategory as inferSharedInspirationCategory,
+  normalizeInspirationDraftText,
+} from '../../server/src/inspirationDraft'
+import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, RestoreIcon, TrashIcon } from './icons'
 import type { InspirationEligibility, InspirationPostStatus, InspirationPostSummary, OwnerImageShare } from '../types'
 
 import ViewportTooltip from './ViewportTooltip'
@@ -27,155 +33,16 @@ const INSPIRATION_CATEGORY_OPTIONS = [
   '信息图解',
 ] as const
 
-const DEFAULT_INSPIRATION_TITLE_BY_CATEGORY: Record<string, string> = {
-  '海报插画': '海报视觉',
-  '人像摄影': '人像作品',
-  '产品静物': '产品静物',
-  '空间氛围': '空间作品',
-  '品牌广告': '品牌视觉',
-  'UI / 社媒视觉': '界面视觉',
-  '角色设定': '角色设定',
-  '信息图解': '信息图解',
-}
-
-function normalizeInspirationDraftText(value: string) {
-  return value.replace(/\s+/g, ' ').trim()
-}
-
 function inferInspirationCategory(prompt: string) {
-  const text = prompt.toLowerCase()
-  if (!text) return '品牌广告'
-  if (/(infographic|diagram|breakdown|timeline|annotation|step by step|guide|图解|信息图|拆解|流程图|时间线)/.test(text)) return '信息图解'
-  if (/(character|avatar|mecha|concept art|turnaround|costume sheet|角色|设定图|人设)/.test(text)) return '角色设定'
-  if (/(ui\b|interface|dashboard|screen|app design|social post|feed|landing page|mobile app|界面|社媒|运营视觉)/.test(text)) return 'UI / 社媒视觉'
-  if (/(interior|room|space|architecture|hotel|cafe|storefront|living room|kitchen|bedroom|galaxy|nebula|planet|cosmic|室内|空间|建筑|场景)/.test(text)) return '空间氛围'
-  if (/(packshot|still life|product photo|perfume|watch|bottle|jar|shoe|bag|chair|sofa|产品|静物|材质|包装)/.test(text)) return '产品静物'
-  if (/(portrait|selfie|face|beauty shot|fashion model|woman|man|人物摄影|人像|模特|肖像)/.test(text)) return '人像摄影'
-  if (/(campaign|brand|advertising|kv|key visual|beauty campaign|品牌|广告|海报主视觉)/.test(text)) return '品牌广告'
-  return '海报插画'
+  return inferSharedInspirationCategory(prompt, prompt, '海报插画')
 }
 
-function pickPromptSignals(prompt: string, patterns: Array<[RegExp, string]>) {
-  const matched: string[] = []
-  for (const [pattern, label] of patterns) {
-    if (pattern.test(prompt) && !matched.includes(label)) matched.push(label)
-  }
-  return matched
-}
-
-function extractInspirationTitleParts(prompt: string, category: string) {
-  const text = normalizeInspirationDraftText(prompt).toLowerCase()
-  const spaces = pickPromptSignals(text, [
-    [/(bedroom|master bedroom|卧室)/, '卧室'],
-    [/(living room|lounge|客厅)/, '客厅'],
-    [/(dining room|餐厅)/, '餐厅'],
-    [/(kitchen|厨房)/, '厨房'],
-    [/(bathroom|卫浴)/, '卫浴'],
-    [/(hotel|酒店)/, '酒店空间'],
-    [/(cafe|coffee shop|咖啡馆)/, '咖啡馆'],
-    [/(store|retail|showroom|门店|展厅)/, '展厅空间'],
-    [/(office|workspace|studio|办公室|工作室)/, '工作室'],
-  ])
-  const styles = pickPromptSignals(text, [
-    [/(wabi-sabi|侘寂)/, '侘寂'],
-    [/(japandi|日式混搭)/, '日式混搭'],
-    [/(minimal|minimalist|极简)/, '极简'],
-    [/(nordic|scandinavian|北欧)/, '北欧'],
-    [/(modern|contemporary|现代)/, '现代'],
-    [/(vintage|复古)/, '复古'],
-    [/(luxury|luxurious|高定|奢感)/, '高定'],
-    [/(warm wood|walnut|oak|wooden|木质|胡桃木|原木)/, '暖木'],
-    [/(neutral|beige|cream|米色|中性色)/, '中性色'],
-  ])
-  const materials = pickPromptSignals(text, [
-    [/(warm wood|walnut|oak|wooden|木质|胡桃木|原木)/, '暖木'],
-  ])
-
-  if (category === '空间氛围') {
-    return {
-      subject: spaces[0] ?? '空间',
-      style: styles[0] ?? '',
-      material: materials[0] ?? '',
-    }
-  }
-
-  if (category === '产品静物') {
-    return {
-      subject: pickPromptSignals(text, [
-        [/(perfume|香水)/, '香水'],
-        [/(watch|腕表|手表)/, '腕表'],
-        [/(bottle|jar|瓶装|罐装)/, '器物'],
-        [/(chair|sofa|table|bed|家具|椅子|沙发|床)/, '家具'],
-      ])[0] ?? '产品',
-      style: styles[0] ?? '',
-      material: materials[0] ?? '',
-    }
-  }
-
-  if (category === '品牌广告') {
-    return {
-      subject: pickPromptSignals(text, [
-        [/(campaign|brand|advertising|广告|品牌)/, '品牌'],
-        [/(poster|kv|key visual|海报)/, '海报'],
-        [/(beauty|cosmetic|makeup|护肤|彩妆)/, '美妆'],
-      ])[0] ?? '品牌',
-      style: styles[0] ?? '',
-      material: materials[0] ?? '',
-    }
-  }
-
-  return {
-    subject: DEFAULT_INSPIRATION_TITLE_BY_CATEGORY[category] ?? '灵感作品',
-    style: styles[0] ?? '',
-    material: materials[0] ?? '',
-  }
-}
-
-function buildDefaultInspirationDraftTitle(category: string, processingLabel: string, prompt: string) {
-  const { subject, style, material } = extractInspirationTitleParts(prompt, category)
-  const prefix = [style, material].filter(Boolean).slice(0, 2).join('')
-  return prefix ? `${prefix}${subject}` : subject
+export function buildDefaultInspirationDraftTitle(category: string, processingLabel: string, prompt: string) {
+  return buildSharedDefaultInspirationTitle(category, prompt, prompt)
 }
 
 function buildDefaultInspirationDraftCaption(prompt: string, category: string, processingLabel: string) {
-  const normalized = normalizeInspirationDraftText(prompt)
-  if (normalized) {
-    const text = normalized.toLowerCase()
-    const spaces = pickPromptSignals(text, [
-      [/(bedroom|master bedroom|卧室)/, '卧室场景'],
-      [/(living room|lounge|客厅)/, '客厅场景'],
-      [/(dining room|餐厅)/, '餐厨空间'],
-      [/(kitchen|厨房)/, '厨房空间'],
-      [/(bathroom|卫浴)/, '卫浴空间'],
-      [/(hotel|酒店)/, '酒店空间'],
-      [/(cafe|coffee shop|cafe interior|咖啡馆)/, '咖啡馆空间'],
-      [/(store|retail|showroom|门店|展厅)/, '商业展示空间'],
-      [/(office|workspace|studio|办公室|工作室)/, '工作空间'],
-    ])
-    const styles = pickPromptSignals(text, [
-      [/(wabi-sabi|侘寂)/, '侘寂气质'],
-      [/(japandi|日式混搭)/, '日式混搭风格'],
-      [/(minimal|minimalist|极简)/, '极简表达'],
-      [/(nordic|scandinavian|北欧)/, '北欧氛围'],
-      [/(modern|contemporary|现代)/, '现代感'],
-      [/(vintage|复古)/, '复古调性'],
-      [/(luxury|luxurious|高定|奢感)/, '精致质感'],
-      [/(warm wood|walnut|oak|wooden|木质|胡桃木|原木)/, '暖木材质'],
-      [/(neutral|beige|cream|米色|中性色)/, '中性色层次'],
-    ])
-    const lighting = pickPromptSignals(text, [
-      [/(natural light|sunlight|daylight|自然光|日光)/, '自然光线'],
-      [/(soft light|柔光)/, '柔和光感'],
-      [/(cinematic|电影感)/, '镜头氛围'],
-    ])
-
-    const fragments = [...spaces, ...styles, ...lighting].slice(0, 3)
-    if (fragments.length > 0) {
-      return `${fragments.join('，')}，适合${category}方向参考。`
-    }
-    return `${processingLabel}创作，适合${category}方向展示。`
-  }
-  return processingLabel ? `${processingLabel}创作，${category}方向。` : `${category}方向创作。`
+  return buildSharedDefaultInspirationCaption(category, processingLabel, prompt, prompt)
 }
 
 function buildInspirationPostSummaryFromExistingPost(
@@ -946,12 +813,17 @@ export default function DetailModal() {
 
   const handleDelete = () => {
     const isRunningTask = task.status === 'running'
+    const isTrashedTask = task.libraryState === 'trashed'
     setDetailTaskId(null)
     setConfirmDialog({
-      title: isRunningTask ? '停止生成' : '删除记录',
-      message: isRunningTask ? '这条任务仍在生成中。停止后会保留当前记录，但不会继续等待服务端结果。' : '确定要删除这条记录吗？关联的图片资源也会被清理（如果没有其他任务引用）。',
-      confirmText: isRunningTask ? '停止生成' : undefined,
-      action: () => (isRunningTask ? stopRunningTask(task) : removeTask(task)),
+      title: isRunningTask ? '停止生成' : isTrashedTask ? '恢复作品' : '移入回收站',
+      message: isRunningTask
+        ? '这条任务仍在生成中。停止后会保留当前记录，但不会继续等待服务端结果。'
+        : isTrashedTask
+        ? '确定恢复这条作品吗？恢复后会重新出现在作品库。'
+        : '确定将这条作品移入回收站吗？回收站保留 7 天，期间可以恢复。',
+      confirmText: isRunningTask ? '停止生成' : isTrashedTask ? '恢复作品' : '移入回收站',
+      action: () => (isRunningTask ? stopRunningTask(task) : isTrashedTask ? restoreTaskFromTrash(task) : removeTask(task)),
     })
   }
 
@@ -2015,8 +1887,12 @@ export default function DetailModal() {
               onClick={handleDelete}
               className="col-span-3 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-500/20 transition text-sm font-medium whitespace-nowrap"
             >
-              <TrashIcon className="w-4 h-4 flex-shrink-0" />
-              {task.status === 'running' ? '停止生成' : '删除记录'}
+              {task.status === 'running' || task.libraryState !== 'trashed' ? (
+                <TrashIcon className="w-4 h-4 flex-shrink-0" />
+              ) : (
+                <RestoreIcon className="w-4 h-4 flex-shrink-0" />
+              )}
+              {task.status === 'running' ? '停止生成' : task.libraryState === 'trashed' ? '恢复作品' : '移入回收站'}
             </button>
             <button
               onClick={handleToggleFavorite}

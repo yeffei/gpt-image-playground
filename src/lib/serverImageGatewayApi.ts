@@ -32,10 +32,49 @@ type ServerImageTaskSubmitResult = {
 type ServerImageTaskStatusResult = ImageGatewayResult & {
   ok?: boolean
   status: ServerImageTaskStatus
+  mode?: string
+  requestId?: string
+  prompt?: string
+  negativePrompt?: string
+  params?: ImageGatewayRequest['params']
+  createdAt?: string
+  finishedAt?: string
   error?: {
     message?: string
     requestId?: string
     failureKind?: ImageGatewayFailureKind | 'cancelled' | string
+  }
+}
+
+export type ServerImageTaskListItem = ServerImageTaskStatusResult & {
+  taskId: string
+}
+
+export type ServerLibraryOutputListItem = {
+  id: string
+  taskId: string
+  outputIndex: number
+  url: string
+  storageProvider?: string
+  storageKey?: string
+  mimeType?: string
+  byteSize?: number
+  width?: number | null
+  height?: number | null
+  storageStatus?: 'active' | 'pending_delete' | 'deleted' | 'purge_failed'
+  deletedAt?: string | null
+  purgeAfter?: string | null
+  task: {
+    id: string
+    status: ServerImageTaskStatus
+    modelSku: string
+    requestId?: string | null
+    routeId?: string | null
+    upstreamModel?: string | null
+    prompt: string
+    negativePrompt?: string
+    createdAt: string
+    finishedAt?: string | null
   }
 }
 
@@ -235,6 +274,34 @@ export async function pollServerImageTask(
   throw timeoutError
 }
 
+export async function getServerImageTask(
+  taskId: string,
+  sessionToken?: string | null,
+  options: { requestId?: string } = {},
+): Promise<ServerImageTaskStatusResult> {
+  const response = await fetch(getServerImageTaskPath(taskId), {
+    method: 'GET',
+    headers: {
+      ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+    },
+    cache: 'no-store',
+  })
+
+  if (!response.ok) {
+    const payload = await readServerGatewayErrorPayload(response)
+    const gatewayError = new ServerImageGatewayError(payload?.error?.message || await getApiErrorMessage(response))
+    gatewayError.status = response.status
+    gatewayError.requestId = payload?.error?.requestId || options.requestId
+    gatewayError.failureKind = payload?.error?.failureKind ?? classifyGatewayFailure({
+      status: response.status,
+      message: gatewayError.message,
+    })
+    throw gatewayError
+  }
+
+  return await response.json() as ServerImageTaskStatusResult
+}
+
 export async function cancelServerImageTask(taskId: string, sessionToken?: string | null): Promise<{ ok: boolean; taskId: string; status: string; cancelled: boolean }> {
   const response = await fetch(getServerImageTaskPath(taskId, 'cancel'), {
     method: 'POST',
@@ -252,6 +319,146 @@ export async function cancelServerImageTask(taskId: string, sessionToken?: strin
   }
 
   return await response.json() as { ok: boolean; taskId: string; status: string; cancelled: boolean }
+}
+
+export async function deleteServerImageTask(
+  taskId: string,
+  sessionToken?: string | null,
+): Promise<{ ok: boolean; taskId: string; deleted: boolean }> {
+  const response = await fetch(getServerImageTaskPath(taskId), {
+    method: 'DELETE',
+    headers: {
+      ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+    },
+    cache: 'no-store',
+  })
+
+  if (!response.ok) {
+    const payload = await readServerGatewayErrorPayload(response)
+    throw new ServerImageGatewayError(
+      payload?.error?.message || await getApiErrorMessage(response),
+    )
+  }
+
+  return await response.json() as { ok: boolean; taskId: string; deleted: boolean }
+}
+
+export async function deleteAllCompletedServerImageTasks(
+  sessionToken?: string | null,
+): Promise<{ ok: boolean; deletedCount: number; skippedRunningCount: number }> {
+  const response = await fetch(getServerImageTaskPath(), {
+    method: 'DELETE',
+    headers: {
+      ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+    },
+    cache: 'no-store',
+  })
+
+  if (!response.ok) {
+    const payload = await readServerGatewayErrorPayload(response)
+    throw new ServerImageGatewayError(
+      payload?.error?.message || await getApiErrorMessage(response),
+    )
+  }
+
+  return await response.json() as { ok: boolean; deletedCount: number; skippedRunningCount: number }
+}
+
+export async function listServerImageTasks(
+  sessionToken?: string | null,
+  options: { limit?: number } = {},
+): Promise<ServerImageTaskListItem[]> {
+  const limit = typeof options.limit === 'number' && Number.isFinite(options.limit)
+    ? Math.min(Math.max(Math.trunc(options.limit), 1), 100)
+    : 50
+  const response = await fetch(`${getServerImageTaskPath()}?limit=${encodeURIComponent(String(limit))}`, {
+    method: 'GET',
+    headers: {
+      ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+    },
+    cache: 'no-store',
+  })
+
+  if (!response.ok) {
+    const payload = await readServerGatewayErrorPayload(response)
+    throw new ServerImageGatewayError(
+      payload?.error?.message || await getApiErrorMessage(response),
+    )
+  }
+
+  const payload = await response.json() as { ok?: boolean; tasks?: ServerImageTaskListItem[] }
+  return Array.isArray(payload.tasks) ? payload.tasks : []
+}
+
+export async function listServerLibraryOutputs(
+  sessionToken?: string | null,
+  options: { limit?: number; status?: 'active' | 'trashed' } = {},
+): Promise<ServerLibraryOutputListItem[]> {
+  const limit = typeof options.limit === 'number' && Number.isFinite(options.limit)
+    ? Math.min(Math.max(Math.trunc(options.limit), 1), 200)
+    : 100
+  const status = options.status === 'trashed' ? 'trashed' : 'active'
+  const response = await fetch(`${getServerImageGatewayPath().replace(/\/generate$/, '/outputs')}?limit=${encodeURIComponent(String(limit))}&status=${encodeURIComponent(status)}`, {
+    method: 'GET',
+    headers: {
+      ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+    },
+    cache: 'no-store',
+  })
+
+  if (!response.ok) {
+    const payload = await readServerGatewayErrorPayload(response)
+    throw new ServerImageGatewayError(
+      payload?.error?.message || await getApiErrorMessage(response),
+    )
+  }
+
+  const payload = await response.json() as { ok?: boolean; outputs?: ServerLibraryOutputListItem[] }
+  return Array.isArray(payload.outputs) ? payload.outputs : []
+}
+
+export async function deleteServerLibraryOutput(
+  outputId: string,
+  sessionToken?: string | null,
+): Promise<{ ok: boolean; outputId: string; deleted: boolean; deletedAt?: string; purgeAfter?: string; storageStatus?: string }> {
+  const response = await fetch(`${getServerImageGatewayPath().replace(/\/generate$/, '/outputs')}/${encodeURIComponent(outputId)}`, {
+    method: 'DELETE',
+    headers: {
+      ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+    },
+    cache: 'no-store',
+  })
+
+  if (!response.ok) {
+    const payload = await readServerGatewayErrorPayload(response)
+    throw new ServerImageGatewayError(
+      payload?.error?.message || await getApiErrorMessage(response),
+    )
+  }
+
+  return await response.json() as { ok: boolean; outputId: string; deleted: boolean; deletedAt?: string; purgeAfter?: string; storageStatus?: string }
+}
+
+export async function restoreServerLibraryOutput(
+  outputId: string,
+  sessionToken?: string | null,
+): Promise<{ ok: boolean; outputId: string; restored: boolean; storageStatus?: string }> {
+  const response = await fetch(`${getServerImageGatewayPath().replace(/\/generate$/, '/outputs')}/${encodeURIComponent(outputId)}/restore`, {
+    method: 'POST',
+    headers: {
+      ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+    },
+    cache: 'no-store',
+  })
+
+  if (!response.ok) {
+    const payload = await readServerGatewayErrorPayload(response)
+    throw new ServerImageGatewayError(
+      payload?.error?.message || await getApiErrorMessage(response),
+    )
+  }
+
+  return await response.json() as { ok: boolean; outputId: string; restored: boolean; storageStatus?: string }
 }
 
 export type CompletedImageTaskRecordRequest = {

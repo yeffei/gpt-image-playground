@@ -42,16 +42,16 @@
 .prompt-library-title {
   margin: 0;
   color: var(--text);
-  font-size: 30px;
+  font-size: var(--frontend-page-title-size);
   font-weight: 830;
-  letter-spacing: -0.04em;
+  letter-spacing: var(--frontend-title-tracking);
 }
 
 .prompt-library-subtitle {
   margin: 0;
   color: var(--muted);
-  font-size: 14px;
-  line-height: 1.7;
+  font-size: var(--frontend-body-size);
+  line-height: 1.65;
 }
 
 .prompt-library-count-badge {
@@ -533,10 +533,10 @@
 .prompt-library-card h3 {
   margin: 0;
   color: var(--text);
-  font-size: 17px;
+  font-size: var(--frontend-card-title-size);
   font-weight: 780;
-  letter-spacing: -0.03em;
-  line-height: 1.2;
+  letter-spacing: 0;
+  line-height: 1.3;
 }
 
 .prompt-library-card p {
@@ -711,9 +711,9 @@
 .prompt-library-empty-state h3 {
   margin: 0;
   color: var(--text);
-  font-size: 22px;
+  font-size: var(--frontend-section-title-size);
   font-weight: 800;
-  letter-spacing: -0.04em;
+  letter-spacing: var(--frontend-title-tracking);
 }
 
 .prompt-library-empty-state p {
@@ -739,9 +739,9 @@
 .prompt-library-access-card h3 {
   margin: 0;
   color: var(--text);
-  font-size: 22px;
+  font-size: var(--frontend-section-title-size);
   font-weight: 800;
-  letter-spacing: -0.04em;
+  letter-spacing: var(--frontend-title-tracking);
 }
 
 .prompt-library-access-card p {
@@ -894,8 +894,8 @@
 
 .prompt-library-topbar .prompt-library-subtitle {
   max-width: 680px;
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.58;
 }
 
 .prompt-library-category-chip {
@@ -1322,5 +1322,80 @@
     min-height: 28px;
     padding: 0 7px;
     font-size: 9.5px;
+  }
+}
+
+/* Stage B compact text pass. */
+.prompt-library-count-badge,
+.prompt-library-flow-strip span,
+.prompt-library-tab-chip,
+.prompt-library-category-chip,
+.prompt-library-featured-badge,
+.prompt-library-owned-badge,
+.prompt-library-preview-meta span,
+.prompt-library-pagination-meta,
+.prompt-library-pagination-meta span {
+  font-size: 11.5px;
+  line-height: 1.3;
+  letter-spacing: 0;
+}
+
+.prompt-library-tab-chip strong {
+  font-size: 13px;
+}
+
+.prompt-library-tab-chip span,
+.prompt-library-card-primary,
+.prompt-library-card-secondary,
+.prompt-library-danger,
+.prompt-library-topbar-actions .prompt-library-secondary {
+  font-size: 11px;
+  line-height: 1.2;
+  letter-spacing: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.prompt-library-card-actions {
+  gap: 5px;
+}
+
+.prompt-library-card-primary,
+.prompt-library-card-secondary,
+.prompt-library-danger {
+  padding-inline: 7px;
+}
+
+.prompt-library-category-chip {
+  min-height: 30px;
+}
+
+.prompt-library-card-category,
+.prompt-library-card-ratio {
+  font-size: 11px !important;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+.prompt-library-card-primary {
+  flex-grow: 1.35;
+}
+
+.prompt-library-card-secondary,
+.prompt-library-danger {
+  flex-grow: 0.95;
+}
+
+@media (max-width: 720px) {
+  .prompt-library-flow-strip span,
+  .prompt-library-category-chip,
+  .prompt-library-tab-chip span {
+    font-size: 11px;
+  }
+
+  .prompt-library-topbar .prompt-library-subtitle,
+  .prompt-library-search-field input,
+  .prompt-library-sort-field select {
+    font-size: 12px;
   }
 }

@@ -98,23 +98,23 @@
 .library-view-title {
   margin: 0;
   color: var(--text);
-  font-size: 24px;
+  font-size: var(--frontend-page-title-size);
   font-weight: 830;
-  letter-spacing: -0.04em;
+  letter-spacing: var(--frontend-title-tracking);
 }
 
 .library-view-subtitle {
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: var(--frontend-body-size);
+  line-height: 1.6;
 }
 
 .library-view-inline-note {
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: var(--frontend-body-size);
+  line-height: 1.6;
 }
 
 .library-account-scope {
@@ -181,9 +181,9 @@
 .library-access-card h2 {
   margin: 0;
   color: var(--text);
-  font-size: 24px;
+  font-size: var(--frontend-page-title-size);
   font-weight: 820;
-  letter-spacing: -0.03em;
+  letter-spacing: var(--frontend-title-tracking);
 }
 
 .library-access-card p {
@@ -247,7 +247,7 @@
 }
 
 .library-view-title {
-  font-size: 22px;
+  font-size: 24px;
   line-height: 1.1;
 }
 
@@ -345,4 +345,33 @@
   height: 24px;
   min-width: 24px;
   min-height: 24px;
+}
+
+/* Stage B compact text pass. */
+.library-view-count-badge,
+.library-tab-chip,
+.library-results-head .studio-filterbar-compact .studio-search-input,
+.library-results-head .studio-filterbar-compact .studio-filter-select,
+.library-results-head .studio-filterbar-compact .studio-favorite-toggle {
+  font-size: 12px;
+  letter-spacing: 0;
+}
+
+.library-results-head .studio-filterbar-compact .studio-favorite-toggle {
+  min-width: 88px;
+}
+
+.task-grid-library .prototype-result-card .prototype-result-summary,
+.task-grid-library .prototype-result-meta span,
+.task-grid-library .task-image-preview-button {
+  font-size: 11px !important;
+  line-height: 1.35;
+  letter-spacing: 0 !important;
+}
+
+.task-grid-library .prototype-result-card .task-mini-action {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
 }

@@ -343,6 +343,10 @@ function buildTestApp(db: Pool) {
     expiredShareCleanupLimit: 5000,
     expiredShareCleanupIntervalMinutes: 360,
     expiredShareCleanupRunOnStartup: true,
+    trashedOutputCleanupEnabled: false,
+    trashedOutputCleanupLimit: 5000,
+    trashedOutputCleanupIntervalMinutes: 360,
+    trashedOutputCleanupRunOnStartup: true,
   })
 }
 

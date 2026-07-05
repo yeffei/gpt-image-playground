@@ -4,6 +4,7 @@ import {
   getInitialSizePickerMode,
   getNearestAllowedSizeTier,
   getSizePickerModeLabels,
+  getTierResolutionHint,
 } from './SizePickerModal'
 
 describe('SizePickerModal sizing rules', () => {
@@ -21,5 +22,10 @@ describe('SizePickerModal sizing rules', () => {
       hasSupportedSizeList: false,
       isAutoSize: false,
     })).toBe('ratio')
+  })
+
+  it('shows the concrete output size for each tier under the active ratio', () => {
+    expect(getTierResolutionHint('2K', '16:9')).toBe('16:9 · 2560x1440')
+    expect(getTierResolutionHint('4K', '9:16')).toBe('9:16 · 2160x3840')
   })
 })

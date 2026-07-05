@@ -42,7 +42,6 @@ const Lightbox = lazy(() => import('./components/Lightbox'))
 const SettingsModal = lazy(() => import('./components/SettingsModal'))
 const MaskEditorModal = lazy(() => import('./components/MaskEditorModal'))
 const ImageContextMenu = lazy(() => import('./components/ImageContextMenu'))
-const SupportPromptModal = lazy(() => import('./components/SupportPromptModal'))
 const TemplatesPreview = lazy(() => import('./components/TemplatesPreview'))
 const PublicShareView = lazy(() => import('./components/PublicShareView'))
 const InspirationView = lazy(() => import('./components/InspirationView'))
@@ -111,7 +110,6 @@ export default function App() {
   const detailTaskId = useStore((s) => s.detailTaskId)
   const lightboxImageId = useStore((s) => s.lightboxImageId)
   const maskEditorImageId = useStore((s) => s.maskEditorImageId)
-  const supportPromptOpen = useStore((s) => s.supportPromptOpen)
   useGlobalClickSuppression()
 
   useEffect(() => {
@@ -207,8 +205,6 @@ export default function App() {
           group: '系统',
           items: [
             { key: 'plan', label: '计划与额度', meta: `${account.balance} 点`, tooltip: '查看计划与额度', icon: 'wallet', onClick: () => setGalleryView('plan') },
-            { key: 'help', label: '帮助', meta: '快捷说明', tooltip: '查看帮助说明', icon: 'help', onClick: () => setShowHelp(true) },
-            { key: 'settings', label: '设置', meta: '偏好配置', tooltip: '打开设置', icon: 'settings', onClick: () => setShowSettings(true) },
           ],
         },
       ]
@@ -224,7 +220,7 @@ export default function App() {
         {
           group: '账号',
           items: [
-            { key: 'auth', label: '登录 / 注册', meta: '同步资产', tooltip: '打开登录与注册页', icon: 'account', tone: 'account', onClick: () => openAuthView({ mode: 'login', redirectTo: authRedirectTarget }) },
+            { key: 'auth', label: '登录 / 注册', meta: '继续创作', tooltip: '打开登录与注册页', icon: 'account', tone: 'account', onClick: () => openAuthView({ mode: 'login', redirectTo: authRedirectTarget }) },
           ],
         },
       ]
@@ -317,7 +313,7 @@ export default function App() {
   if (inspirationTopicCategory) {
     return (
       <>
-        <Header />
+        <Header onOpenHelp={() => setShowHelp(true)} onOpenSettings={() => setShowSettings(true)} />
         <main data-home-main data-drag-select-surface className="prototype-page-shell prototype-page-shell-public">
           <div className="prototype-stage prototype-stage-public">
             <div className="prototype-main">
@@ -334,7 +330,7 @@ export default function App() {
   if (isInspirationLatestRoute) {
     return (
       <>
-        <Header />
+        <Header onOpenHelp={() => setShowHelp(true)} onOpenSettings={() => setShowSettings(true)} />
         <main data-home-main data-drag-select-surface className="prototype-page-shell prototype-page-shell-public">
           <div className="prototype-stage prototype-stage-public">
             <div className="prototype-main">
@@ -351,7 +347,7 @@ export default function App() {
   if (inspirationPostId) {
     return (
       <>
-        <Header />
+        <Header onOpenHelp={() => setShowHelp(true)} onOpenSettings={() => setShowSettings(true)} />
         <main data-home-main data-drag-select-surface className="prototype-page-shell prototype-page-shell-public">
           <div className="prototype-stage prototype-stage-public">
             <div className="prototype-main">
@@ -367,7 +363,7 @@ export default function App() {
 
   return (
     <>
-      <Header />
+      <Header onOpenHelp={() => setShowHelp(true)} onOpenSettings={() => setShowSettings(true)} />
       <main
         data-home-main
         data-drag-select-surface
@@ -428,7 +424,7 @@ export default function App() {
                   <section className="prototype-prompt-panel">
                       <div className="prototype-panel-head">
                         <h3>输入</h3>
-                        <p className="prototype-panel-note">本地保存，生成中勿刷新。</p>
+                        <p className="prototype-panel-note">当前设备草稿会保留，生成中勿刷新。</p>
                       </div>
                       <div className="production-composer-slot">
                         <InputBar />
@@ -451,13 +447,13 @@ export default function App() {
                                 <span className="studio-access-eyebrow">访客创作流</span>
                                 <span className="studio-topbar-title">{GUEST_VIEW_YOUR_RESULTS_TITLE}</span>
                                 <p className="studio-topbar-subtitle">
-                                  先把提示词、参数和参考图整理好。登录后直接提交生成，结果会继续回到这里。
+                                  先把提示词、参数和参考图整理好。登录后再正式提交生成，个人结果会回到这里集中查看。
                                 </p>
                               </div>
                               <div className="studio-access-steps" aria-label="访客使用路径">
                                 <span>1 先在左侧试填工作台</span>
                                 <span>2 需要时去模板库挑方向</span>
-                                <span>3 登录后提交并保存结果</span>
+                                <span>3 登录后提交并查看账号结果</span>
                               </div>
                               <div className="studio-access-actions">
                                 <button type="button" className="studio-access-primary" onClick={openLoginDialog}>
@@ -474,7 +470,7 @@ export default function App() {
                                   浏览提示词库
                                 </button>
                               </div>
-                              <p className="studio-access-footnote">当前草稿会保留在本地，登录不会打断填写节奏。</p>
+                              <p className="studio-access-footnote">当前设备草稿会保留，登录不会打断填写节奏。</p>
                             </div>
                           )}
                         </section>
@@ -493,7 +489,7 @@ export default function App() {
                   fallback={
                     <LazyViewFallback
                       title="正在载入收藏与复用..."
-                      description="首次进入工作台时会短暂准备这部分个人资产内容。"
+                      description="首次进入工作台时会短暂准备这部分个人结果内容。"
                     />
                   }
                 >
@@ -526,11 +522,6 @@ export default function App() {
       {showHelp && (
         <Suspense fallback={<LazyModalFallback title="正在打开帮助..." description="首次打开时会短暂载入帮助内容。" />}>
           <HelpModal onClose={() => setShowHelp(false)} />
-        </Suspense>
-      )}
-      {supportPromptOpen && (
-        <Suspense fallback={<LazyModalFallback title="正在打开辅助提示..." description="首次打开时会短暂准备辅助内容。" />}>
-          <SupportPromptModal />
         </Suspense>
       )}
       <Toast />

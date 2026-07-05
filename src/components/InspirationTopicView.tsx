@@ -39,7 +39,7 @@ export function InspirationTopicContent(props: {
 
   return (
     <section className="w-full" aria-label="灵感专题">
-      <section className="prototype-canvas-panel mx-auto w-full max-w-[1440px] rounded-[30px] px-5 py-5 lg:px-7 lg:py-7">
+      <section className="prototype-canvas-panel mx-auto w-full rounded-[30px] px-5 py-5 lg:px-7 lg:py-7">
         <div className="prototype-canvas-content space-y-8">
           <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -55,36 +55,41 @@ export function InspirationTopicContent(props: {
               </div>
             </div>
 
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
-              <div className="rounded-[32px] border border-white/70 bg-[linear-gradient(135deg,rgba(255,255,255,0.95),rgba(247,250,252,0.9))] p-5 shadow-[0_24px_70px_rgba(15,23,42,0.08)] sm:p-6 lg:p-7">
-                <div className="space-y-4">
-                  <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-                    <span>专题精选</span>
-                    {topic ? <span className="rounded-full bg-slate-900 px-3 py-1 text-white tracking-normal">{topic.category}</span> : null}
-                  </div>
-                  <h1 className="max-w-[18ch] text-[clamp(2.2rem,4vw,4rem)] font-semibold leading-[0.98] tracking-[-0.05em] text-slate-950">
-                    {topic?.title ?? '灵感专题'}
-                  </h1>
-                  <p className="max-w-[58ch] text-sm leading-7 text-slate-600">
-                    {topic?.description ?? '专题内容正在整理中。'}
-                  </p>
-                  {topic ? (
-                    <div className="flex flex-wrap gap-2.5">
-                      {topic.highlights.map((item) => (
-                        <span key={item} className="rounded-full border border-slate-200/80 bg-white/84 px-3.5 py-1.5 text-xs font-medium text-slate-700">
-                          {item}
-                        </span>
-                      ))}
+            <section className="overflow-hidden rounded-[24px] border border-white/70 bg-[linear-gradient(135deg,rgba(255,255,255,0.97),rgba(248,250,252,0.94))] shadow-[0_14px_34px_rgba(15,23,42,0.05)]">
+              <div className="space-y-3 p-4 lg:p-4.5">
+                <div className="grid gap-3 xl:grid-cols-[minmax(0,0.8fr)_minmax(380px,0.55fr)] xl:items-end">
+                  <div className="min-w-0 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2 text-[12px] font-semibold text-slate-500">
+                      <span>专题精选</span>
+                      {topic ? <span className="rounded-full bg-slate-900 px-2.5 py-0.5 text-[11px] text-white tracking-normal">{topic.category}</span> : null}
                     </div>
-                  ) : null}
+                    <div className="flex flex-wrap items-end gap-x-5 gap-y-2">
+                      <h1 className="text-[clamp(1.65rem,2.4vw,2.45rem)] font-semibold leading-none text-slate-950">
+                        {topic?.title ?? '灵感专题'}
+                      </h1>
+                      <p className="max-w-[42ch] pb-0.5 text-[13px] leading-5 text-slate-600">
+                        {topic?.description ?? '专题内容正在整理中。'}
+                      </p>
+                    </div>
+                    {topic ? (
+                      <div className="flex flex-wrap gap-2">
+                        {topic.highlights.map((item) => (
+                          <span key={item} className="rounded-full border border-slate-200/80 bg-white/90 px-2.5 py-0.5 text-[11px] font-medium text-slate-700">
+                            {item}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+
                   {topic ? (
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-wrap gap-1.5 xl:justify-end">
                       {relatedTopics.map((item) => (
                         <button
                           key={item.category}
                           type="button"
                           onClick={() => props.onOpenTopic(item.category)}
-                          className="rounded-full border border-slate-200/80 bg-white/84 px-3.5 py-1.5 text-xs font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
+                          className="rounded-full border border-slate-200/80 bg-white/88 px-2.5 py-0.5 text-[11px] font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
                         >
                           切到 {item.category}
                         </button>
@@ -92,34 +97,13 @@ export function InspirationTopicContent(props: {
                     </div>
                   ) : null}
                 </div>
-              </div>
 
-              <div className="grid gap-3 rounded-[32px] border border-white/70 bg-white/76 p-5 shadow-[0_24px_70px_rgba(15,23,42,0.06)] sm:p-6">
-                <div className="space-y-1">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">专题焦点</div>
-                  <div className="text-lg font-semibold tracking-[-0.03em] text-slate-900">
-                    {topic?.focus ?? '专题内容正在整理'}
-                  </div>
-                </div>
-                <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
-                  <div className="rounded-[22px] border border-slate-200/70 bg-white px-4 py-4">
-                    <div className="text-[11px] font-semibold text-slate-500">专题作品</div>
-                    <div className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-slate-900">{props.state.totalCount}</div>
-                    <div className="mt-1 text-xs leading-5 text-slate-500">当前分类公开作品</div>
-                  </div>
-                  <div className="rounded-[22px] border border-slate-200/70 bg-white px-4 py-4">
-                    <div className="text-[11px] font-semibold text-slate-500">推荐阅读</div>
-                    <div className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-slate-900">{topic ? '3' : '4'}</div>
-                    <div className="mt-1 text-xs leading-5 text-slate-500">可切换到其他专题</div>
-                  </div>
-                  <div className="rounded-[22px] border border-slate-200/70 bg-white px-4 py-4">
-                    <div className="text-[11px] font-semibold text-slate-500">阅读方式</div>
-                    <div className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-slate-900">3 列</div>
-                    <div className="mt-1 text-xs leading-5 text-slate-500">保持快速扫读</div>
-                  </div>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-white/70 pt-2 text-[12px] text-slate-600">
+                  <span className="font-medium text-slate-900">专题焦点：{topic?.focus ?? '专题内容正在整理'}</span>
+                  <span>专题作品 {props.state.totalCount}</span>
                 </div>
               </div>
-            </div>
+            </section>
           </div>
 
           {props.loading ? (
@@ -135,7 +119,7 @@ export function InspirationTopicContent(props: {
           ) : (
             <div className="space-y-4">
               <div className="flex items-center justify-between gap-3">
-                <h2 className="text-xl font-semibold tracking-[-0.03em] text-slate-900">专题作品</h2>
+                <h2 className="frontend-section-title text-slate-900">专题作品</h2>
                 <div className="text-xs text-slate-500">按专题分类聚合展示</div>
               </div>
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -154,7 +138,7 @@ export function InspirationTopicContent(props: {
                         <span>{item.category}</span>
                         <span>{item.processingLabel}</span>
                       </div>
-                      <div className="line-clamp-2 text-[15px] font-medium leading-6 text-slate-900 sm:text-base">{item.title ?? '灵感作品'}</div>
+                      <div className="frontend-card-title line-clamp-2 text-slate-900">{item.title ?? '灵感作品'}</div>
                       <div className="text-xs leading-5 text-slate-500">
                         {[item.authorName, formatInspirationPublishedDate(item.publishedAt), `${item.viewCount ?? 0} 次浏览`].filter(Boolean).join(' · ') || '公开展示'}
                       </div>

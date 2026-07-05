@@ -22,7 +22,7 @@ export function parseArgs(argv, env = process.env) {
     adminUrl: env.RECHARGE_CODE_ADMIN_URL || joinUrl(baseUrl, '/api/admin/recharge-codes'),
     redeemUrl: env.RECHARGE_CODE_REDEEM_URL || joinUrl(baseUrl, '/api/recharge-codes/redeem'),
     token: env.RECHARGE_CODE_ADMIN_TOKEN || env.IMAGE_GATEWAY_ADMIN_TOKEN || '',
-    userId: env.RECHARGE_CODE_VERIFY_USER_ID || 'verify-user',
+    sessionToken: env.RECHARGE_CODE_VERIFY_SESSION_TOKEN || '',
     points: 30,
     code: '',
     source: 'local-e2e',
@@ -43,7 +43,7 @@ export function parseArgs(argv, env = process.env) {
     if (arg === '--admin-url' && next) options.adminUrl = next
     if (arg === '--redeem-url' && next) options.redeemUrl = next
     if (arg === '--token' && next) options.token = next
-    if (arg === '--user-id' && next) options.userId = next
+    if (arg === '--session-token' && next) options.sessionToken = next
     if (arg === '--points' && next) options.points = Number(next)
     if (arg === '--code' && next) options.code = next
     if (arg === '--source' && next) options.source = next
@@ -60,8 +60,8 @@ export function validateOptions(options) {
   if (!options.token.trim()) {
     throw new Error('Missing RECHARGE_CODE_ADMIN_TOKEN, IMAGE_GATEWAY_ADMIN_TOKEN, or --token')
   }
-  if (!options.userId.trim()) {
-    throw new Error('Missing --user-id')
+  if (!options.sessionToken.trim()) {
+    throw new Error('Missing RECHARGE_CODE_VERIFY_SESSION_TOKEN or --session-token')
   }
   if (!Number.isFinite(options.points) || options.points <= 0) {
     throw new Error('Missing valid --points <30|100|300>')
@@ -82,7 +82,7 @@ export async function redeemRechargeCode(options, code, fetchImpl = fetch) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-User-Id': options.userId.trim(),
+      Authorization: `Bearer ${options.sessionToken.trim()}`,
     },
     body: JSON.stringify({ code }),
   })
@@ -136,7 +136,6 @@ export async function verifyRechargeCodeFlow(options, fetchImpl = fetch, now = D
   return {
     ok: true,
     code,
-    userId: options.userId.trim(),
     points: options.points,
     admin: adminResult.payload,
     redeem: redeemed,
@@ -147,7 +146,6 @@ export function formatVerifySummary(result) {
   return [
     'Recharge code flow verified',
     `Code: ${result.code}`,
-    `User: ${result.userId}`,
     `Points: ${result.points}`,
     `Balance: ${result.redeem.balanceBefore} -> ${result.redeem.balanceAfter}`,
     `Redeemed at: ${result.redeem.redeemedAt || '-'}`,
@@ -156,15 +154,15 @@ export function formatVerifySummary(result) {
 
 export function printHelp() {
   console.log(`Usage:
-  npm run recharge-codes:verify -- --points 30 --user-id mock-tester
-  npm run recharge-codes:verify -- --base-url http://127.0.0.1:4175 --points 100 --user-id mock-tester
+  npm run recharge-codes:verify -- --points 30 --session-token <token>
+  npm run recharge-codes:verify -- --base-url http://127.0.0.1:4175 --points 100 --session-token <token>
 
 Options:
   --base-url <url>              Base app URL, default http://127.0.0.1:4175
   --admin-url <endpoint>        Override admin endpoint URL
   --redeem-url <endpoint>       Override redeem endpoint URL
   --token <token>               Admin token; defaults to RECHARGE_CODE_ADMIN_TOKEN or IMAGE_GATEWAY_ADMIN_TOKEN
-  --user-id <id>                Redeeming user id, default verify-user
+  --session-token <token>       Real user session token for redeem verification
   --points <30|100|300>         Recharge-code points, default 30
   --code <code>                 Optional explicit verification code
   --source <text>               Optional source label, default local-e2e

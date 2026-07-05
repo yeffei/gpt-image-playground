@@ -52,7 +52,7 @@ describe('modelSkus', () => {
     })
   })
 
-  it('limits wildcard model sizes by the route-backed max supported edge', () => {
+  it('limits wildcard model sizes by the delivery-backed max supported edge', () => {
     expect(normalizeParamsForModelSku({
       ...DEFAULT_PARAMS,
       size: '3840x2160',
@@ -68,8 +68,32 @@ describe('modelSkus', () => {
       supportsMask: true,
       maxOutputCount: 4,
       maxSupportedLongEdge: 2560,
+      maxDeliveryLongEdge: 2560,
     }])).toMatchObject({
       size: '2560x1440',
+    })
+  })
+
+  it('prefers the new delivery edge when it is higher than the native edge', () => {
+    expect(normalizeParamsForModelSku({
+      ...DEFAULT_PARAMS,
+      size: '3840x2160',
+    }, 'route-backed-delivery-4k', [{
+      id: 'route-backed-delivery-4k',
+      label: 'Route Backed Delivery 4K',
+      enabled: true,
+      routeIds: [],
+      defaultParams: { ...DEFAULT_PARAMS, size: '2560x1440' },
+      supportedSizes: ['*'],
+      supportedQualities: ['auto'],
+      supportsEdit: true,
+      supportsMask: true,
+      maxOutputCount: 4,
+      maxSupportedLongEdge: 2560,
+      maxBaseGenerationLongEdge: 2560,
+      maxDeliveryLongEdge: 3840,
+    }])).toMatchObject({
+      size: '3840x2160',
     })
   })
 
@@ -269,9 +293,15 @@ describe('modelSkus', () => {
           supportsEdit: false,
           supportsMask: true,
           maxOutputCount: 2,
+          maxSupportedLongEdge: 2560,
+          maxBaseGenerationLongEdge: 2560,
+          maxDeliveryLongEdge: 3840,
         }],
         defaultModelSku: 'cap-fast',
         maxOutputCount: 2,
+        maxSupportedLongEdge: 2560,
+        maxBaseGenerationLongEdge: 2560,
+        maxDeliveryLongEdge: 3840,
         supportsEdit: true,
         supportsMask: true,
         supportsAsyncTasks: true,
@@ -300,6 +330,8 @@ describe('modelSkus', () => {
           supportsEdit: false,
           supportsMask: true,
           maxOutputCount: 2,
+          maxBaseGenerationLongEdge: 2560,
+          maxDeliveryLongEdge: 3840,
         }),
       ],
       defaultModelSkuId: 'cap-fast',

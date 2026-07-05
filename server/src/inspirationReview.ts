@@ -1,5 +1,12 @@
 import { reviewShareContent } from './shareModeration.js'
 import type { Db } from './db.js'
+import {
+  buildDefaultInspirationCaption as buildSharedDefaultInspirationCaption,
+  buildDefaultInspirationTitle as buildSharedDefaultInspirationTitle,
+  inferInspirationCategory,
+} from './inspirationDraft.js'
+
+export { buildDefaultInspirationCaption, inferInspirationCategory } from './inspirationDraft.js'
 
 export type InspirationAiDecision =
   | 'publish'
@@ -69,169 +76,6 @@ type FeaturedCurationRow = {
 }
 
 const FEATURED_SLOT_COUNT = 4
-
-const DEFAULT_TITLE_BY_CATEGORY: Record<string, string> = {
-  '海报插画': '海报视觉',
-  '人像摄影': '人像作品',
-  '产品静物': '产品静物',
-  '空间氛围': '空间作品',
-  '品牌广告': '品牌视觉',
-  'UI / 社媒视觉': '界面视觉',
-  '角色设定': '角色设定',
-  '信息图解': '信息图解',
-}
-
-const CATEGORY_RULES: Array<{
-  category: string
-  patterns: Array<[RegExp, number]>
-}> = [
-  {
-    category: 'UI / 社媒视觉',
-    patterns: [
-      [/(ui|user interface|dashboard|app ui|landing page|interface|modal|popup|弹窗|界面|后台|控制台|工作台|仪表盘|社媒|feed|story|mobile app|web app)/, 7],
-      [/(prototype|wireframe|design system|组件库|运营视觉|信息面板)/, 5],
-    ],
-  },
-  {
-    category: '信息图解',
-    patterns: [
-      [/(infographic|info graphic|guide|diagram|chart|flowchart|timeline|comparison|step-by-step|图解|图鉴|信息图|流程图|时间线|对比图|说明书|步骤图)/, 7],
-      [/(数据看板|知识卡|拆解|评分卡|cost breakdown|species guide|field guide)/, 5],
-    ],
-  },
-  {
-    category: '空间氛围',
-    patterns: [
-      [/(interior|architecture|architectural|bedroom|living room|dining room|kitchen|bathroom|hotel|cafe|coffee shop|restaurant|retail|showroom|office|workspace|studio|space|room|室内|空间|卧室|客厅|餐厅|厨房|卫浴|酒店|咖啡馆|门店|展厅|办公室|工作室)/, 7],
-      [/(natural light|daylight|ambient light|天光|自然光|场景氛围|软装)/, 4],
-    ],
-  },
-  {
-    category: '人像摄影',
-    patterns: [
-      [/(portrait|editorial portrait|fashion portrait|beauty shot|model test|headshot|selfie|人物写真|人像|模特|肖像|美妆摄影|时尚摄影)/, 7],
-      [/(skin texture|cinematic portrait|close-up face|肤质|脸部特写)/, 4],
-    ],
-  },
-  {
-    category: '角色设定',
-    patterns: [
-      [/(character design|character sheet|concept art|avatar|hero character|npc|mecha|fantasy character|角色设定|角色三视图|设定稿|人设|机甲|世界观)/, 7],
-      [/(weapon|armor|costume sheet|服装设定|武器设定)/, 4],
-    ],
-  },
-  {
-    category: '产品静物',
-    patterns: [
-      [/(product shot|still life|packshot|bottle|jar|perfume|watch|sneaker|chair|sofa|table|packaging|器物|静物|产品图|香水|腕表|鞋履|家具|包装)/, 7],
-      [/(material study|reflection control|材质表现|棚拍产品)/, 4],
-    ],
-  },
-  {
-    category: '品牌广告',
-    patterns: [
-      [/(brand campaign|campaign|advertising|ad campaign|key visual|kv|commercial poster|branding|品牌广告|品牌主视觉|商业海报|广告片|campaign visual)/, 7],
-      [/(logo presence|slogan|品牌发布|广告传播)/, 4],
-    ],
-  },
-  {
-    category: '海报插画',
-    patterns: [
-      [/(illustration|illustrated poster|poster design|concept poster|art poster|digital painting|海报插画|插画海报|概念海报|艺术海报|绘画)/, 7],
-      [/(surreal|fantasy poster|拼贴海报|视觉叙事)/, 4],
-    ],
-  },
-]
-
-function normalizeDraftText(value?: string | null) {
-  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().toLowerCase() : ''
-}
-
-function pickPromptSignals(prompt: string, patterns: Array<[RegExp, string]>) {
-  const matched: string[] = []
-  for (const [pattern, label] of patterns) {
-    if (pattern.test(prompt) && !matched.includes(label)) matched.push(label)
-  }
-  return matched
-}
-
-export function inferInspirationCategory(
-  prompt?: string | null,
-  revisedPrompt?: string | null,
-  fallbackCategory = '海报插画',
-) {
-  const promptText = normalizeDraftText(revisedPrompt) || normalizeDraftText(prompt)
-  if (!promptText) return fallbackCategory
-
-  let bestCategory = fallbackCategory
-  let bestScore = 0
-
-  for (const rule of CATEGORY_RULES) {
-    let score = 0
-    for (const [pattern, weight] of rule.patterns) {
-      if (pattern.test(promptText)) score += weight
-    }
-    if (score > bestScore) {
-      bestScore = score
-      bestCategory = rule.category
-    }
-  }
-
-  return bestScore > 0 ? bestCategory : fallbackCategory
-}
-
-function extractTitleParts(promptText: string, category: string) {
-  const spaces = pickPromptSignals(promptText, [
-    [/(bedroom|master bedroom|卧室)/, '卧室'],
-    [/(living room|lounge|客厅)/, '客厅'],
-    [/(dining room|餐厅)/, '餐厅'],
-    [/(kitchen|厨房)/, '厨房'],
-    [/(bathroom|卫浴)/, '卫浴'],
-    [/(hotel|酒店)/, '酒店空间'],
-    [/(cafe|coffee shop|咖啡馆)/, '咖啡馆'],
-    [/(store|retail|showroom|门店|展厅)/, '展厅空间'],
-    [/(office|workspace|studio|办公室|工作室)/, '工作室'],
-  ])
-  const styles = pickPromptSignals(promptText, [
-    [/(wabi-sabi|侘寂)/, '侘寂'],
-    [/(japandi|日式混搭)/, '日式混搭'],
-    [/(minimal|minimalist|极简)/, '极简'],
-    [/(nordic|scandinavian|北欧)/, '北欧'],
-    [/(modern|contemporary|现代)/, '现代'],
-    [/(vintage|复古)/, '复古'],
-    [/(luxury|luxurious|高定|奢感)/, '高定'],
-    [/(warm wood|walnut|oak|wooden|木质|胡桃木|原木)/, '暖木'],
-    [/(neutral|beige|cream|米色|中性色)/, '中性色'],
-  ])
-  const materials = pickPromptSignals(promptText, [
-    [/(warm wood|walnut|oak|wooden|木质|胡桃木|原木)/, '暖木'],
-  ])
-
-  if (category === '空间氛围') {
-    const subject = spaces[0] ?? '空间'
-    const style = styles[0] ?? ''
-    const material = materials[0] ?? ''
-    return { subject, style, material }
-  }
-  if (category === '产品静物') {
-    const subject = pickPromptSignals(promptText, [
-      [/(perfume|香水)/, '香水'],
-      [/(watch|腕表|手表)/, '腕表'],
-      [/(bottle|jar|瓶装|罐装)/, '器物'],
-      [/(chair|sofa|table|bed|家具|椅子|沙发|床)/, '家具'],
-    ])[0] ?? '产品'
-    return { subject, style: styles[0] ?? '', material: materials[0] ?? '' }
-  }
-  if (category === '品牌广告') {
-    const subject = pickPromptSignals(promptText, [
-      [/(campaign|brand|advertising|广告|品牌)/, '品牌'],
-      [/(poster|kv|key visual|海报)/, '海报'],
-      [/(beauty|cosmetic|makeup|护肤|彩妆)/, '美妆'],
-    ])[0] ?? '品牌'
-    return { subject, style: styles[0] ?? '', material: materials[0] ?? '' }
-  }
-  return { subject: DEFAULT_TITLE_BY_CATEGORY[category] ?? '灵感作品', style: styles[0] ?? '', material: materials[0] ?? '' }
-}
 
 function clampScore(value: number) {
   return Math.max(0, Math.min(99, Math.round(value)))
@@ -636,10 +480,7 @@ export function buildDefaultInspirationTitle(
   prompt?: string | null,
   revisedPrompt?: string | null,
 ) {
-  const promptText = normalizeDraftText(revisedPrompt) || normalizeDraftText(prompt)
-  const { subject, style, material } = extractTitleParts(promptText, category)
-  const prefix = [style, material].filter(Boolean).slice(0, 2).join('')
-  return prefix ? `${prefix}${subject}` : subject
+  return buildSharedDefaultInspirationTitle(category, prompt, revisedPrompt)
 }
 
 function mapDecisionToStatus(decision: InspirationAiDecision) {

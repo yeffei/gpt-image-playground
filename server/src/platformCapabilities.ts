@@ -38,6 +38,8 @@ export type PlatformCapabilitiesModel = {
   supportsMask: boolean
   maxOutputCount: number
   maxSupportedLongEdge: number | null
+  maxBaseGenerationLongEdge: number | null
+  maxDeliveryLongEdge: number | null
 }
 
 export type PlatformCapabilitiesPayload = {
@@ -51,6 +53,8 @@ export type PlatformCapabilitiesPayload = {
     defaultModelSku: string
     maxOutputCount: number
     maxSupportedLongEdge: number | null
+    maxBaseGenerationLongEdge: number | null
+    maxDeliveryLongEdge: number | null
     supportsEdit: boolean
     supportsMask: boolean
     supportsAsyncTasks: boolean
@@ -97,7 +101,17 @@ function normalizeMaxSupportedLongEdge(value: unknown) {
   return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : null
 }
 
+function deriveMaxDeliveryLongEdge(maxBaseGenerationLongEdge: number | null) {
+  if (typeof maxBaseGenerationLongEdge !== 'number' || !Number.isFinite(maxBaseGenerationLongEdge) || maxBaseGenerationLongEdge <= 0) {
+    return null
+  }
+  if (maxBaseGenerationLongEdge >= 2560) return 3840
+  if (maxBaseGenerationLongEdge >= 1536) return 2560
+  return null
+}
+
 export function serializeCapabilitiesModel(row: ModelRow): PlatformCapabilitiesModel {
+  const maxBaseGenerationLongEdge = normalizeMaxSupportedLongEdge(row.max_route_supported_long_edge)
   return {
     id: row.id,
     label: row.display_name,
@@ -116,7 +130,9 @@ export function serializeCapabilitiesModel(row: ModelRow): PlatformCapabilitiesM
     supportsEdit: row.supports_edit,
     supportsMask: row.supports_mask,
     maxOutputCount: MAX_OUTPUT_COUNT,
-    maxSupportedLongEdge: normalizeMaxSupportedLongEdge(row.max_route_supported_long_edge),
+    maxSupportedLongEdge: maxBaseGenerationLongEdge,
+    maxBaseGenerationLongEdge,
+    maxDeliveryLongEdge: deriveMaxDeliveryLongEdge(maxBaseGenerationLongEdge),
   }
 }
 
@@ -135,6 +151,14 @@ export function buildPlatformCapabilitiesPayload(models: PlatformCapabilitiesMod
       maxSupportedLongEdge: models.reduce<number | null>((max, model) => {
         if (typeof model.maxSupportedLongEdge !== 'number') return max
         return max == null ? model.maxSupportedLongEdge : Math.max(max, model.maxSupportedLongEdge)
+      }, null),
+      maxBaseGenerationLongEdge: models.reduce<number | null>((max, model) => {
+        if (typeof model.maxBaseGenerationLongEdge !== 'number') return max
+        return max == null ? model.maxBaseGenerationLongEdge : Math.max(max, model.maxBaseGenerationLongEdge)
+      }, null),
+      maxDeliveryLongEdge: models.reduce<number | null>((max, model) => {
+        if (typeof model.maxDeliveryLongEdge !== 'number') return max
+        return max == null ? model.maxDeliveryLongEdge : Math.max(max, model.maxDeliveryLongEdge)
       }, null),
       supportsEdit: models.some((model) => model.supportsEdit),
       supportsMask: models.some((model) => model.supportsMask),

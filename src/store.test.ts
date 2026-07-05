@@ -119,7 +119,7 @@ vi.mock('./lib/serverImageGatewayApi', () => ({
         requiresMask: false,
         routes: [],
       },
-    })),
+  })),
   pollServerImageTask: vi.fn(async () => ({
     images: ['data:image/png;base64,recovered-server-gateway'],
     actualParams: { size: '2048x2048' },
@@ -135,7 +135,13 @@ vi.mock('./lib/serverImageGatewayApi', () => ({
       ledgerId: 'ledger-recovered-1',
     },
   })),
+  getServerImageTask: vi.fn(async () => {
+    throw new Error('not mocked')
+  }),
   cancelServerImageTask: vi.fn(async () => ({ ok: true, taskId: 'server-task-1', status: 'cancelled', cancelled: true })),
+  deleteServerImageTask: vi.fn(async () => ({ ok: true, taskId: 'server-task-1', deleted: true })),
+  deleteAllCompletedServerImageTasks: vi.fn(async () => ({ ok: true, deletedCount: 1, skippedRunningCount: 0 })),
+  listServerImageTasks: vi.fn(async () => []),
   isServerImageGatewayUnavailableError: vi.fn(() => false),
 }))
 vi.mock('./lib/serverImageGatewayConfig', () => ({
@@ -166,7 +172,6 @@ vi.mock('./lib/rechargeCodeApi', () => {
   return {
     RechargeCodeApiUnavailableError,
     RechargeCodeApiError,
-    canUseLocalRechargeCodeFallback: vi.fn(() => false),
     redeemRechargeCodeWithApi: vi.fn(),
   }
 })
@@ -201,11 +206,11 @@ import { clearAgentConversations, clearImages, clearTasks, getAllAgentConversati
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { callImageApi } from './lib/api'
 import { fetchPublicModelSkus } from './lib/modelSkuApi'
-import { callServerImageGateway, cancelServerImageTask, pollServerImageTask } from './lib/serverImageGatewayApi'
+import { callServerImageGateway, cancelServerImageTask, deleteAllCompletedServerImageTasks, deleteServerImageTask, getServerImageTask, listServerImageTasks, pollServerImageTask } from './lib/serverImageGatewayApi'
 import { isClientImageGatewayFallbackEnabled, isServerImageGatewayEnabled } from './lib/serverImageGatewayConfig'
 import { AuthApiError, getAccountLedger, getCurrentAuthAccount, getMyReferralInfo } from './lib/authApi'
-import { RechargeCodeApiError, RechargeCodeApiUnavailableError, canUseLocalRechargeCodeFallback, redeemRechargeCodeWithApi } from './lib/rechargeCodeApi'
-import { cleanStaleAgentInputDrafts, deleteAgentRoundFromConversation, editOutputs, estimateBillingPoints, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, isTaskVisibleForAccount, markInterruptedOpenAIRunningTasks, mergeNegativePromptValue, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, retryTask, reuseConfig, submitAgentMessage, submitTask, useStore } from './store'
+import { RechargeCodeApiError, redeemRechargeCodeWithApi } from './lib/rechargeCodeApi'
+import { cleanStaleAgentInputDrafts, clearData, deleteAgentRoundFromConversation, editOutputs, estimateBillingPoints, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, isTaskVisibleForAccount, markInterruptedOpenAIRunningTasks, mergeNegativePromptValue, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeMultipleTasks, removeTask, retryTask, reuseConfig, submitAgentMessage, submitTask, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
@@ -296,13 +301,8 @@ describe('mask draft lifecycle in store actions', () => {
       settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key' },
       account: { userId: 'test-user', isLoggedIn: true, displayName: 'Tester', balance: 20, planName: '体验版' },
       billing: {
-        lastRechargeAmount: null,
-        lastRechargeStatus: 'idle',
-        lastRechargeAt: null,
         pendingRechargeAmount: 30,
-        selectedPaymentMethod: 'wechat',
         rechargeFlowStatus: 'idle',
-        rechargeReturnView: 'plan',
         rechargeHistory: [],
         usageHistory: [],
       },
@@ -722,13 +722,8 @@ describe('mask draft lifecycle in store actions', () => {
       selectedModelSkuId: 'gpt-image-2-fast',
       account: { userId: 'test-user', isLoggedIn: true, displayName: 'Tester', balance: 20, planName: '体验版' },
       billing: {
-        lastRechargeAmount: null,
-        lastRechargeStatus: 'idle',
-        lastRechargeAt: null,
         pendingRechargeAmount: 30,
-        selectedPaymentMethod: 'wechat',
         rechargeFlowStatus: 'idle',
-        rechargeReturnView: 'plan',
         rechargeHistory: [],
         usageHistory: [],
       },
@@ -772,13 +767,8 @@ describe('mask draft lifecycle in store actions', () => {
       selectedModelSkuId: 'gpt-image-2-fast',
       account: { userId: 'test-user', isLoggedIn: true, displayName: 'Tester', balance: 20, planName: '体验版' },
       billing: {
-        lastRechargeAmount: null,
-        lastRechargeStatus: 'idle',
-        lastRechargeAt: null,
         pendingRechargeAmount: 30,
-        selectedPaymentMethod: 'wechat',
         rechargeFlowStatus: 'idle',
-        rechargeReturnView: 'plan',
         rechargeHistory: [],
         usageHistory: [],
       },
@@ -1221,13 +1211,8 @@ describe('agent conversation persistence', () => {
         planName: '个人标准版',
       },
       billing: {
-        lastRechargeAmount: 30,
-        lastRechargeStatus: 'success',
-        lastRechargeAt: 1000,
         pendingRechargeAmount: 30,
-        selectedPaymentMethod: 'wechat',
         rechargeFlowStatus: 'idle',
-        rechargeReturnView: 'plan',
         rechargeHistory: [{
           id: 'backend-recharge-a',
           amount: 30,
@@ -1251,6 +1236,59 @@ describe('agent conversation persistence', () => {
     })
     expect(migrated.billing?.rechargeHistory).toEqual([])
     expect(migrated.billing?.usageHistory).toEqual([])
+  })
+
+  it('drops persisted local mock login snapshot without auth token during migration', () => {
+    const migrated = migratePersistedState({
+      settings: { ...DEFAULT_SETTINGS },
+      account: {
+        userId: 'mock-local-user',
+        isLoggedIn: true,
+        displayName: 'Local User',
+        balance: 30,
+        planName: '体验版',
+      },
+      billing: {
+        pendingRechargeAmount: 30,
+        rechargeFlowStatus: 'idle',
+        rechargeHistory: [{
+          id: 'local-recharge-a',
+          amount: 30,
+          status: 'success',
+          paymentMethod: 'wechat',
+          createdAt: 1000,
+          balanceAfter: 30,
+        }],
+        usageHistory: [],
+      },
+      accountProfiles: {
+        'mock-local-user': {
+          account: {
+            userId: 'mock-local-user',
+            isLoggedIn: false,
+            displayName: 'Local User',
+            balance: 30,
+            planName: '体验版',
+          },
+          billing: {
+            rechargeHistory: [{ id: 'local-recharge-a', amount: 30 }],
+            usageHistory: [],
+          },
+          updatedAt: 1000,
+        },
+      },
+    }) as { account?: Record<string, unknown>; billing?: { rechargeHistory?: unknown[]; usageHistory?: unknown[] }; accountProfiles?: Record<string, unknown> }
+
+    expect(migrated.account).toMatchObject({
+      userId: null,
+      isLoggedIn: false,
+      displayName: '访客',
+      balance: 0,
+      planName: '未开通',
+    })
+    expect(migrated.billing?.rechargeHistory).toEqual([])
+    expect(migrated.billing?.usageHistory).toEqual([])
+    expect(migrated.accountProfiles).toBeUndefined()
   })
 })
 
@@ -2160,13 +2198,8 @@ describe('agent context for removed outputs', () => {
       authSessionToken: 'backend-token',
       account: { userId: 'test-user', isLoggedIn: true, displayName: 'Tester', balance: 20, planName: '体验版' },
       billing: {
-        lastRechargeAmount: null,
-        lastRechargeStatus: 'idle',
-        lastRechargeAt: null,
         pendingRechargeAmount: 30,
-        selectedPaymentMethod: 'wechat',
         rechargeFlowStatus: 'idle',
-        rechargeReturnView: 'plan',
         rechargeHistory: [],
         usageHistory: [],
       },
@@ -2197,6 +2230,120 @@ describe('agent context for removed outputs', () => {
     expect(state.billing.usageHistory).toHaveLength(0)
     expect(state.showToast).toHaveBeenCalledWith('已停止等待，可重新生成', 'info')
   })
+
+  it('deletes a completed server-backed task from the backend before removing the local record', async () => {
+    vi.mocked(isServerImageGatewayEnabled).mockReturnValue(true)
+    vi.mocked(deleteServerImageTask).mockResolvedValueOnce({ ok: true, taskId: 'server-task-delete', deleted: true })
+    const completedTask = task({
+      id: 'local-task-delete',
+      ownerUserId: 'test-user',
+      serverImageTaskId: 'server-task-delete',
+      outputImages: ['output-a'],
+      status: 'done',
+    })
+    useStore.setState({
+      authSessionToken: 'backend-token',
+      account: { userId: 'test-user', isLoggedIn: true, displayName: 'Tester', balance: 20, planName: '体验版' },
+      tasks: [completedTask],
+      showToast: vi.fn(),
+    })
+
+    await removeTask(completedTask)
+
+    expect(deleteServerImageTask).toHaveBeenCalledWith('server-task-delete', 'backend-token')
+    expect(useStore.getState().tasks).toHaveLength(0)
+    expect(useStore.getState().showToast).toHaveBeenCalledWith('记录已删除', 'success')
+  })
+
+  it('batch deletion removes completed server tasks and stops running ones', async () => {
+    vi.mocked(isServerImageGatewayEnabled).mockReturnValue(true)
+    vi.mocked(deleteServerImageTask).mockResolvedValueOnce({ ok: true, taskId: 'server-task-batch-done', deleted: true })
+    useStore.setState({
+      authSessionToken: 'backend-token',
+      account: { userId: 'test-user', isLoggedIn: true, displayName: 'Tester', balance: 20, planName: '体验版' },
+      billing: {
+        pendingRechargeAmount: 30,
+        rechargeFlowStatus: 'idle',
+        rechargeHistory: [],
+        usageHistory: [],
+      },
+      tasks: [
+        task({
+          id: 'batch-server-done',
+          ownerUserId: 'test-user',
+          serverImageTaskId: 'server-task-batch-done',
+          outputImages: ['done-output'],
+          status: 'done',
+        }),
+        task({
+          id: 'batch-server-running',
+          ownerUserId: 'test-user',
+          serverImageTaskId: 'server-task-batch-running',
+          status: 'running',
+          error: null,
+          createdAt: 1_000,
+          finishedAt: null,
+          elapsed: null,
+        }),
+      ],
+      selectedTaskIds: ['batch-server-done', 'batch-server-running'],
+      showToast: vi.fn(),
+    })
+
+    await removeMultipleTasks(['batch-server-done', 'batch-server-running'])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(deleteServerImageTask).toHaveBeenCalledWith('server-task-batch-done', 'backend-token')
+    expect(cancelServerImageTask).toHaveBeenCalledWith('server-task-batch-running', 'backend-token')
+    expect(useStore.getState().tasks).toHaveLength(1)
+    expect(useStore.getState().tasks[0]).toMatchObject({
+      id: 'batch-server-running',
+      status: 'error',
+      error: '已停止生成。',
+    })
+    expect(useStore.getState().showToast).toHaveBeenCalledWith('已删除 1 条记录，停止等待 1 条', 'success')
+  })
+
+  it('clearData clears backend task history before wiping local task data', async () => {
+    vi.mocked(isServerImageGatewayEnabled).mockReturnValue(true)
+    vi.mocked(deleteAllCompletedServerImageTasks).mockResolvedValueOnce({
+      ok: true,
+      deletedCount: 2,
+      skippedRunningCount: 0,
+    })
+    useStore.setState({
+      authSessionToken: 'backend-token',
+      account: { userId: 'test-user', isLoggedIn: true, displayName: 'Tester', balance: 20, planName: '体验版' },
+      tasks: [
+        task({
+          id: 'clear-server-done',
+          ownerUserId: 'test-user',
+          serverImageTaskId: 'server-task-clear-done',
+          outputImages: ['clear-output-a'],
+        }),
+        task({
+          id: 'clear-server-running',
+          ownerUserId: 'test-user',
+          serverImageTaskId: 'server-task-clear-running',
+          status: 'running',
+          error: null,
+          createdAt: 1_000,
+          finishedAt: null,
+          elapsed: null,
+        }),
+      ],
+      agentConversations: [agentConversation()],
+      showToast: vi.fn(),
+    })
+
+    await clearData({ clearConfig: false, clearTasks: true })
+
+    expect(cancelServerImageTask).toHaveBeenCalledWith('server-task-clear-running', 'backend-token')
+    expect(deleteAllCompletedServerImageTasks).toHaveBeenCalledWith('backend-token')
+    expect(useStore.getState().tasks).toEqual([])
+    expect(useStore.getState().agentConversations).toEqual([])
+    expect(useStore.getState().showToast).toHaveBeenCalledWith('所选数据已清空', 'success')
+  })
 })
 
 describe('agent batch reference resolution', () => {
@@ -2224,13 +2371,8 @@ describe('agent batch reference resolution', () => {
       }),
       account: { userId: 'test-user', isLoggedIn: true, displayName: 'Tester', balance: 20, planName: '体验版' },
       billing: {
-        lastRechargeAmount: null,
-        lastRechargeStatus: 'idle',
-        lastRechargeAt: null,
         pendingRechargeAmount: 20,
-        selectedPaymentMethod: 'wechat',
         rechargeFlowStatus: 'idle',
-        rechargeReturnView: 'plan',
         rechargeHistory: [],
         usageHistory: [],
       },
@@ -2455,95 +2597,19 @@ describe('workbench return context', () => {
     })
   })
 
-  it('restores local account balance and billing ledger after logout and login', () => {
+  it('does not persist local account side profiles in persisted state', () => {
     useStore.setState({
-      galleryView: 'auth',
-      authRedirectView: 'workbench',
-      accountProfiles: {},
-      billing: {
-        lastRechargeAmount: null,
-        lastRechargeStatus: 'idle',
-        lastRechargeAt: null,
-        lastRechargeErrorMessage: null,
-        pendingRechargeAmount: 30,
-        selectedPaymentMethod: 'wechat',
-        rechargeFlowStatus: 'idle',
-        rechargeReturnView: 'plan',
-        rechargeHistory: [],
-        usageHistory: [],
+      authSessionToken: null,
+      account: {
+        userId: 'mock-local-user',
+        isLoggedIn: true,
+        displayName: 'Local User',
+        balance: 30,
+        planName: '体验版',
       },
-    })
-
-    useStore.getState().completeMockAuth({ displayName: 'Yeffei' })
-    useStore.setState((state) => ({
-      account: { ...state.account, balance: 60 },
       billing: {
-        lastRechargeAmount: 60,
-        lastRechargeStatus: 'success',
-        lastRechargeAt: 1000,
-        lastRechargeErrorMessage: null,
         pendingRechargeAmount: 30,
-        selectedPaymentMethod: 'wechat',
         rechargeFlowStatus: 'idle',
-        rechargeReturnView: 'plan',
-        rechargeHistory: [{
-          id: 'recharge-a',
-          amount: 60,
-          status: 'success',
-          paymentMethod: 'wechat',
-          channel: 'recharge_code',
-          code: 'SST-60-TEST',
-          createdAt: 1000,
-          balanceAfter: 60,
-        }],
-        usageHistory: [],
-      },
-    }))
-    useStore.getState().logout()
-    useStore.setState({ galleryView: 'auth', authRedirectView: 'workbench' })
-    useStore.getState().completeMockAuth({ displayName: 'Yeffei' })
-
-    const state = useStore.getState()
-    expect(state.account).toMatchObject({
-      userId: 'mock-yeffei',
-      isLoggedIn: true,
-      displayName: 'Yeffei',
-      balance: 60,
-    })
-    expect(state.billing.rechargeHistory).toHaveLength(1)
-    expect(state.billing.rechargeHistory[0]).toMatchObject({
-      id: 'recharge-a',
-      balanceAfter: 60,
-    })
-  })
-
-  it('starts a new account with fresh local billing instead of inheriting the previous account ledger', () => {
-    useStore.setState({
-      galleryView: 'auth',
-      authRedirectView: 'workbench',
-      accountProfiles: {},
-      billing: {
-        lastRechargeAmount: null,
-        lastRechargeStatus: 'idle',
-        lastRechargeAt: null,
-        lastRechargeErrorMessage: null,
-        pendingRechargeAmount: 30,
-        selectedPaymentMethod: 'wechat',
-        rechargeFlowStatus: 'idle',
-        rechargeReturnView: 'plan',
-        rechargeHistory: [],
-        usageHistory: [],
-      },
-    })
-
-    useStore.getState().completeMockAuth({ userId: 'user-a', displayName: 'Account A' })
-    useStore.setState((state) => ({
-      account: { ...state.account, balance: 30 },
-      billing: {
-        ...state.billing,
-        lastRechargeAmount: 30,
-        lastRechargeStatus: 'success',
-        lastRechargeAt: 1000,
         rechargeHistory: [{
           id: 'recharge-a',
           amount: 30,
@@ -2554,54 +2620,22 @@ describe('workbench return context', () => {
           createdAt: 1000,
           balanceAfter: 30,
         }],
+        usageHistory: [],
       },
-    }))
-    useStore.getState().logout()
-
-    useStore.setState({ galleryView: 'auth', authRedirectView: 'workbench' })
-    useStore.getState().completeMockAuth({ userId: 'user-b', displayName: 'Account B' })
-
-    let state = useStore.getState()
-    expect(state.account).toMatchObject({
-      userId: 'user-b',
-      balance: 0,
-    })
-    expect(state.billing.rechargeHistory).toHaveLength(0)
-    expect(state.accountProfiles['user-a']?.billing.rechargeHistory[0]).toMatchObject({
-      id: 'recharge-a',
-      balanceAfter: 30,
     })
 
-    useStore.getState().logout()
-    useStore.setState({ galleryView: 'auth', authRedirectView: 'workbench' })
-    useStore.getState().completeMockAuth({ userId: 'user-a', displayName: 'Account A' })
+    const persisted = getPersistedState(useStore.getState()) as { accountProfiles?: Record<string, unknown> }
 
-    state = useStore.getState()
-    expect(state.account).toMatchObject({
-      userId: 'user-a',
-      balance: 30,
-    })
-    expect(state.billing.rechargeHistory).toHaveLength(1)
-    expect(state.billing.rechargeHistory[0]).toMatchObject({
-      id: 'recharge-a',
-      balanceAfter: 30,
-    })
+    expect(persisted.accountProfiles).toBeUndefined()
   })
 
   it('does not persist local billing profiles for backend accounts on the same device', () => {
     useStore.setState({
       galleryView: 'auth',
       authRedirectView: 'workbench',
-      accountProfiles: {},
       billing: {
-        lastRechargeAmount: null,
-        lastRechargeStatus: 'idle',
-        lastRechargeAt: null,
-        lastRechargeErrorMessage: null,
         pendingRechargeAmount: 30,
-        selectedPaymentMethod: 'wechat',
         rechargeFlowStatus: 'idle',
-        rechargeReturnView: 'plan',
         rechargeHistory: [],
         usageHistory: [],
       },
@@ -2615,9 +2649,6 @@ describe('workbench return context', () => {
       account: { ...state.account, balance: 30 },
       billing: {
         ...state.billing,
-        lastRechargeAmount: 30,
-        lastRechargeStatus: 'success',
-        lastRechargeAt: 1000,
         rechargeHistory: [{
           id: 'backend-recharge-a',
           amount: 30,
@@ -2642,7 +2673,6 @@ describe('workbench return context', () => {
       balance: 0,
     })
     expect(state.billing.rechargeHistory).toHaveLength(0)
-    expect(state.accountProfiles['backend-user-a']).toBeUndefined()
 
     useStore.getState().completeAuthSession({
       token: 'token-a-next',
@@ -2659,17 +2689,10 @@ describe('workbench return context', () => {
 
   it('resets local billing and transient UI state when backend account snapshot changes', () => {
     useStore.setState({
-      accountProfiles: {},
       account: { userId: 'backend-user-a', email: 'a@example.com', isLoggedIn: true, displayName: 'Backend A', balance: 30, planName: '个人标准版' },
       billing: {
-        lastRechargeAmount: 30,
-        lastRechargeStatus: 'success',
-        lastRechargeAt: 1000,
-        lastRechargeErrorMessage: null,
         pendingRechargeAmount: 30,
-        selectedPaymentMethod: 'wechat',
         rechargeFlowStatus: 'idle',
-        rechargeReturnView: 'plan',
         rechargeHistory: [{
           id: 'backend-recharge-a',
           amount: 30,
@@ -2704,7 +2727,6 @@ describe('workbench return context', () => {
       balance: 0,
     })
     expect(state.billing.rechargeHistory).toHaveLength(0)
-    expect(state.accountProfiles['backend-user-a']).toBeUndefined()
     expect(state.detailTaskId).toBeNull()
     expect(state.lightboxImageId).toBeNull()
     expect(state.lightboxImageList).toEqual([])
@@ -2765,21 +2787,6 @@ describe('workbench return context', () => {
     expect(useStore.getState().workbenchReturnContext).toBeNull()
   })
 
-  it('sets auth context when mock auth redirects back to workbench', () => {
-    useStore.setState({
-      galleryView: 'auth',
-      authRedirectView: 'workbench',
-    })
-
-    useStore.getState().completeMockAuth({ displayName: 'Tester', balance: 12 })
-
-    expect(useStore.getState().galleryView).toBe('workbench')
-    expect(useStore.getState().account.userId).toBe('mock-tester')
-    expect(useStore.getState().workbenchReturnContext).toMatchObject({
-      source: 'auth',
-    })
-  })
-
   it('clears context when opening auth view from workbench', () => {
     useStore.setState({
       galleryView: 'workbench',
@@ -2790,22 +2797,6 @@ describe('workbench return context', () => {
 
     expect(useStore.getState().galleryView).toBe('auth')
     expect(useStore.getState().workbenchReturnContext).toBeNull()
-  })
-
-  it('sets auth return context when mock auth redirects back to library', () => {
-    useStore.setState({
-      galleryView: 'auth',
-      authRedirectView: 'library',
-    })
-
-    useStore.getState().completeMockAuth({ displayName: 'Tester', balance: 12 })
-
-    expect(useStore.getState().galleryView).toBe('library')
-    expect(useStore.getState().account.userId).toBe('mock-tester')
-    expect(useStore.getState().workbenchReturnContext).toBeNull()
-    expect(useStore.getState().authReturnContext).toMatchObject({
-      source: 'library',
-    })
   })
 
   it('does not set auth return context when manually returning from auth to library', () => {
@@ -2856,14 +2847,8 @@ describe('backend account session refresh', () => {
         planName: '个人标准版',
       },
       billing: {
-        lastRechargeAmount: null,
-        lastRechargeStatus: 'idle',
-        lastRechargeAt: null,
-        lastRechargeErrorMessage: null,
         pendingRechargeAmount: 30,
-        selectedPaymentMethod: 'wechat',
         rechargeFlowStatus: 'idle',
-        rechargeReturnView: 'plan',
         rechargeHistory: [],
         usageHistory: [],
       },
@@ -3083,17 +3068,16 @@ describe('server image task recovery', () => {
     await clearAgentConversations()
     vi.mocked(callServerImageGateway).mockClear()
     vi.mocked(pollServerImageTask).mockClear()
+    vi.mocked(getServerImageTask).mockClear()
+    vi.mocked(deleteAllCompletedServerImageTasks).mockClear()
+    vi.mocked(deleteServerImageTask).mockClear()
+    vi.mocked(listServerImageTasks).mockClear()
     vi.mocked(isServerImageGatewayEnabled).mockReturnValue(false)
     useStore.setState({
       account: { userId: 'test-user', isLoggedIn: true, displayName: 'Tester', balance: 20, planName: '体验版' },
       billing: {
-        lastRechargeAmount: null,
-        lastRechargeStatus: 'idle',
-        lastRechargeAt: null,
         pendingRechargeAmount: 30,
-        selectedPaymentMethod: 'wechat',
         rechargeFlowStatus: 'idle',
-        rechargeReturnView: 'plan',
         rechargeHistory: [],
         usageHistory: [],
       },
@@ -3181,6 +3165,139 @@ describe('server image task recovery', () => {
     expect(state.billing.usageHistory).toHaveLength(0)
   })
 
+  it('loads backend image task history as the authoritative list for real sessions', async () => {
+    vi.mocked(isServerImageGatewayEnabled).mockReturnValue(true)
+    vi.mocked(listServerImageTasks).mockResolvedValueOnce([{
+      ok: true,
+      taskId: 'server-task-history',
+      status: 'succeeded',
+      mode: 'generate',
+      prompt: 'server prompt',
+      params: { ...DEFAULT_PARAMS, size: '2048x2048', n: 1 },
+      images: ['/api/generated-images/server-task-history/output-1.jpg'],
+      actualParams: { n: 1 },
+      revisedPrompts: ['revised server prompt'],
+      rawImageUrls: [],
+      persistedImages: [{
+        id: 'output-server-history',
+        taskId: 'server-task-history',
+        outputIndex: 0,
+        url: '/api/generated-images/server-task-history/output-1.jpg',
+      }],
+      modelSku: 'gpt-image-2-fast',
+      routeId: 'route-server-history',
+      upstreamModel: 'gpt-image-2',
+      attempts: [],
+      requestedOutputCount: 1,
+      outputCount: 1,
+      billing: {
+        outputCount: 1,
+        chargedPoints: 3,
+        ledgerId: 'ledger-server-history',
+      },
+      createdAt: '2026-07-03T12:00:00.000Z',
+      finishedAt: '2026-07-03T12:00:05.000Z',
+    }])
+    await putDbTask(task({ id: 'local-task-only', ownerUserId: 'test-user', prompt: 'local prompt' }))
+    useStore.setState({
+      authSessionToken: 'backend-token',
+      account: {
+        userId: 'test-user',
+        isLoggedIn: true,
+        displayName: 'Tester',
+        balance: 20,
+        planName: '体验版',
+      },
+      tasks: [],
+    })
+
+    await initStore()
+
+    expect(listServerImageTasks).toHaveBeenCalledWith('backend-token', { limit: 100 })
+    expect(useStore.getState().tasks).toEqual([
+      expect.objectContaining({
+        id: 'server-task-history',
+        ownerUserId: 'test-user',
+        prompt: 'server prompt',
+        status: 'done',
+        modelSku: 'gpt-image-2-fast',
+        chargedPoints: 3,
+        chargeLedgerId: 'ledger-server-history',
+        outputImages: ['server-output-server-history'],
+        serverImageTaskId: 'server-task-history',
+      }),
+    ])
+  })
+
+  it('refreshes the task detail from the backend when opening a server task', async () => {
+    vi.mocked(isServerImageGatewayEnabled).mockReturnValue(true)
+    vi.mocked(getServerImageTask).mockResolvedValueOnce({
+      ok: true,
+      taskId: 'server-task-detail',
+      status: 'succeeded',
+      mode: 'generate',
+      prompt: 'fresh backend prompt',
+      params: { ...DEFAULT_PARAMS, size: '2048x2048', n: 1 },
+      images: ['/api/generated-images/server-task-detail/output-1.jpg'],
+      actualParams: { n: 1 },
+      revisedPrompts: ['fresh revised prompt'],
+      rawImageUrls: [],
+      persistedImages: [{
+        id: 'output-server-task-detail',
+        taskId: 'server-task-detail',
+        outputIndex: 0,
+        url: '/api/generated-images/server-task-detail/output-1.jpg',
+      }],
+      modelSku: 'gpt-image-2-fast',
+      routeId: 'route-server-detail',
+      upstreamModel: 'gpt-image-2',
+      attempts: [],
+      requestedOutputCount: 1,
+      outputCount: 1,
+      billing: {
+        outputCount: 1,
+        chargedPoints: 3,
+        ledgerId: 'ledger-server-detail',
+      },
+      createdAt: '2026-07-03T12:00:00.000Z',
+      finishedAt: '2026-07-03T12:00:05.000Z',
+    })
+    useStore.setState({
+      authSessionToken: 'backend-token',
+      account: {
+        userId: 'test-user',
+        isLoggedIn: true,
+        displayName: 'Tester',
+        balance: 20,
+        planName: '体验版',
+      },
+      tasks: [task({
+        id: 'local-task-detail',
+        ownerUserId: 'test-user',
+        prompt: 'stale local prompt',
+        inputImageIds: ['input-a'],
+        serverImageTaskId: 'server-task-detail',
+        status: 'running',
+        finishedAt: null,
+        elapsed: null,
+      })],
+    })
+
+    useStore.getState().setDetailTaskId('local-task-detail')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(getServerImageTask).toHaveBeenCalledWith('server-task-detail', 'backend-token')
+    expect(useStore.getState().tasks[0]).toEqual(expect.objectContaining({
+      id: 'local-task-detail',
+      prompt: 'fresh backend prompt',
+      status: 'done',
+      inputImageIds: ['input-a'],
+      outputImages: ['server-output-server-task-detail'],
+      chargedPoints: 3,
+      chargeLedgerId: 'ledger-server-detail',
+    }))
+  })
+
   it('does not poll a persisted server image task while auth token is unavailable', async () => {
     useStore.setState({ authSessionToken: null })
     await putDbTask(task({
@@ -3206,20 +3323,14 @@ describe('server image task recovery', () => {
   })
 })
 
-describe('recharge payment method guard', () => {
+describe('recharge code guard', () => {
   beforeEach(() => {
     vi.mocked(redeemRechargeCodeWithApi).mockReset()
     useStore.setState({
       account: { userId: 'test-user', isLoggedIn: true, displayName: 'Tester', balance: 20, planName: '体验版' },
       billing: {
-        lastRechargeAmount: null,
-        lastRechargeStatus: 'idle',
-        lastRechargeAt: null,
-        lastRechargeErrorMessage: null,
         pendingRechargeAmount: 30,
-        selectedPaymentMethod: 'wechat',
         rechargeFlowStatus: 'idle',
-        rechargeReturnView: 'plan',
         rechargeHistory: [],
         usageHistory: [],
       },
@@ -3228,34 +3339,25 @@ describe('recharge payment method guard', () => {
     })
   })
 
-  it('keeps the current available payment method when trying to switch to card', () => {
-    useStore.getState().setSelectedPaymentMethod('alipay')
-    useStore.getState().setSelectedPaymentMethod('card')
-
-    expect(useStore.getState().billing.selectedPaymentMethod).toBe('alipay')
-  })
-
-  it('falls back to wechat when migrating persisted billing state with card selected', () => {
-    const migrated = migratePersistedState({
-      settings: { ...DEFAULT_SETTINGS },
-      billing: {
-        selectedPaymentMethod: 'card',
-      },
-    }) as { billing?: { selectedPaymentMethod?: string } }
-
-    expect(migrated.billing?.selectedPaymentMethod).toBe('wechat')
-  })
-
   it('stores backend recharge-code failure message without changing balance', async () => {
     vi.mocked(redeemRechargeCodeWithApi).mockRejectedValueOnce(new RechargeCodeApiError('该余额码已被兑换', 'code_already_redeemed'))
+    useStore.setState({
+      authSessionToken: 'backend-token',
+      account: {
+        userId: 'backend-user',
+        email: 'backend@example.com',
+        isLoggedIn: true,
+        displayName: 'Backend User',
+        balance: 20,
+        planName: '个人标准版',
+      },
+    })
 
     await useStore.getState().redeemRechargeCode('SST-30-USED')
 
     const state = useStore.getState()
     expect(state.account.balance).toBe(20)
     expect(state.billing.rechargeFlowStatus).toBe('failed')
-    expect(state.billing.lastRechargeStatus).toBe('failed')
-    expect(state.billing.lastRechargeErrorMessage).toBe('该余额码已被兑换')
     expect(state.billing.rechargeHistory[0]).toMatchObject({
       status: 'failed',
       channel: 'recharge_code',
@@ -3265,9 +3367,7 @@ describe('recharge payment method guard', () => {
     expect(state.showToast).toHaveBeenCalledWith('该余额码已被兑换', 'error')
   })
 
-  it('does not use local recharge fallback for non-mock accounts even in dev mode', async () => {
-    vi.mocked(canUseLocalRechargeCodeFallback).mockReturnValueOnce(true)
-    vi.mocked(redeemRechargeCodeWithApi).mockRejectedValueOnce(new RechargeCodeApiUnavailableError())
+  it('requires a backend session before redeeming recharge codes', async () => {
     useStore.setState({
       authSessionToken: null,
       account: { userId: 'local-user', isLoggedIn: true, displayName: 'Local User', balance: 20, planName: '体验版' },
@@ -3278,8 +3378,14 @@ describe('recharge payment method guard', () => {
     const state = useStore.getState()
     expect(state.account.balance).toBe(20)
     expect(state.billing.rechargeFlowStatus).toBe('failed')
-    expect(state.billing.lastRechargeErrorMessage).toBe('余额码兑换接口暂不可用')
-    expect(state.showToast).toHaveBeenCalledWith('余额码兑换接口暂不可用', 'error')
+    expect(state.billing.rechargeHistory[0]).toMatchObject({
+      status: 'failed',
+      channel: 'recharge_code',
+      code: 'SST-30-SUCCESS',
+      balanceAfter: 20,
+    })
+    expect(state.showToast).toHaveBeenCalledWith('请登录真实账号后再兑换余额码', 'error')
+    expect(redeemRechargeCodeWithApi).not.toHaveBeenCalled()
   })
 })
 
@@ -3291,13 +3397,8 @@ describe('retry task', () => {
       settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key' },
       account: { userId: 'test-user', isLoggedIn: true, displayName: 'Tester', balance: 20, planName: '体验版' },
       billing: {
-        lastRechargeAmount: null,
-        lastRechargeStatus: 'idle',
-        lastRechargeAt: null,
         pendingRechargeAmount: 30,
-        selectedPaymentMethod: 'wechat',
         rechargeFlowStatus: 'idle',
-        rechargeReturnView: 'plan',
         rechargeHistory: [],
         usageHistory: [],
       },
@@ -3655,3 +3756,5 @@ describe('reused task API profile', () => {
     expect(state.showSettings).toBe(false)
   })
 })
+
+

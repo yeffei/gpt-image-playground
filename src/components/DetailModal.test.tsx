@@ -1,6 +1,40 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { InspirationPublishPanel } from './DetailModal'
+import { buildDefaultInspirationDraftTitle, InspirationPublishPanel } from './DetailModal'
+
+describe('DetailModal inspiration draft title helpers', () => {
+  it('builds a specific poster title for beach figure illustrations', () => {
+    expect(buildDefaultInspirationDraftTitle(
+      '海报插画',
+      '文生图',
+      '抽象写实画风，蓝色的大海，干净的沙滩，几只海鸥在天空飞翔，美少女们在海岸边穿着比基尼躺在沙滩上漫步',
+    )).toBe('海边比基尼少女群像')
+  })
+
+  it('keeps portrait outputs distinct from poster defaults', () => {
+    expect(buildDefaultInspirationDraftTitle(
+      '人像摄影',
+      '文生图',
+      '蓝色的大海，沙滩，少女穿着比基尼站在海边',
+    )).toBe('海边比基尼少女写真')
+  })
+
+  it('keeps interior proposal titles stable after sharing the helper with the backend', () => {
+    expect(buildDefaultInspirationDraftTitle(
+      '空间氛围',
+      '文生图',
+      '16:9 horizontal interior photography of a bedroom in natural wabi-sabi style, warm and relaxing atmosphere. Materials include walnut wood, microcement, subtle metal details.',
+    )).toBe('侘寂暖木卧室')
+  })
+
+  it('matches backend fallback behavior for low-information prompts', () => {
+    expect(buildDefaultInspirationDraftTitle(
+      '海报插画',
+      '文生图',
+      '',
+    )).toBe('主题插画')
+  })
+})
 
 describe('DetailModal inspiration publish panel', () => {
   it('shows the correct ineligible message for unsupported outputs', () => {

@@ -1,0 +1,48 @@
+
+> gpt-image-playground@0.4.8 desktop:web:dev
+> vite --mode desktop --host 127.0.0.1 --port 4175
+
+
+  [32m[1mVITE[22m v6.4.3[39m  [42m [1mdesktop[22m [49m  [2mready in [0m[1m747[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://127.0.0.1:[1m4175[22m/[39m
+[2m[32m  ➜[39m[22m[2m  press [22m[1mh + enter[22m[2m to show help[22m
+[2m16:15:22[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/InspirationPostView.tsx, /src/index.css[22m
+[2m16:15:22[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/InspirationPostView.tsx, /src/index.css[22m
+[2m16:15:23[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [33mhmr invalidate [39m[2m/src/components/InspirationPostView.tsx[22m Could not Fast Refresh ("buildInspirationWorkbenchPrompt" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m16:15:23[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.tsx, /src/index.css[22m
+[2m16:21:07[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/InspirationTopicView.tsx, /src/index.css[22m
+[2m16:24:13[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/AdminApp.tsx, /src/index.css[22m
+[2m16:31:54[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/InspirationTopicView.tsx, /src/index.css[22m
+[2m16:39:40[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/InspirationTopicView.tsx, /src/index.css[22m
+[2m16:50:40[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/AdminApp.tsx, /src/index.css[22m
+[2m16:51:18[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/AdminApp.tsx, /src/index.css[22m
+[2m16:51:30[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/AdminApp.tsx, /src/index.css[22m
+[2m16:51:41[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/AdminApp.tsx, /src/index.css[22m
+[2m16:51:57[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/AdminApp.css[22m
+[2m16:53:42[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/InspirationTopicView.tsx, /src/index.css[22m
+[2m16:56:57[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/AdminApp.tsx, /src/index.css[22m
+[2m16:57:24[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/AdminApp.css[22m
+[2m17:02:01[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/InspirationTopicView.tsx, /src/index.css[22m
+[2m17:02:27[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/AdminApp.tsx, /src/index.css[22m
+[2m17:02:43[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/AdminApp.css[22m
+[2m17:07:39[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/AdminApp.tsx, /src/index.css[22m
+[2m17:07:53[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/AdminApp.css[22m
+[2m17:09:39[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/InspirationTopicView.tsx, /src/index.css[22m
+[2m17:13:26[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/AdminApp.tsx, /src/index.css[22m
+[2m17:13:58[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/InspirationTopicView.tsx, /src/index.css[22m
+[2m17:14:01[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/AdminApp.css[22m
+[2m17:16:14[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/InspirationTopicView.tsx, /src/index.css[22m
+[2m17:18:56[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/AdminApp.tsx, /src/index.css[22m
+[2m17:19:16[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/InspirationTopicView.tsx, /src/index.css[22m
+[2m17:20:02[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/AdminApp.css[22m
+[2m17:20:47[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/AdminApp.css[22m
+[2m17:21:28[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/InspirationTopicView.tsx, /src/index.css[22m
+[2m17:24:28[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/AdminApp.tsx, /src/index.css[22m
+[2m17:26:22[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/InspirationPostView.tsx, /src/index.css[22m
+[2m17:26:23[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [33mhmr invalidate [39m[2m/src/components/InspirationPostView.tsx[22m Could not Fast Refresh ("buildInspirationWorkbenchPrompt" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m17:26:23[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.tsx, /src/index.css[22m
+[2m17:28:04[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/AdminApp.tsx, /src/index.css[22m
+[2m17:29:37[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/InspirationPostView.tsx, /src/index.css[22m
+[2m17:29:37[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [33mhmr invalidate [39m[2m/src/components/InspirationPostView.tsx[22m Could not Fast Refresh ("buildInspirationWorkbenchPrompt" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m17:29:37[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.tsx, /src/index.css[22m

@@ -114,6 +114,72 @@ function serializeLedger(row: LedgerRow) {
   }
 }
 
+async function deleteUserWithDependencies(db: Db, userId: string, adminUserId: string) {
+  return await withTransaction(db, async (tx) => {
+    const before = (await tx.query<UserRow>(`
+      SELECT u.id, u.email, u.display_name, u.status, u.email_verified_at::text, u.password_hash,
+        u.invite_code, u.invited_by_user_id, u.created_at::text, u.updated_at::text, u.last_login_at::text,
+        COALESCE(a.balance, 0)::text AS balance,
+        COALESCE(a.frozen_balance, 0)::text AS frozen_balance,
+        COALESCE(SUM(CASE WHEN l.type = 'recharge_code_redeem' THEN l.amount ELSE 0 END), 0)::text AS total_recharge_points,
+        COALESCE(SUM(CASE WHEN l.type = 'generation_charge' THEN ABS(l.amount) ELSE 0 END), 0)::text AS total_charged_points
+      FROM users u
+      LEFT JOIN accounts a ON a.user_id = u.id
+      LEFT JOIN balance_ledger l ON l.user_id = u.id
+      WHERE u.id = $1
+      GROUP BY u.id, a.balance, a.frozen_balance
+      LIMIT 1
+    `, [userId])).rows[0]
+    if (!before) throw new ApiError(404, 'user_not_found', '用户不存在')
+
+    await tx.query('UPDATE users SET invited_by_user_id = NULL WHERE invited_by_user_id = $1', [userId])
+    await tx.query('UPDATE recharge_codes SET redeemed_by_user_id = NULL WHERE redeemed_by_user_id = $1', [userId])
+    await tx.query('UPDATE recharge_code_redemption_attempts SET user_id = NULL WHERE user_id = $1', [userId])
+    await tx.query('UPDATE generation_task_outputs SET deleted_by_user_id = NULL WHERE deleted_by_user_id = $1', [userId])
+    await tx.query(`
+      UPDATE recharge_code_redemption_attempts
+      SET ledger_id = NULL
+      WHERE ledger_id IN (SELECT id FROM balance_ledger WHERE user_id = $1)
+    `, [userId])
+    await tx.query(`
+      UPDATE generation_tasks
+      SET ledger_id = NULL
+      WHERE ledger_id IN (SELECT id FROM balance_ledger WHERE user_id = $1)
+    `, [userId])
+    await tx.query(`
+      UPDATE inspiration_reward_events
+      SET ledger_id = NULL
+      WHERE ledger_id IN (SELECT id FROM balance_ledger WHERE user_id = $1)
+    `, [userId])
+
+    const deleted = await tx.query<{ id: string; email: string; display_name: string; status: string }>(`
+      DELETE FROM users
+      WHERE id = $1
+      RETURNING id, email, display_name, status
+    `, [userId])
+    if (!deleted.rows[0]) throw new ApiError(404, 'user_not_found', '用户不存在')
+
+    await writeAuditLog(tx, {
+      adminUserId,
+      action: 'user_delete',
+      targetType: 'user',
+      targetId: userId,
+      beforeSnapshot: {
+        id: before.id,
+        email: before.email,
+        displayName: before.display_name,
+        status: before.status,
+        balance: Number(before.balance ?? 0),
+        totalRechargePoints: Number(before.total_recharge_points ?? 0),
+        totalChargedPoints: Number(before.total_charged_points ?? 0),
+      },
+      afterSnapshot: null,
+      reason: '后台删除用户',
+    })
+    return before
+  })
+}
+
 async function writeAuditLog(
   db: Db,
   input: {
@@ -388,6 +454,26 @@ export function registerAdminUserRoutes(app: FastifyInstance, db: Pool) {
         reason,
       })
       return reply.send({ ok: true, user: serializeUser(after) })
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
+  app.delete('/api/admin/users/:id', async (request, reply) => {
+    try {
+      const admin = await requireAdminSession(db, request.headers.authorization)
+      const params = isRecord(request.params) ? request.params : {}
+      const userId = typeof params.id === 'string' ? params.id.trim() : ''
+      if (!userId) throw new ApiError(400, 'missing_user_id', '缺少用户编号')
+      const deletedUser = await deleteUserWithDependencies(db, userId, admin.admin_user_id)
+      return reply.send({
+        ok: true,
+        deletedUser: {
+          id: deletedUser.id,
+          email: deletedUser.email,
+          displayName: deletedUser.display_name,
+        },
+      })
     } catch (error) {
       return sendError(reply, error)
     }

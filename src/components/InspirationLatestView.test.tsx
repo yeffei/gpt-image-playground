@@ -20,9 +20,9 @@ describe('InspirationLatestView', () => {
             },
           ],
           pagination: {
-            limit: 12,
-            offset: 12,
-            total: 36,
+            limit: 20,
+            offset: 20,
+            total: 60,
           },
         }}
         loading={false}
@@ -38,7 +38,7 @@ describe('InspirationLatestView', () => {
     expect(html).toContain('返回灵感广场')
     expect(html).toContain('最新作品 1')
     expect(html).toContain('第 2 / 3 页')
-    expect(html).toContain('13-24 / 36')
+    expect(html).toContain('21-40 / 60')
     expect(html).toContain('>1<')
     expect(html).toContain('>2<')
     expect(html).toContain('>3<')

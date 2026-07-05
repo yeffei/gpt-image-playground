@@ -17,6 +17,8 @@ const MAX_OUTPUT_SLOT_RETRY_ROUNDS = 2
 const UPSTREAM_OUTPUT_COUNT_PER_REQUEST = 1
 const TASK_ABORT_REASON_CANCELLED = 'task_cancelled'
 const GPT_IMAGE_2_SUPPORTED_SIZES = ['*']
+export const LIBRARY_ACTIVE_OUTPUT_LIMIT = 100
+export const LIBRARY_TRASH_RETENTION_DAYS = 7
 const activeGenerationTaskControllers = new Map<string, AbortController>()
 
 type TaskParams = {
@@ -38,6 +40,12 @@ type GatewayRequest = {
 }
 
 type DeliveryPlan = ImageDeliveryPlan
+type RouteExecutionStageKey = 'requested_native' | 'native_2k' | 'small_base'
+type RouteExecutionStage = {
+  key: RouteExecutionStageKey
+  deliveryPlan: DeliveryPlan
+  routes: RuntimeRouteRow[]
+}
 
 type RecordCompletedTaskRequest = {
   clientTaskId?: string
@@ -150,18 +158,204 @@ type PersistedOutput = StoredImageOutput & {
   rawSourceUrl?: string
 }
 
-function normalizeDeliveryPlan(size?: string): DeliveryPlan | undefined {
-  if (!size) return undefined
-  return createImageDeliveryPlan(size) ?? undefined
+type ProcessedPersistedOutput = PersistedOutput & {
+  sourceSize: string
+  deliveryTransformed: boolean
 }
 
-function getBaseGenerationSize(size?: string) {
-  return normalizeDeliveryPlan(size)?.baseSize ?? size
+type GenerationTaskRow = {
+  id: string
+  status: GenerationTaskStatus
+  mode: string
+  model_sku: string
+  request_id?: string | null
+  route_id?: string | null
+  upstream_model?: string | null
+  requested_output_count: number
+  output_count: number
+  charged_points: string
+  ledger_id?: string | null
+  failure_kind?: GatewayFailureKind | 'cancelled' | string | null
+  error_summary?: string | null
+  request_json?: unknown
+  created_at: string
+  finished_at?: string | null
+}
+
+type GenerationTaskOutputRow = {
+  id: string
+  task_id: string
+  user_id?: string
+  output_index: number
+  public_url: string
+  storage_provider: string
+  storage_key: string
+  mime_type: string
+  byte_size: number
+  width?: number | null
+  height?: number | null
+  revised_prompt?: string | null
+  raw_source_url?: string | null
+  storage_status?: 'active' | 'pending_delete' | 'deleted' | 'purge_failed'
+  deleted_at?: string | null
+  purge_after?: string | null
+}
+
+type GenerationOutputLibraryRow = GenerationTaskOutputRow & {
+  prompt?: string | null
+  negative_prompt?: string | null
+  task_status?: GenerationTaskStatus
+  model_sku?: string
+  request_id?: string | null
+  route_id?: string | null
+  upstream_model?: string | null
+  created_at: string
+  task_created_at?: string
+  task_finished_at?: string | null
+}
+
+function normalizeDeliveryPlan(size?: string): DeliveryPlan | undefined {
+  return normalizeDeliveryPlanForCapability(size)
+}
+
+function normalizeDeliveryPlanForCapability(size?: string, maxBaseGenerationLongEdge?: number | null) {
+  if (!size) return undefined
+  return createImageDeliveryPlan(size, { maxBaseGenerationLongEdge }) ?? undefined
+}
+
+function parseDeliverySize(size?: string | null) {
+  if (!size) return null
+  const match = size.trim().match(/^(\d+)x(\d+)$/i)
+  if (!match) return null
+  const width = Number(match[1])
+  const height = Number(match[2])
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null
+  return { width, height }
+}
+
+export function resolveFinalDeliveryPlan(input: {
+  plannedDeliveryPlan?: DeliveryPlan
+  outputs: Array<Pick<ProcessedPersistedOutput, 'sourceSize' | 'deliveryTransformed'>>
+}) {
+  const deliveryPlan = input.plannedDeliveryPlan
+  if (!deliveryPlan || !input.outputs.length) return deliveryPlan
+
+  const requestedSize = parseDeliverySize(deliveryPlan.requestedSize)
+  if (!requestedSize) return deliveryPlan
+
+  const alreadyNativeAtRequestedSize = input.outputs.every((output) => {
+    if (output.deliveryTransformed) return false
+    const sourceSize = parseDeliverySize(output.sourceSize)
+    return Boolean(
+      sourceSize
+      && sourceSize.width === requestedSize.width
+      && sourceSize.height === requestedSize.height,
+    )
+  })
+
+  if (!alreadyNativeAtRequestedSize) return deliveryPlan
+
+  return {
+    ...deliveryPlan,
+    baseSize: deliveryPlan.requestedSize,
+    baseRatio: deliveryPlan.requestedRatio || deliveryPlan.baseRatio,
+    strategy: 'direct' as const,
+  }
+}
+
+function getUpstreamModelForRoute(route: RuntimeRouteRow) {
+  return route.upstream_model || route.default_upstream_model || route.model_name || DEFAULT_UPSTREAM_MODEL
+}
+
+function normalizeRouteMaxSupportedLongEdge(route: RuntimeRouteRow) {
+  return typeof route.max_supported_long_edge === 'number' && Number.isFinite(route.max_supported_long_edge) && route.max_supported_long_edge > 0
+    ? Math.max(1, Math.trunc(route.max_supported_long_edge))
+    : 1536
+}
+
+function getBaseGenerationSizeForRequest(size?: string) {
+  if (!size) return size
+  const requestedLongestEdge = parseRequestedLongestEdge(size)
+  if (requestedLongestEdge <= 1536) return size
+  return normalizeDeliveryPlanForCapability(size, 1536)?.baseSize ?? size
 }
 
 function shouldPreferLosslessDelivery(size?: string) {
   const requestedLongestEdge = parseRequestedLongestEdge(size)
   return requestedLongestEdge > 1536
+}
+
+function routeSupportsGatewayRequest(route: RuntimeRouteRow, payload: GatewayRequest) {
+  const hasInputImages = Array.isArray(payload.inputImageDataUrls) && payload.inputImageDataUrls.length > 0
+  const hasMask = typeof payload.maskDataUrl === 'string' && payload.maskDataUrl.trim().length > 0
+  if (!hasInputImages && !hasMask) return true
+  return !(route.provider === 'gemini-native' || isGeminiModel(getUpstreamModelForRoute(route)))
+}
+
+function dedupeRoutes(routes: RuntimeRouteRow[]) {
+  const seen = new Set<string>()
+  return routes.filter((route) => {
+    if (seen.has(route.route_id)) return false
+    seen.add(route.route_id)
+    return true
+  })
+}
+
+function sameRouteList(left: RuntimeRouteRow[], right: RuntimeRouteRow[]) {
+  if (left.length !== right.length) return false
+  return left.every((route, index) => route.route_id === right[index]?.route_id)
+}
+
+function buildRouteExecutionStages(routes: RuntimeRouteRow[], payload: GatewayRequest): RouteExecutionStage[] {
+  const requestedSize = payload.params?.size
+  const compatibleRoutes = dedupeRoutes(routes.filter((route) => routeSupportsGatewayRequest(route, payload)))
+  if (!requestedSize || !compatibleRoutes.length) return []
+
+  const requestedLongestEdge = parseRequestedLongestEdge(requestedSize)
+  const nativeRequestedRoutes = compatibleRoutes.filter((route) => normalizeRouteMaxSupportedLongEdge(route) >= requestedLongestEdge)
+  const native2kRoutes = compatibleRoutes.filter((route) => normalizeRouteMaxSupportedLongEdge(route) >= 2560)
+  const stages: RouteExecutionStage[] = []
+
+  const pushStage = (key: RouteExecutionStageKey, maxBaseGenerationLongEdge: number, stageRoutes: RuntimeRouteRow[]) => {
+    const deliveryPlan = normalizeDeliveryPlanForCapability(requestedSize, maxBaseGenerationLongEdge)
+    const normalizedRoutes = dedupeRoutes(stageRoutes)
+    if (!deliveryPlan || !normalizedRoutes.length) return
+    const previous = stages[stages.length - 1]
+    if (
+      previous
+      && previous.deliveryPlan.baseSize === deliveryPlan.baseSize
+      && previous.deliveryPlan.strategy === deliveryPlan.strategy
+      && sameRouteList(previous.routes, normalizedRoutes)
+    ) {
+      return
+    }
+    stages.push({ key, deliveryPlan, routes: normalizedRoutes })
+  }
+
+  if (requestedLongestEdge <= 1536) {
+    pushStage('requested_native', requestedLongestEdge, compatibleRoutes)
+    return stages
+  }
+
+  if (nativeRequestedRoutes.length) {
+    pushStage('requested_native', requestedLongestEdge, nativeRequestedRoutes)
+  }
+
+  if (requestedLongestEdge > 2560 && native2kRoutes.length) {
+    pushStage('native_2k', 2560, native2kRoutes)
+  }
+
+  pushStage('small_base', 1536, compatibleRoutes)
+  return stages
+}
+
+function collectStageRoutes(stages: RouteExecutionStage[]) {
+  return dedupeRoutes(stages.flatMap((stage) => stage.routes))
+}
+
+function getLibraryPurgeAfter(deletedAt: string, retentionDays = LIBRARY_TRASH_RETENTION_DAYS) {
+  const normalizedRetentionDays = Math.max(0, Math.trunc(retentionDays))
+  return new Date(Date.parse(deletedAt) + normalizedRetentionDays * 24 * 60 * 60 * 1000).toISOString()
 }
 
 function serializePersistedOutput(output: PersistedOutput) {
@@ -176,6 +370,128 @@ function serializePersistedOutput(output: PersistedOutput) {
     byteSize: output.byteSize,
     width: output.width,
     height: output.height,
+    storageStatus: 'active' as const,
+    deletedAt: null,
+    purgeAfter: null,
+  }
+}
+
+function parseRequestPromptFields(requestJson: Record<string, unknown> | null) {
+  return {
+    prompt: requestJson && typeof requestJson.prompt === 'string' ? requestJson.prompt : '',
+    negativePrompt: requestJson && typeof requestJson.negativePrompt === 'string' ? requestJson.negativePrompt : undefined,
+  }
+}
+
+function serializeLibraryOutput(row: GenerationOutputLibraryRow) {
+  const requestJson = row.prompt || row.negative_prompt
+    ? { prompt: row.prompt, negativePrompt: row.negative_prompt }
+    : null
+  const promptFields = parseRequestPromptFields(requestJson)
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    outputIndex: row.output_index,
+    url: row.public_url,
+    storageProvider: row.storage_provider,
+    storageKey: row.storage_key,
+    mimeType: row.mime_type,
+    byteSize: row.byte_size,
+    width: row.width ?? null,
+    height: row.height ?? null,
+    storageStatus: row.storage_status ?? 'active',
+    deletedAt: row.deleted_at ?? null,
+    purgeAfter: row.purge_after ?? null,
+    task: {
+      id: row.task_id,
+      status: row.task_status ?? 'succeeded',
+      modelSku: row.model_sku ?? '',
+      requestId: row.request_id ?? null,
+      routeId: row.route_id ?? null,
+      upstreamModel: row.upstream_model ?? null,
+      prompt: promptFields.prompt,
+      negativePrompt: promptFields.negativePrompt,
+      createdAt: row.task_created_at ?? row.created_at,
+      finishedAt: row.task_finished_at ?? null,
+    },
+  }
+}
+
+function normalizeTaskRequestJson(value: unknown) {
+  return isRecord(value) ? value : null
+}
+
+function getTaskRequestParams(requestJson: Record<string, unknown> | null): TaskParams | undefined {
+  return requestJson && isRecord(requestJson.params) ? requestJson.params as TaskParams : undefined
+}
+
+function serializeGenerationTask(task: GenerationTaskRow, outputs: GenerationTaskOutputRow[]) {
+  const images = outputs.map((output) => output.public_url)
+  const revisedPrompts = outputs.map((output) => output.revised_prompt ?? undefined)
+  const rawImageUrls = outputs.map((output) => output.raw_source_url).filter((url): url is string => Boolean(url))
+  const failureResultFields = deriveFailureResultFields(task)
+  const requestJson = normalizeTaskRequestJson(task.request_json)
+  const deliveryPlan = requestJson && isRecord(requestJson.deliveryPlan)
+    ? {
+        requestedSize: typeof requestJson.deliveryPlan.requestedSize === 'string' ? requestJson.deliveryPlan.requestedSize : '',
+        requestedTier: requestJson.deliveryPlan.requestedTier === '1K' || requestJson.deliveryPlan.requestedTier === '2K' || requestJson.deliveryPlan.requestedTier === '4K'
+          ? requestJson.deliveryPlan.requestedTier
+          : '1K',
+        requestedRatio: typeof requestJson.deliveryPlan.requestedRatio === 'string' ? requestJson.deliveryPlan.requestedRatio : '',
+        baseSize: typeof requestJson.deliveryPlan.baseSize === 'string' ? requestJson.deliveryPlan.baseSize : '',
+        baseRatio: typeof requestJson.deliveryPlan.baseRatio === 'string' ? requestJson.deliveryPlan.baseRatio : '',
+        strategy: requestJson.deliveryPlan.strategy === 'direct' || requestJson.deliveryPlan.strategy === 'upscale' || requestJson.deliveryPlan.strategy === 'crop_then_upscale' || requestJson.deliveryPlan.strategy === 'pad_then_upscale'
+          ? requestJson.deliveryPlan.strategy
+          : 'direct',
+        deliveryLabel: typeof requestJson.deliveryPlan.deliveryLabel === 'string' ? requestJson.deliveryPlan.deliveryLabel : '',
+      }
+    : undefined
+  return {
+    ok: true,
+    taskId: task.id,
+    status: task.status,
+    mode: task.mode,
+    requestId: task.request_id ?? undefined,
+    prompt: requestJson && typeof requestJson.prompt === 'string' ? requestJson.prompt : '',
+    negativePrompt: requestJson && typeof requestJson.negativePrompt === 'string' ? requestJson.negativePrompt : undefined,
+    params: getTaskRequestParams(requestJson),
+    images,
+    revisedPrompts,
+    rawImageUrls,
+    actualParams: { n: images.length },
+    ...(deliveryPlan ? { deliveryPlan } : {}),
+    persistedImages: outputs.map((output) => ({
+      id: output.id,
+      taskId: output.task_id,
+      outputIndex: output.output_index,
+      url: output.public_url,
+      storageProvider: output.storage_provider,
+      storageKey: output.storage_key,
+      mimeType: output.mime_type,
+      byteSize: output.byte_size,
+    })),
+    modelSku: task.model_sku,
+    routeId: failureResultFields.routeId,
+    upstreamModel: failureResultFields.upstreamModel,
+    attempts: failureResultFields.attempts,
+    requestedOutputCount: task.requested_output_count,
+    outputCount: task.output_count,
+    partialSuccess: task.status === 'succeeded' && task.output_count > 0 && task.output_count < task.requested_output_count,
+    partialFailureMessage: undefined,
+    error: task.status === 'failed' || task.status === 'timeout' || task.status === 'cancelled'
+      ? {
+          message: failureResultFields.message || (task.status === 'cancelled' ? '任务已取消' : '生图线路请求失败'),
+          requestId: task.request_id ?? undefined,
+          failureKind: task.failure_kind ?? undefined,
+        }
+      : undefined,
+    billing: {
+      outputCount: task.output_count,
+      chargedPoints: Number(task.charged_points),
+      ledgerId: task.ledger_id ?? null,
+    },
+    createdAt: task.created_at,
+    finishedAt: task.finished_at ?? undefined,
   }
 }
 
@@ -636,11 +952,11 @@ export function parseRequestedLongestEdge(size: string | undefined) {
 }
 
 export function filterRoutesForRequestedSize(routes: RuntimeRouteRow[], requestedSize: string | undefined) {
-  const requestedLongestEdge = parseRequestedLongestEdge(getBaseGenerationSize(requestedSize))
+  const requestedLongestEdge = parseRequestedLongestEdge(getBaseGenerationSizeForRequest(requestedSize))
   if (requestedLongestEdge <= 1536) return routes
 
   return routes.filter((route) => {
-    const maxEdge = typeof route.max_supported_long_edge === 'number' ? route.max_supported_long_edge : 1536
+    const maxEdge = normalizeRouteMaxSupportedLongEdge(route)
     return maxEdge >= requestedLongestEdge
   })
 }
@@ -803,7 +1119,7 @@ async function recordRouteFailure(db: Db, input: {
 
 async function callUpstream(route: RuntimeRouteRow, input: GatewayRequest, externalSignal?: AbortSignal) {
   const params = normalizeUpstreamParams(input.params, {
-    size: getBaseGenerationSize(input.params?.size),
+    size: input.params?.size,
     ...(shouldPreferLosslessDelivery(input.params?.size)
       ? { output_format: 'png', output_compression: null }
       : {}),
@@ -1113,6 +1429,11 @@ async function finalizeSuccess(db: Pool, input: {
         finishedAt,
       ])
     }
+    const autoTrimmed = await enforceLibraryActiveOutputLimit(tx, {
+      userId: input.userId,
+      activeLimit: LIBRARY_ACTIVE_OUTPUT_LIMIT,
+      retentionDays: LIBRARY_TRASH_RETENTION_DAYS,
+    })
     await tx.query(`
       UPDATE generation_tasks
       SET status = 'succeeded', route_id = $1, upstream_model = $2, output_count = $3,
@@ -1125,6 +1446,7 @@ async function finalizeSuccess(db: Pool, input: {
       ledgerId,
       billingBasis: input.billingBasis,
       outputs: input.outputs,
+      autoTrashedCount: autoTrimmed.trimmedCount,
     }
   })
 }
@@ -1137,7 +1459,7 @@ async function persistGeneratedOutputs(env: ServerEnv, input: {
   revisedPrompts?: Array<string | undefined>
   rawImageUrls?: string[]
 }) {
-  const outputs: PersistedOutput[] = []
+  const outputs: ProcessedPersistedOutput[] = []
   const resizeExecutor = createSharpResizeExecutor()
   for (const [index, image] of input.images.entries()) {
     const delivered = await applyDeliveryPlanToImage({
@@ -1161,9 +1483,28 @@ async function persistGeneratedOutputs(env: ServerEnv, input: {
       outputIndex: index,
       revisedPrompt: input.revisedPrompts?.[index],
       rawSourceUrl: input.rawImageUrls?.[index],
+      sourceSize: delivered.actualSize,
+      deliveryTransformed: delivered.transformed,
     })
   }
   return outputs
+}
+
+async function persistTaskDeliveryPlan(db: Db, input: {
+  taskId: string
+  deliveryPlan?: DeliveryPlan
+}) {
+  if (!input.deliveryPlan) return
+  await db.query(`
+    UPDATE generation_tasks
+    SET request_json = jsonb_set(
+      COALESCE(request_json, '{}'::jsonb),
+      '{deliveryPlan}',
+      $2::jsonb,
+      true
+    )
+    WHERE id = $1
+  `, [input.taskId, JSON.stringify(input.deliveryPlan)])
 }
 
 export async function finalizeFailure(db: Db, input: {
@@ -1198,10 +1539,80 @@ export async function finalizeFailure(db: Db, input: {
   }
 }
 
+export async function enforceLibraryActiveOutputLimit(db: Db, input: {
+  userId: string
+  activeLimit?: number
+  retentionDays?: number
+}) {
+  const activeLimit = Math.max(1, Math.trunc(input.activeLimit ?? LIBRARY_ACTIVE_OUTPUT_LIMIT))
+  const countRow = (await db.query<{ count: string }>(`
+    SELECT COUNT(*)::text AS count
+    FROM generation_task_outputs
+    WHERE user_id = $1
+      AND deleted_at IS NULL
+      AND storage_status = 'active'
+  `, [input.userId])).rows[0]
+  const activeCount = Number(countRow?.count ?? 0)
+  const overflowCount = Math.max(0, activeCount - activeLimit)
+  if (overflowCount <= 0) {
+    return {
+      activeCount,
+      overflowCount: 0,
+      trimmedCount: 0,
+    }
+  }
+
+  const deletedAt = nowIso()
+  const purgeAfter = getLibraryPurgeAfter(deletedAt, input.retentionDays)
+  const trimmed = await db.query<{ id: string }>(`
+    WITH candidates AS (
+      SELECT o.id
+      FROM generation_task_outputs o
+      WHERE o.user_id = $1
+        AND o.deleted_at IS NULL
+        AND o.storage_status = 'active'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM generation_output_shares s
+          WHERE s.output_id = o.id
+            AND s.revoked_at IS NULL
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM inspiration_posts p
+          WHERE p.output_id = o.id
+            AND p.status IN ('ai_reviewing', 'published', 'needs_review', 'hidden')
+        )
+      ORDER BY o.created_at ASC, o.output_index ASC
+      LIMIT $4::int
+    )
+    UPDATE generation_task_outputs o
+    SET deleted_at = $2,
+      delete_source = 'system',
+      delete_reason = 'library_active_output_limit',
+      purge_after = $3,
+      storage_status = 'pending_delete',
+      deleted_by_user_id = NULL,
+      deleted_by_admin_id = NULL
+    FROM candidates c
+    WHERE o.id = c.id
+    RETURNING o.id
+  `, [input.userId, deletedAt, purgeAfter, overflowCount])
+
+  return {
+    activeCount,
+    overflowCount,
+    trimmedCount: trimmed.rowCount ?? trimmed.rows.length,
+    deletedAt,
+    purgeAfter,
+  }
+}
+
 async function recordCompletedExternalTask(db: Pool, env: ServerEnv, input: {
   userId: string
   clientTaskId?: string
   modelSku: string
+  prompt?: string
   mode: string
   params?: TaskParams
   outputCount: number
@@ -1269,9 +1680,25 @@ async function recordCompletedExternalTask(db: Pool, env: ServerEnv, input: {
     await tx.query(`
       INSERT INTO generation_tasks (
         id, user_id, status, mode, model_sku, request_id, route_id, upstream_model,
-        output_count, charged_points, ledger_id, failure_kind, error_summary, created_at, finished_at
-      ) VALUES ($1, $2, 'succeeded', $3, $4, $5, NULL, NULL, $6, $7, $8, NULL, NULL, $9, $9)
-    `, [taskId, input.userId, input.mode, input.modelSku, requestId, outputCount, chargedPoints, ledgerId, finishedAt])
+        requested_output_count, output_count, charged_points, ledger_id, failure_kind, error_summary,
+        request_json, created_at, finished_at
+      ) VALUES ($1, $2, 'succeeded', $3, $4, $5, NULL, NULL, $6, $6, $7, $8, NULL, NULL, $9, $10, $10)
+    `, [
+      taskId,
+      input.userId,
+      input.mode,
+      input.modelSku,
+      requestId,
+      outputCount,
+      chargedPoints,
+      ledgerId,
+      JSON.stringify({
+        modelSku: input.modelSku,
+        prompt: input.prompt?.trim() ?? '',
+        params: input.params,
+      }),
+      finishedAt,
+    ])
 
     let outputs: PersistedOutput[] = []
     if (input.images.length > 0) {
@@ -1308,12 +1735,18 @@ async function recordCompletedExternalTask(db: Pool, env: ServerEnv, input: {
         ])
       }
     }
+    const autoTrimmed = await enforceLibraryActiveOutputLimit(tx, {
+      userId: input.userId,
+      activeLimit: LIBRARY_ACTIVE_OUTPUT_LIMIT,
+      retentionDays: LIBRARY_TRASH_RETENTION_DAYS,
+    })
 
     return {
       taskId,
       outputCount,
       chargedPoints,
       ledgerId,
+      autoTrashedCount: autoTrimmed.trimmedCount,
       persistedImages: outputs.map(serializePersistedOutput),
       alreadyRecorded: false,
     }
@@ -1540,25 +1973,38 @@ async function cancelReservedTask(db: Pool, input: { taskId: string; userId: str
   })
 }
 
+async function deleteGenerationTask(db: Pool, input: { taskId: string; userId: string }) {
+  return await withTransaction(db, async (tx) => {
+    const task = (await tx.query<{ id: string; status: GenerationTaskStatus }>(
+      'SELECT id, status FROM generation_tasks WHERE id = $1 AND user_id = $2 FOR UPDATE',
+      [input.taskId, input.userId],
+    )).rows[0]
+    if (!task) throw new ApiError(404, 'task_not_found', '任务不存在')
+    if (task.status === 'queued' || task.status === 'running') {
+      throw new ApiError(409, 'task_still_running', '任务仍在执行中，暂不能删除')
+    }
+    await tx.query('DELETE FROM generation_tasks WHERE id = $1 AND user_id = $2', [input.taskId, input.userId])
+    return { taskId: input.taskId, deleted: true }
+  })
+}
+
+export async function deleteCompletedGenerationTasksForUser(db: Pool, input: { userId: string }) {
+  return await withTransaction(db, async (tx) => {
+    const runningCountRow = (await tx.query<{ count: string }>(`
+      SELECT COUNT(*)::text AS count
+      FROM generation_tasks
+      WHERE user_id = $1 AND status IN ('queued', 'running')
+    `, [input.userId])).rows[0]
+    const deleted = await tx.query('DELETE FROM generation_tasks WHERE user_id = $1 AND status NOT IN (\'queued\', \'running\')', [input.userId])
+    return {
+      deletedCount: deleted.rowCount ?? 0,
+      skippedRunningCount: Number(runningCountRow?.count ?? '0') || 0,
+    }
+  })
+}
+
 async function readGenerationTaskResult(db: Db, input: { taskId: string; userId: string }) {
-  const task = (await db.query<{
-    id: string
-    status: GenerationTaskStatus
-    mode: string
-    model_sku: string
-    request_id?: string | null
-    route_id?: string | null
-    upstream_model?: string | null
-    requested_output_count: number
-    output_count: number
-    charged_points: string
-    ledger_id?: string | null
-    failure_kind?: GatewayFailureKind | 'cancelled' | string | null
-    error_summary?: string | null
-    request_json?: unknown
-    created_at: string
-    finished_at?: string | null
-  }>(`
+  const task = (await db.query<GenerationTaskRow>(`
     SELECT id, status, mode, model_sku, request_id, route_id, upstream_model,
       COALESCE(requested_output_count, 1) AS requested_output_count,
       output_count, charged_points::text, ledger_id, failure_kind, error_summary, request_json,
@@ -1569,18 +2015,7 @@ async function readGenerationTaskResult(db: Db, input: { taskId: string; userId:
   `, [input.taskId, input.userId])).rows[0]
   if (!task) throw new ApiError(404, 'task_not_found', '任务不存在')
 
-  const outputs = (await db.query<{
-    id: string
-    task_id: string
-    output_index: number
-    public_url: string
-    storage_provider: string
-    storage_key: string
-    mime_type: string
-    byte_size: number
-    revised_prompt?: string | null
-    raw_source_url?: string | null
-  }>(`
+  const outputs = (await db.query<GenerationTaskOutputRow>(`
     SELECT id, task_id, output_index, public_url, storage_provider, storage_key,
       mime_type, byte_size, revised_prompt, raw_source_url
     FROM generation_task_outputs
@@ -1588,71 +2023,168 @@ async function readGenerationTaskResult(db: Db, input: { taskId: string; userId:
     ORDER BY output_index ASC
   `, [input.taskId, input.userId])).rows
 
-  const images = outputs.map((output) => output.public_url)
-  const revisedPrompts = outputs.map((output) => output.revised_prompt ?? undefined)
-  const rawImageUrls = outputs.map((output) => output.raw_source_url).filter((url): url is string => Boolean(url))
-  const failureResultFields = deriveFailureResultFields(task)
-  const requestJson = isRecord(task.request_json) ? task.request_json : null
-  const deliveryPlan = requestJson && isRecord(requestJson.deliveryPlan)
-    ? {
-        requestedSize: typeof requestJson.deliveryPlan.requestedSize === 'string' ? requestJson.deliveryPlan.requestedSize : '',
-        requestedTier: requestJson.deliveryPlan.requestedTier === '1K' || requestJson.deliveryPlan.requestedTier === '2K' || requestJson.deliveryPlan.requestedTier === '4K'
-          ? requestJson.deliveryPlan.requestedTier
-          : '1K',
-        requestedRatio: typeof requestJson.deliveryPlan.requestedRatio === 'string' ? requestJson.deliveryPlan.requestedRatio : '',
-        baseSize: typeof requestJson.deliveryPlan.baseSize === 'string' ? requestJson.deliveryPlan.baseSize : '',
-        baseRatio: requestJson.deliveryPlan.baseRatio === '1:1' || requestJson.deliveryPlan.baseRatio === '3:2' || requestJson.deliveryPlan.baseRatio === '2:3'
-          ? requestJson.deliveryPlan.baseRatio
-          : '1:1',
-        strategy: requestJson.deliveryPlan.strategy === 'direct' || requestJson.deliveryPlan.strategy === 'upscale' || requestJson.deliveryPlan.strategy === 'crop_then_upscale' || requestJson.deliveryPlan.strategy === 'pad_then_upscale'
-          ? requestJson.deliveryPlan.strategy
-          : 'direct',
-        deliveryLabel: typeof requestJson.deliveryPlan.deliveryLabel === 'string' ? requestJson.deliveryPlan.deliveryLabel : '',
-      }
-    : undefined
-  return {
-    ok: true,
-    taskId: task.id,
-    status: task.status,
-    mode: task.mode,
-    images,
-    revisedPrompts,
-    rawImageUrls,
-    actualParams: { n: images.length },
-    ...(deliveryPlan ? { deliveryPlan } : {}),
-    persistedImages: outputs.map((output) => ({
-      id: output.id,
-      taskId: output.task_id,
-      outputIndex: output.output_index,
-      url: output.public_url,
-      storageProvider: output.storage_provider,
-      storageKey: output.storage_key,
-      mimeType: output.mime_type,
-      byteSize: output.byte_size,
-    })),
-    modelSku: task.model_sku,
-    routeId: failureResultFields.routeId,
-    upstreamModel: failureResultFields.upstreamModel,
-    attempts: failureResultFields.attempts,
-    requestedOutputCount: task.requested_output_count,
-    outputCount: task.output_count,
-    partialSuccess: task.status === 'succeeded' && task.output_count > 0 && task.output_count < task.requested_output_count,
-    partialFailureMessage: undefined,
-    error: task.status === 'failed' || task.status === 'timeout' || task.status === 'cancelled'
-      ? {
-          message: failureResultFields.message || (task.status === 'cancelled' ? '任务已取消' : '生图线路请求失败'),
-          requestId: task.request_id ?? undefined,
-          failureKind: task.failure_kind ?? undefined,
-        }
-      : undefined,
-    billing: {
-      outputCount: task.output_count,
-      chargedPoints: Number(task.charged_points),
-      ledgerId: task.ledger_id ?? null,
-    },
-    createdAt: task.created_at,
-    finishedAt: task.finished_at ?? undefined,
+  return serializeGenerationTask(task, outputs)
+}
+
+async function listGenerationTaskResults(db: Db, input: { userId: string; limit: number }) {
+  const tasks = (await db.query<GenerationTaskRow>(`
+    SELECT id, status, mode, model_sku, request_id, route_id, upstream_model,
+      COALESCE(requested_output_count, 1) AS requested_output_count,
+      output_count, charged_points::text, ledger_id, failure_kind, error_summary, request_json,
+      created_at::text, finished_at::text
+    FROM generation_tasks
+    WHERE user_id = $1
+    ORDER BY created_at DESC
+    LIMIT $2
+  `, [input.userId, input.limit])).rows
+  if (!tasks.length) return []
+
+  const taskIds = tasks.map((task) => task.id)
+  const outputs = (await db.query<GenerationTaskOutputRow>(`
+    SELECT id, task_id, output_index, public_url, storage_provider, storage_key,
+      mime_type, byte_size, revised_prompt, raw_source_url
+    FROM generation_task_outputs
+    WHERE user_id = $1 AND task_id = ANY($2::text[])
+    ORDER BY task_id ASC, output_index ASC
+  `, [input.userId, taskIds])).rows
+  const outputsByTaskId = new Map<string, GenerationTaskOutputRow[]>()
+  for (const output of outputs) {
+    const group = outputsByTaskId.get(output.task_id) ?? []
+    group.push(output)
+    outputsByTaskId.set(output.task_id, group)
   }
+
+  return tasks.map((task) => serializeGenerationTask(task, outputsByTaskId.get(task.id) ?? []))
+}
+
+async function listGenerationOutputsForLibrary(db: Db, input: {
+  userId: string
+  status: 'active' | 'trashed'
+  limit: number
+}) {
+  const rows = (await db.query<GenerationOutputLibraryRow>(`
+    SELECT
+      o.id,
+      o.task_id,
+      o.user_id,
+      o.output_index,
+      o.public_url,
+      o.storage_provider,
+      o.storage_key,
+      o.mime_type,
+      o.byte_size,
+      o.width,
+      o.height,
+      o.revised_prompt,
+      o.raw_source_url,
+      o.storage_status,
+      o.deleted_at::text,
+      o.purge_after::text,
+      o.created_at::text,
+      t.status AS task_status,
+      t.model_sku,
+      t.request_id,
+      t.route_id,
+      t.upstream_model,
+      t.created_at::text AS task_created_at,
+      t.finished_at::text AS task_finished_at,
+      t.request_json ->> 'prompt' AS prompt,
+      t.request_json ->> 'negativePrompt' AS negative_prompt
+    FROM generation_task_outputs o
+    JOIN generation_tasks t ON t.id = o.task_id
+    WHERE o.user_id = $1
+      AND (
+        ($2 = 'active' AND o.deleted_at IS NULL AND o.storage_status = 'active')
+        OR
+        ($2 = 'trashed' AND o.deleted_at IS NOT NULL AND o.storage_status IN ('pending_delete', 'purge_failed'))
+      )
+    ORDER BY COALESCE(o.deleted_at, o.created_at) DESC, o.output_index ASC
+    LIMIT $3
+  `, [input.userId, input.status, input.limit])).rows
+  return rows.map(serializeLibraryOutput)
+}
+
+async function softDeleteGenerationOutput(db: Pool, input: {
+  outputId: string
+  userId: string
+  retentionDays?: number
+}) {
+  return await withTransaction(db, async (tx) => {
+    const row = (await tx.query<{
+      id: string
+      deleted_at?: string | null
+      storage_status?: string | null
+    }>(`
+      SELECT id, deleted_at::text, storage_status
+      FROM generation_task_outputs
+      WHERE id = $1 AND user_id = $2
+      FOR UPDATE
+    `, [input.outputId, input.userId])).rows[0]
+    if (!row) throw new ApiError(404, 'output_not_found', '作品不存在')
+    if (row.deleted_at && row.storage_status && row.storage_status !== 'active') {
+      return { outputId: input.outputId, deleted: true, alreadyDeleted: true }
+    }
+    const deletedAt = nowIso()
+    const purgeAfter = getLibraryPurgeAfter(deletedAt, input.retentionDays)
+    await tx.query(`
+      UPDATE generation_task_outputs
+      SET deleted_at = $1,
+        delete_source = 'user',
+        purge_after = $2,
+        storage_status = 'pending_delete',
+        deleted_by_user_id = $3
+      WHERE id = $4 AND user_id = $3
+    `, [deletedAt, purgeAfter, input.userId, input.outputId])
+    return { outputId: input.outputId, deleted: true, deletedAt, purgeAfter, storageStatus: 'pending_delete' as const }
+  })
+}
+
+export async function restoreGenerationOutput(db: Pool, input: {
+  outputId: string
+  userId: string
+}) {
+  return await withTransaction(db, async (tx) => {
+    const row = (await tx.query<{
+      id: string
+      deleted_at?: string | null
+      storage_status?: string | null
+    }>(`
+      SELECT id, deleted_at::text, storage_status
+      FROM generation_task_outputs
+      WHERE id = $1 AND user_id = $2
+      FOR UPDATE
+    `, [input.outputId, input.userId])).rows[0]
+    if (!row) throw new ApiError(404, 'output_not_found', '作品不存在')
+    if (!row.deleted_at) {
+      return { outputId: input.outputId, restored: true, alreadyActive: true }
+    }
+    const activeCountRow = (await tx.query<{ count: string }>(`
+      SELECT COUNT(*)::text AS count
+      FROM generation_task_outputs
+      WHERE user_id = $1
+        AND deleted_at IS NULL
+        AND storage_status = 'active'
+    `, [input.userId])).rows[0]
+    const activeCount = Number(activeCountRow?.count ?? 0)
+    if (activeCount >= LIBRARY_ACTIVE_OUTPUT_LIMIT) {
+      throw new ApiError(
+        409,
+        'library_active_output_limit_reached',
+        `作品库最多保留 ${LIBRARY_ACTIVE_OUTPUT_LIMIT} 张，请先把部分作品移入回收站后再恢复。`,
+      )
+    }
+    await tx.query(`
+      UPDATE generation_task_outputs
+      SET deleted_at = NULL,
+        delete_source = NULL,
+        delete_reason = NULL,
+        purge_after = NULL,
+        storage_status = 'active',
+        deleted_by_user_id = NULL
+      WHERE id = $1 AND user_id = $2
+    `, [input.outputId, input.userId])
+    return { outputId: input.outputId, restored: true, storageStatus: 'active' as const }
+  })
 }
 
 async function executeReservedGenerationTask(db: Pool, env: ServerEnv, input: {
@@ -1660,7 +2192,7 @@ async function executeReservedGenerationTask(db: Pool, env: ServerEnv, input: {
   payload: GatewayRequest
   prompt: string
   modelSku: string
-  routes: RuntimeRouteRow[]
+  routeStages: RouteExecutionStage[]
   requestedOutputCount: number
   reservation: BillingReservation
   shouldSkipCompletion?: () => boolean
@@ -1668,6 +2200,10 @@ async function executeReservedGenerationTask(db: Pool, env: ServerEnv, input: {
   const taskController = new AbortController()
   registerGenerationTaskController(input.reservation.taskId, taskController)
   try {
+    if (!input.routeStages.length) {
+      throw new ApiError(503, 'no_route', '没有可用的生图线路')
+    }
+
     await markTaskRunningIfQueued(db, input.reservation.taskId)
     if (await isGenerationTaskCancelled(db, input.reservation.taskId)) {
       return await readGenerationTaskResult(db, { taskId: input.reservation.taskId, userId: input.userId })
@@ -1676,13 +2212,14 @@ async function executeReservedGenerationTask(db: Pool, env: ServerEnv, input: {
     const attempts: GatewayAttempt[] = []
     let lastError: unknown = null
     const failoverEnabled = await getGatewayFailoverEnabled(db)
+    const allRoutes = collectStageRoutes(input.routeStages)
     const now = new Date()
-    const coolingRoutes = input.routes.filter((route) => isRouteCoolingDown(route, now))
-    const activeRoutesAtStart = input.routes.filter((route) => !isRouteCoolingDown(route, now))
+    const coolingRoutes = allRoutes.filter((route) => isRouteCoolingDown(route, now))
+    const activeRoutesAtStart = allRoutes.filter((route) => !isRouteCoolingDown(route, now))
     for (const skippedRoute of activeRoutesAtStart.length ? coolingRoutes : []) {
       attempts.push({
         routeId: skippedRoute.route_id,
-        upstreamModel: skippedRoute.upstream_model || skippedRoute.default_upstream_model || skippedRoute.model_name || DEFAULT_UPSTREAM_MODEL,
+        upstreamModel: getUpstreamModelForRoute(skippedRoute),
         success: false,
         latencyMs: 0,
         errorMessage: `线路冷却中，暂跳过到 ${skippedRoute.cooldown_until}`,
@@ -1695,82 +2232,108 @@ async function executeReservedGenerationTask(db: Pool, env: ServerEnv, input: {
     let successRouteId = ''
     let successUpstreamModel = ''
     let successActualParams: Record<string, unknown> | undefined
+    let lockedStage: RouteExecutionStage | null = null
 
     while (collectedImages.length < input.requestedOutputCount) {
       if (input.shouldSkipCompletion?.() || await isGenerationTaskCancelled(db, input.reservation.taskId)) break
-      let retryRound = 0
       let producedThisSlot = false
       let shouldStopGeneration = false
-      while (!producedThisSlot && retryRound < MAX_OUTPUT_SLOT_RETRY_ROUNDS) {
-        const failedRouteIdsThisRound = new Set<string>()
-        const routesToTry = orderRoutesForSlot(input.routes, collectedImages.length + retryRound, new Date(), failedRouteIdsThisRound)
-        if (!routesToTry.length) break
-        for (const route of routesToTry) {
-          if (input.shouldSkipCompletion?.() || await isGenerationTaskCancelled(db, input.reservation.taskId)) {
-            shouldStopGeneration = true
-            break
-          }
-          const startedAt = Date.now()
-          try {
-            const result = await callUpstream(route, {
-              ...input.payload,
-              prompt: input.prompt,
-              modelSku: input.modelSku,
-              params: { ...(input.payload.params ?? {}), n: UPSTREAM_OUTPUT_COUNT_PER_REQUEST },
-            }, taskController.signal)
-            const acceptedImages = result.images.slice(0, UPSTREAM_OUTPUT_COUNT_PER_REQUEST)
-            if (!acceptedImages.length) {
-              throw new UpstreamRequestError('上游未返回图片', 502, 'upstream_server_error')
-            }
-            collectedImages.push(...acceptedImages)
-            collectedRevisedPrompts.push(...acceptedImages.map((_, index) => result.revisedPrompts?.[index]))
-            collectedRawImageUrls.push(...(result.rawImageUrls ?? []).slice(0, acceptedImages.length))
-            if (!successRouteId) successRouteId = route.route_id
-            successUpstreamModel = result.upstreamModel
-            successActualParams ??= result.actualParams
-            await recordRouteSuccess(db, {
-              routeId: route.route_id,
-              modelSkuId: input.modelSku,
-            })
-            attempts.push({
-              routeId: route.route_id,
-              upstreamModel: result.upstreamModel,
-              success: true,
-              latencyMs: Date.now() - startedAt,
-            })
-            producedThisSlot = true
-            break
-          } catch (error) {
-            lastError = error
-            if (taskController.signal.aborted && (await isGenerationTaskCancelled(db, input.reservation.taskId) || isTaskAbortError(error, TASK_ABORT_REASON_CANCELLED))) {
+      const stagesToTry: RouteExecutionStage[] = lockedStage ? [lockedStage] : input.routeStages
+
+      for (const stage of stagesToTry) {
+        let retryRound = 0
+        let shouldAdvanceStage = false
+        while (!producedThisSlot && retryRound < MAX_OUTPUT_SLOT_RETRY_ROUNDS) {
+          const failedRouteIdsThisRound = new Set<string>()
+          const routesToTry = orderRoutesForSlot(stage.routes, collectedImages.length + retryRound, new Date(), failedRouteIdsThisRound)
+          if (!routesToTry.length) break
+
+          for (const route of routesToTry) {
+            if (input.shouldSkipCompletion?.() || await isGenerationTaskCancelled(db, input.reservation.taskId)) {
               shouldStopGeneration = true
               break
             }
-            const failureKind = classifyGatewayFailure(error)
-            if (shouldAffectRouteHealth(error)) {
-              await recordRouteFailure(db, {
+            const startedAt = Date.now()
+            try {
+              const result = await callUpstream(route, {
+                ...input.payload,
+                prompt: input.prompt,
+                modelSku: input.modelSku,
+                params: {
+                  ...(input.payload.params ?? {}),
+                  size: stage.deliveryPlan.baseSize,
+                  n: UPSTREAM_OUTPUT_COUNT_PER_REQUEST,
+                },
+              }, taskController.signal)
+              const acceptedImages = result.images.slice(0, UPSTREAM_OUTPUT_COUNT_PER_REQUEST)
+              if (!acceptedImages.length) {
+                throw new UpstreamRequestError('上游未返回图片', 502, 'upstream_server_error')
+              }
+              collectedImages.push(...acceptedImages)
+              collectedRevisedPrompts.push(...acceptedImages.map((_, index) => result.revisedPrompts?.[index]))
+              collectedRawImageUrls.push(...(result.rawImageUrls ?? []).slice(0, acceptedImages.length))
+              if (!successRouteId) successRouteId = route.route_id
+              successUpstreamModel = result.upstreamModel
+              successActualParams ??= result.actualParams
+              lockedStage ??= stage
+              await recordRouteSuccess(db, {
                 routeId: route.route_id,
                 modelSkuId: input.modelSku,
-                error,
               })
-            }
-            attempts.push({
-              routeId: route.route_id,
-              upstreamModel: route.upstream_model || route.default_upstream_model || route.model_name || DEFAULT_UPSTREAM_MODEL,
-              success: false,
-              latencyMs: Date.now() - startedAt,
-              errorMessage: getErrorMessage(error),
-              failureKind,
-            })
-            failedRouteIdsThisRound.add(route.route_id)
-            if (!failoverEnabled || !isRetryableGatewayError(error)) {
-              shouldStopGeneration = true
+              attempts.push({
+                routeId: route.route_id,
+                upstreamModel: result.upstreamModel,
+                success: true,
+                latencyMs: Date.now() - startedAt,
+              })
+              producedThisSlot = true
               break
+            } catch (error) {
+              lastError = error
+              if (taskController.signal.aborted && (await isGenerationTaskCancelled(db, input.reservation.taskId) || isTaskAbortError(error, TASK_ABORT_REASON_CANCELLED))) {
+                shouldStopGeneration = true
+                break
+              }
+              const failureKind = classifyGatewayFailure(error)
+              if (shouldAffectRouteHealth(error)) {
+                await recordRouteFailure(db, {
+                  routeId: route.route_id,
+                  modelSkuId: input.modelSku,
+                  error,
+                })
+              }
+              attempts.push({
+                routeId: route.route_id,
+                upstreamModel: getUpstreamModelForRoute(route),
+                success: false,
+                latencyMs: Date.now() - startedAt,
+                errorMessage: getErrorMessage(error),
+                failureKind,
+              })
+              failedRouteIdsThisRound.add(route.route_id)
+              const allowRouteFailover = failoverEnabled && (
+                isRetryableGatewayError(error)
+                || failureKind === 'parameter_incompatible'
+              )
+              if (!allowRouteFailover) {
+                if (lockedStage) {
+                  shouldStopGeneration = true
+                } else {
+                  shouldAdvanceStage = true
+                }
+                break
+              }
             }
           }
+
+          if (producedThisSlot || shouldStopGeneration || shouldAdvanceStage) break
+          retryRound += 1
         }
-        retryRound += 1
-        if (shouldStopGeneration) break
+
+        if (producedThisSlot || shouldStopGeneration) break
+        if (lockedStage || !shouldAdvanceStage) {
+          continue
+        }
       }
       if (shouldStopGeneration || !producedThisSlot) break
     }
@@ -1781,6 +2344,7 @@ async function executeReservedGenerationTask(db: Pool, env: ServerEnv, input: {
 
     if (collectedImages.length > 0) {
       const outputImages = collectedImages.slice(0, input.requestedOutputCount)
+      const plannedDeliveryPlan = lockedStage?.deliveryPlan ?? input.routeStages[0]?.deliveryPlan
       const partialInfo = createPartialGenerationInfo({
         requestedOutputCount: input.requestedOutputCount,
         outputCount: outputImages.length,
@@ -1791,9 +2355,17 @@ async function executeReservedGenerationTask(db: Pool, env: ServerEnv, input: {
         taskId: input.reservation.taskId,
         userId: input.userId,
         images: outputImages,
-        deliveryPlan: normalizeDeliveryPlan(input.payload.params?.size),
+        deliveryPlan: plannedDeliveryPlan,
         revisedPrompts: collectedRevisedPrompts.slice(0, outputImages.length),
         rawImageUrls: collectedRawImageUrls.slice(0, outputImages.length),
+      })
+      const deliveryPlan = resolveFinalDeliveryPlan({
+        plannedDeliveryPlan,
+        outputs,
+      })
+      await persistTaskDeliveryPlan(db, {
+        taskId: input.reservation.taskId,
+        deliveryPlan,
       })
       const billing = await finalizeSuccess(db, {
         taskId: input.reservation.taskId,
@@ -1831,6 +2403,7 @@ async function executeReservedGenerationTask(db: Pool, env: ServerEnv, input: {
         outputCount: partialInfo.outputCount,
         partialSuccess: partialInfo.partialSuccess,
         partialFailureMessage: partialInfo.partialFailureMessage,
+        deliveryPlan,
         taskId: input.reservation.taskId,
         billing,
       }
@@ -1920,9 +2493,9 @@ export function registerImageGatewayRoutes(app: FastifyInstance, db: Pool, env: 
         ...payload,
         params: normalizeRequestedParamsForModel(payload.params, model),
       }
-      const deliveryPlan = normalizeDeliveryPlan(normalizedPayload.params?.size)
       const routes = filterRoutesForRequestedSize(await loadRoutesForModel(db, modelSku), normalizedPayload.params?.size)
-      if (!routes.length) throw new ApiError(503, 'no_route', '没有可用的生图线路')
+      const routeStages = buildRouteExecutionStages(routes, normalizedPayload)
+      if (!routeStages.length) throw new ApiError(503, 'no_route', '没有可用的生图线路')
       const requestedOutputCount = getRequestedOutputCount(normalizedPayload)
       reservation = await createReservedRunningTask(db, {
         userId,
@@ -1931,7 +2504,7 @@ export function registerImageGatewayRoutes(app: FastifyInstance, db: Pool, env: 
         mode: Array.isArray(payload.inputImageDataUrls) && payload.inputImageDataUrls.length ? 'edit' : 'generate',
         requestedOutputCount,
         params: normalizedPayload.params,
-        deliveryPlan,
+        deliveryPlan: routeStages[0]?.deliveryPlan,
       })
 
       const result = await executeReservedGenerationTask(db, env, {
@@ -1939,7 +2512,7 @@ export function registerImageGatewayRoutes(app: FastifyInstance, db: Pool, env: 
         payload: normalizedPayload,
         prompt,
         modelSku,
-        routes,
+        routeStages,
         requestedOutputCount,
         reservation,
         shouldSkipCompletion: () => isClientDisconnected(request, reply),
@@ -1985,9 +2558,9 @@ export function registerImageGatewayRoutes(app: FastifyInstance, db: Pool, env: 
         ...payload,
         params: normalizeRequestedParamsForModel(payload.params, model),
       }
-      const deliveryPlan = normalizeDeliveryPlan(normalizedPayload.params?.size)
       const routes = filterRoutesForRequestedSize(await loadRoutesForModel(db, modelSku), normalizedPayload.params?.size)
-      if (!routes.length) throw new ApiError(503, 'no_route', '没有可用的生图线路')
+      const routeStages = buildRouteExecutionStages(routes, normalizedPayload)
+      if (!routeStages.length) throw new ApiError(503, 'no_route', '没有可用的生图线路')
       const requestedOutputCount = getRequestedOutputCount(normalizedPayload)
       const reservation = await createReservedRunningTask(db, {
         userId,
@@ -1996,7 +2569,7 @@ export function registerImageGatewayRoutes(app: FastifyInstance, db: Pool, env: 
         mode: Array.isArray(payload.inputImageDataUrls) && payload.inputImageDataUrls.length ? 'edit' : 'generate',
         requestedOutputCount,
         params: normalizedPayload.params,
-        deliveryPlan,
+        deliveryPlan: routeStages[0]?.deliveryPlan,
         status: 'queued',
         requestPayload: normalizedPayload,
       })
@@ -2006,7 +2579,7 @@ export function registerImageGatewayRoutes(app: FastifyInstance, db: Pool, env: 
         payload: normalizedPayload,
         prompt,
         modelSku,
-        routes,
+        routeStages,
         requestedOutputCount,
         reservation,
       }).catch(() => undefined)
@@ -2027,6 +2600,47 @@ export function registerImageGatewayRoutes(app: FastifyInstance, db: Pool, env: 
       }
       const message = error instanceof Error ? error.message : '提交生图任务失败'
       return reply.status(500).send({ error: { message, requestId } })
+    }
+  })
+
+  app.get('/api/image/tasks', async (request, reply) => {
+    try {
+      const session = await requireUserSession(db, request.headers.authorization)
+      const query = request.query as { limit?: string | number }
+      const rawLimit = typeof query.limit === 'number' ? query.limit : Number(query.limit)
+      const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.trunc(rawLimit), 1), 100) : 50
+      return reply.send({ ok: true, tasks: await listGenerationTaskResults(db, { userId: session.user_id, limit }) })
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
+  app.get('/api/image/outputs', async (request, reply) => {
+    try {
+      const session = await requireUserSession(db, request.headers.authorization)
+      const query = request.query as { limit?: string | number; status?: string }
+      const rawLimit = typeof query.limit === 'number' ? query.limit : Number(query.limit)
+      const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.trunc(rawLimit), 1), 200) : 100
+      const status = query.status === 'trashed' ? 'trashed' : 'active'
+      return reply.send({
+        ok: true,
+        outputs: await listGenerationOutputsForLibrary(db, {
+          userId: session.user_id,
+          status,
+          limit,
+        }),
+      })
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
+  app.delete('/api/image/tasks', async (request, reply) => {
+    try {
+      const session = await requireUserSession(db, request.headers.authorization)
+      return reply.send({ ok: true, ...await deleteCompletedGenerationTasksForUser(db, { userId: session.user_id }) })
+    } catch (error) {
+      return sendError(reply, error)
     }
   })
 
@@ -2054,6 +2668,48 @@ export function registerImageGatewayRoutes(app: FastifyInstance, db: Pool, env: 
     }
   })
 
+  app.delete('/api/image/tasks/:taskId', async (request, reply) => {
+    try {
+      const session = await requireUserSession(db, request.headers.authorization)
+      const params = request.params as { taskId?: string }
+      const taskId = typeof params.taskId === 'string' ? params.taskId.trim() : ''
+      if (!taskId) throw new ApiError(400, 'missing_task_id', '缺少任务 ID')
+      return reply.send({ ok: true, ...await deleteGenerationTask(db, { taskId, userId: session.user_id }) })
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
+  app.delete('/api/image/outputs/:outputId', async (request, reply) => {
+    try {
+      const session = await requireUserSession(db, request.headers.authorization)
+      const params = request.params as { outputId?: string }
+      const outputId = typeof params.outputId === 'string' ? params.outputId.trim() : ''
+      if (!outputId) throw new ApiError(400, 'missing_output_id', '缺少作品 ID')
+      return reply.send({
+        ok: true,
+        ...await softDeleteGenerationOutput(db, { outputId, userId: session.user_id, retentionDays: LIBRARY_TRASH_RETENTION_DAYS }),
+      })
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
+  app.post('/api/image/outputs/:outputId/restore', async (request, reply) => {
+    try {
+      const session = await requireUserSession(db, request.headers.authorization)
+      const params = request.params as { outputId?: string }
+      const outputId = typeof params.outputId === 'string' ? params.outputId.trim() : ''
+      if (!outputId) throw new ApiError(400, 'missing_output_id', '缺少作品 ID')
+      return reply.send({
+        ok: true,
+        ...await restoreGenerationOutput(db, { outputId, userId: session.user_id }),
+      })
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
   app.post('/api/image/record-completed', async (request, reply) => {
     try {
       const session = await requireUserSession(db, request.headers.authorization)
@@ -2066,6 +2722,7 @@ export function registerImageGatewayRoutes(app: FastifyInstance, db: Pool, env: 
         userId: session.user_id,
         clientTaskId: payload.clientTaskId,
         modelSku: await resolveRequestedModelSku(db, payload.modelSku),
+        prompt: payload.prompt,
         mode: payload.mode === 'agent_edit' ? 'agent_edit' : 'agent',
         params: payload.params,
         outputCount,

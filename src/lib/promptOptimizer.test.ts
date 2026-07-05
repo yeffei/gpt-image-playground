@@ -103,6 +103,21 @@ describe('promptOptimizer', () => {
     expect(result.negativePrompt).not.toContain('无肖像')
   })
 
+  it('does not misclassify explicit female character prompts as scene-only', () => {
+    const result = optimizePrompt({
+      prompt: '抽象写实画风，蓝色的大海，干净的沙滩，几只海鸥在天空飞翔，美少女们在海岸边穿着比基尼躺在沙滩椅上休息',
+      negativePrompt: '',
+      hasReferenceImages: false,
+      hasMask: false,
+      currentSize: '3840x2160',
+    })
+
+    expect(result.negativePrompt).not.toContain('无人物')
+    expect(result.negativePrompt).not.toContain('无角色')
+    expect(result.negativePrompt).not.toContain('无肖像')
+    expect(result.negativePrompt).not.toContain('无身体')
+  })
+
   it('does not fight explicit illustration or anime styles in negative defaults', () => {
     const result = optimizePrompt({
       prompt: '水彩插画风的宇宙星云，动漫电影色彩，纯场景，无人物',

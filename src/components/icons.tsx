@@ -105,6 +105,14 @@ export function RefreshIcon(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+export function RestoreIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" {...props}>
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 13V4m0 0L8.5 7.5M12 4l3.5 3.5M5 15v2a2 2 0 002 2h10a2 2 0 002-2v-2" />
+    </svg>
+  )
+}
+
 export function CodeIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" {...props}>

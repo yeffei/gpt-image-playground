@@ -64,8 +64,20 @@ function isGeminiModelSku(modelSku: ModelSku) {
   return /^gemini(?:$|-)/i.test(modelSku.id)
 }
 
-function clampSizeToMaxLongestEdge(size: string, maxSupportedLongEdge?: number | null) {
-  if (typeof maxSupportedLongEdge !== 'number' || !Number.isFinite(maxSupportedLongEdge) || maxSupportedLongEdge <= 0) {
+function getModelSkuMaxDeliveryLongEdge(modelSku: ModelSku) {
+  const maxDeliveryLongEdge = modelSku.maxDeliveryLongEdge
+  if (typeof maxDeliveryLongEdge === 'number' && Number.isFinite(maxDeliveryLongEdge) && maxDeliveryLongEdge > 0) {
+    return Math.max(1, Math.trunc(maxDeliveryLongEdge))
+  }
+  const legacyMaxSupportedLongEdge = modelSku.maxSupportedLongEdge
+  if (typeof legacyMaxSupportedLongEdge === 'number' && Number.isFinite(legacyMaxSupportedLongEdge) && legacyMaxSupportedLongEdge > 0) {
+    return Math.max(1, Math.trunc(legacyMaxSupportedLongEdge))
+  }
+  return null
+}
+
+function clampSizeToMaxLongestEdge(size: string, maxLongestEdge?: number | null) {
+  if (typeof maxLongestEdge !== 'number' || !Number.isFinite(maxLongestEdge) || maxLongestEdge <= 0) {
     return size
   }
 
@@ -76,16 +88,16 @@ function clampSizeToMaxLongestEdge(size: string, maxSupportedLongEdge?: number |
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return size
 
   const longestEdge = Math.max(width, height)
-  if (longestEdge <= maxSupportedLongEdge) return size
+  if (longestEdge <= maxLongestEdge) return size
 
-  const scale = maxSupportedLongEdge / longestEdge
+  const scale = maxLongestEdge / longestEdge
   return normalizeImageSize(`${Math.round(width * scale)}x${Math.round(height * scale)}`)
 }
 
 function normalizeSizeForModelSku(size: string, modelSku: ModelSku) {
   const normalizedSize = normalizeImageSize(size) || DEFAULT_PARAMS.size
   const supportedSizes = getSpecificSupportedModelSkuSizes(modelSku)
-  if (!supportedSizes.length) return clampSizeToMaxLongestEdge(normalizedSize, modelSku.maxSupportedLongEdge)
+  if (!supportedSizes.length) return clampSizeToMaxLongestEdge(normalizedSize, getModelSkuMaxDeliveryLongEdge(modelSku))
   if (supportedSizes.includes(normalizedSize)) return normalizedSize
 
   const defaultSize = normalizeImageSize(modelSku.defaultParams.size) || DEFAULT_PARAMS.size

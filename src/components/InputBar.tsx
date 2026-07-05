@@ -929,17 +929,12 @@ export default function InputBar() {
       return
     }
 
-    if (promptOptimizerPreview) {
-      setPromptOptimizerResult(promptOptimizerPreview)
-      return
-    }
-
     const { buildPromptOptimizerResult } = await import('../lib/promptOptimizer')
     setPromptOptimizerResult(buildPromptOptimizerResult({
       ...promptOptimizerInput,
       prompt: livePrompt,
     }))
-  }, [promptOptimizerInput, promptOptimizerPreview, showToast, visiblePrompt])
+  }, [promptOptimizerInput, showToast, visiblePrompt])
 
   const handleClosePromptOptimizer = useCallback(() => {
     setPromptOptimizerResult(null)
@@ -1960,7 +1955,7 @@ export default function InputBar() {
         onTouchCancel={sizeHint.hide}
         onClick={sizeHint.show}
       >
-        <span className="ml-1 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-gray-500">尺寸</span>
+        <span className="ml-1 text-[11px] font-medium tracking-normal text-slate-400 dark:text-gray-500">尺寸</span>
         <button
           type="button"
           onClick={() => { dismissAllTooltips(); setShowSizePicker(true) }}
@@ -1969,7 +1964,7 @@ export default function InputBar() {
           title="选择尺寸"
         >
           <div className="font-mono text-xs text-slate-700 dark:text-gray-100">{displaySizeLabel}</div>
-          <div className="mt-0.5 text-[10px] leading-none text-slate-400 dark:text-gray-500">{displaySizeSubLabel}</div>
+          <div className="mt-0.5 text-[11px] leading-tight text-slate-400 dark:text-gray-500">{displaySizeSubLabel}</div>
         </button>
         <ButtonTooltip
           visible={isFalTextToImage && sizeHint.visible}
@@ -1988,7 +1983,7 @@ export default function InputBar() {
         onTouchCancel={qualityHint.hide}
         onClick={qualityHint.show}
       >
-        <span className="prototype-param-compact-label ml-1 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-gray-500">质量</span>
+        <span className="prototype-param-compact-label ml-1 text-[11px] font-medium tracking-normal text-slate-400 dark:text-gray-500">质量</span>
         {usesProductGateway ? (
           <div className="prototype-quality-segment" role="radiogroup" aria-label="质量">
             {qualityOptions.map((option) => {
@@ -2031,7 +2026,7 @@ export default function InputBar() {
 
     const quantityField = outputCountOptions.length <= 4 ? (
       <label className="prototype-param-quantity-field prototype-param-compact-field relative flex flex-col gap-1">
-        <span className="prototype-param-compact-label ml-1 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-gray-500">数量</span>
+        <span className="prototype-param-compact-label ml-1 text-[11px] font-medium tracking-normal text-slate-400 dark:text-gray-500">数量</span>
         <div
           className="prototype-quantity-segment"
           role="radiogroup"
@@ -2059,7 +2054,7 @@ export default function InputBar() {
       </label>
     ) : (
       <label className="prototype-param-quantity-field prototype-param-compact-field relative flex flex-col gap-1">
-        <span className="prototype-param-compact-label ml-1 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-gray-500">数量</span>
+        <span className="prototype-param-compact-label ml-1 text-[11px] font-medium tracking-normal text-slate-400 dark:text-gray-500">数量</span>
         <Select
           value={String(params.n)}
           onChange={(val) => handleQuantitySelect(Number(val))}
@@ -2093,7 +2088,7 @@ export default function InputBar() {
   const renderModelSelector = () => (
     <div className="prototype-model-picker">
       <label className="prototype-param-model-field relative flex flex-col gap-1">
-        <span className="prototype-field-label ml-1 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-gray-500">模型</span>
+        <span className="prototype-field-label ml-1 text-[11px] font-medium tracking-normal text-slate-400 dark:text-gray-500">模型</span>
         <div className="prototype-model-radio-group" role="radiogroup" aria-label="模型选择">
           {productModelOptions.length ? productModelOptions.map((option) => {
             const active = option.value === selectedModelSkuId
@@ -2134,7 +2129,7 @@ export default function InputBar() {
     >
       <div className="prototype-optimizer-copy min-w-0">
         <div className="prototype-optimizer-title text-[13px] font-semibold leading-snug text-slate-800 dark:text-gray-100">提示词优化</div>
-        <div className="prototype-optimizer-body mt-0.5 text-[10px] leading-relaxed text-slate-500 dark:text-gray-400">
+        <div className="prototype-optimizer-body mt-0.5 text-[11px] leading-relaxed text-slate-500 dark:text-gray-400">
           {promptOptimizerModeLabel} · {promptOptimizerStatusLabel}
         </div>
       </div>
@@ -2149,7 +2144,7 @@ export default function InputBar() {
   const renderOutputParams = (cols: string, singleFieldCols = 'grid-cols-1') => (
     <div className={`prototype-param-grid grid ${compressionDisabled ? singleFieldCols : cols} gap-2 text-xs flex-1`}>
       <label className={`prototype-output-format-field ${compressionDisabled ? 'is-single' : 'is-paired'} flex flex-col gap-1`}>
-        <span className="prototype-output-format-label ml-1 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-gray-500">格式</span>
+        <span className="prototype-output-format-label ml-1 text-[11px] font-medium tracking-normal text-slate-400 dark:text-gray-500">格式</span>
         <div className="prototype-output-format-segment" role="radiogroup" aria-label="格式">
           {[
             { label: 'PNG', value: 'png' },
@@ -2181,7 +2176,7 @@ export default function InputBar() {
           onTouchCancel={compressionHint.hide}
           onClick={compressionHint.show}
         >
-          <span className="ml-1 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-gray-500">压缩率</span>
+          <span className="ml-1 text-[11px] font-medium tracking-normal text-slate-400 dark:text-gray-500">压缩率</span>
           <input
             value={outputCompressionInput}
             onChange={(e) => setOutputCompressionInput(e.target.value)}
@@ -2255,7 +2250,7 @@ export default function InputBar() {
             onClose={() => setShowSizePicker(false)}
             allowAuto={!isFalTextToImage}
             supportedSizes={supportedSizeOptions}
-            maxSupportedLongEdge={usesProductGateway ? activeModelSku?.maxSupportedLongEdge ?? null : null}
+            maxDeliveryLongEdge={usesProductGateway ? activeModelSku?.maxDeliveryLongEdge ?? activeModelSku?.maxSupportedLongEdge ?? null : null}
           />
         </Suspense>
       )}

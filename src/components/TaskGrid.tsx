@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
-import { useStore, reuseConfig, removeTask, stopRunningTask, isTaskVisibleForAccount } from '../store'
+import { useStore, reuseConfig, removeTask, restoreTaskFromTrash, stopRunningTask, isTaskVisibleForAccount } from '../store'
 import type { TaskRecord } from '../types'
 import TaskCard from './TaskCard'
 import {
@@ -41,6 +41,7 @@ export default function TaskGrid({ limit = 6 }: { limit?: number }) {
   const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
   const isLibraryView = galleryView === 'library'
   const isFavoritesView = isLibraryView && libraryViewMode === 'favorites'
+  const isTrashView = isLibraryView && libraryViewMode === 'trash'
   const effectiveFavoriteFilter = filterFavorite || isFavoritesView
 
   const filteredTasks = useMemo(() => {
@@ -48,6 +49,11 @@ export default function TaskGrid({ limit = 6 }: { limit?: number }) {
     
     return tasks.filter((t) => {
       if (!isTaskVisibleForAccount(t, account)) return false
+      if (isTrashView) {
+        if (t.libraryState !== 'trashed') return false
+      } else if (t.libraryState === 'trashed') {
+        return false
+      }
       if (effectiveFavoriteFilter && !t.isFavorite) return false
       const matchStatus = filterStatus === 'all' || t.status === filterStatus
       if (!matchStatus) return false
@@ -57,7 +63,7 @@ export default function TaskGrid({ limit = 6 }: { limit?: number }) {
       const paramStr = JSON.stringify(t.params).toLowerCase()
       return prompt.includes(q) || paramStr.includes(q)
     }).sort((a, b) => getTaskRecentTime(b) - getTaskRecentTime(a) || b.createdAt - a.createdAt)
-  }, [account, tasks, searchQuery, filterStatus, effectiveFavoriteFilter])
+  }, [account, tasks, searchQuery, filterStatus, effectiveFavoriteFilter, isTrashView])
   const visibleTasks = limit > 0 ? filteredTasks.slice(0, limit) : filteredTasks
   const canDragSelect = visibleTasks.length > 0
   const hasActiveFilters = Boolean(searchQuery.trim()) || effectiveFavoriteFilter || filterStatus !== 'all'
@@ -65,10 +71,14 @@ export default function TaskGrid({ limit = 6 }: { limit?: number }) {
   const handleDelete = (task: typeof tasks[0]) => {
     const isRunningTask = task.status === 'running'
     setConfirmDialog({
-      title: isRunningTask ? '停止生成' : '删除记录',
-      message: isRunningTask ? '这条任务仍在生成中。停止后会保留当前记录，但不会继续等待服务端结果。' : '确定要删除这条记录吗？关联的图片资源也会被清理（如果没有其他任务引用）。',
-      confirmText: isRunningTask ? '停止生成' : undefined,
-      action: () => (isRunningTask ? stopRunningTask(task) : removeTask(task)),
+      title: isRunningTask ? '停止生成' : isTrashView ? '恢复作品' : '移入回收站',
+      message: isRunningTask
+        ? '这条任务仍在生成中。停止后会保留当前记录，但不会继续等待服务端结果。'
+        : isTrashView
+        ? '确定恢复这条作品吗？恢复后会重新出现在作品库。'
+        : '确定将这条作品移入回收站吗？回收站保留 7 天，期间可以恢复。',
+      confirmText: isRunningTask ? '停止生成' : isTrashView ? '恢复作品' : '移入回收站',
+      action: () => (isRunningTask ? stopRunningTask(task) : isTrashView ? restoreTaskFromTrash(task) : removeTask(task)),
     })
   }
 
@@ -289,6 +299,13 @@ export default function TaskGrid({ limit = 6 }: { limit?: number }) {
       return {
         title: '还没有收藏结果',
         copy: '先在作品里标记值得保留的内容，后面这里会集中承接你的精选结果。',
+      }
+    }
+
+    if (isTrashView) {
+      return {
+        title: '回收站还是空的',
+        copy: '从作品库删除的正式作品会先进入这里保留 7 天，期间可以恢复。',
       }
     }
 

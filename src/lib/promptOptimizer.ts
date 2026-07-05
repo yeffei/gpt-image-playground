@@ -43,7 +43,7 @@ const NEGATIVE_BASE_TERMS_ZH = [
   '文字错误',
 ]
 
-const PEOPLE_SUBJECT_PATTERN = /(人像|人物|人类|角色|肖像|女孩|女生|女人|女性|男孩|男生|男人|男性|模特|人群|行人|person|people|human|portrait|woman|man|girl|boy|model|character|crowd)/i
+const PEOPLE_SUBJECT_PATTERN = /(人像|人物|人类|角色|肖像|女孩|女生|女人|女性|男孩|男生|男人|男性|少女|美少女|美女|帅哥|模特|人群|行人|person|people|human|portrait|woman|man|girl|boy|model|character|crowd)/i
 const SCENE_ONLY_PATTERN = /(宇宙|太空|星云|星系|银河|星空|风景|自然景观|山脉|海洋|天空|云海|建筑空间|室内空间|纯场景|无人|无人物|space|cosmos|galaxy|nebula|starscape|landscape|seascape|sky|mountain|interior|architecture|no people|without people)/i
 const EXPLICIT_NO_PEOPLE_PATTERN = /(无人物|无人|无角色|不要人物|避免人物|没有人物|no people|without people|no human figures|no characters)/i
 

@@ -17,7 +17,7 @@ type DeliveryPlan = {
   requestedTier: '1K' | '2K' | '4K'
   requestedRatio: string
   baseSize: string
-  baseRatio: '1:1' | '3:2' | '2:3'
+  baseRatio: string
   strategy: 'direct' | 'upscale' | 'crop_then_upscale' | 'pad_then_upscale'
   deliveryLabel: string
 }

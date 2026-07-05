@@ -133,12 +133,18 @@ describe('platform capabilities', () => {
       id: 'model-2k-only',
       supportedSizes: ['*'],
       maxSupportedLongEdge: 2560,
+      maxBaseGenerationLongEdge: 2560,
+      maxDeliveryLongEdge: 3840,
     })
     expect(payload.image.models[1]).toMatchObject({
       id: 'model-4k',
       maxSupportedLongEdge: 3840,
+      maxBaseGenerationLongEdge: 3840,
+      maxDeliveryLongEdge: 3840,
     })
     expect(payload.image.maxSupportedLongEdge).toBe(3840)
+    expect(payload.image.maxBaseGenerationLongEdge).toBe(3840)
+    expect(payload.image.maxDeliveryLongEdge).toBe(3840)
   })
 
   it('serves public capabilities without secret route fields', async () => {
@@ -172,6 +178,10 @@ describe('platform capabilities', () => {
       expiredShareCleanupLimit: 5000,
       expiredShareCleanupIntervalMinutes: 360,
       expiredShareCleanupRunOnStartup: true,
+      trashedOutputCleanupEnabled: false,
+      trashedOutputCleanupLimit: 5000,
+      trashedOutputCleanupIntervalMinutes: 360,
+      trashedOutputCleanupRunOnStartup: true,
     })
 
     try {

@@ -71,7 +71,6 @@ function mapAccountLedgerRecord(record: AccountLedgerRecord) {
 export default function PlanAndBillingView() {
   const account = useStore((s) => s.account)
   const authSessionToken = useStore((s) => s.authSessionToken)
-  const billing = useStore((s) => s.billing)
   const refreshAccountLedger = useStore((s) => s.refreshAccountLedger)
   const refreshReferralInfo = useStore((s) => s.refreshReferralInfo)
   const accountLedger = useStore((s) => s.accountLedger)
@@ -121,42 +120,17 @@ export default function PlanAndBillingView() {
 
   const inviteCode = account.inviteCode?.trim() ?? ''
   const hasBackendSession = Boolean(account.isLoggedIn && authSessionToken?.trim())
-  const canUseLocalBilling = !hasBackendSession
+  const requiresBackendSession = Boolean(account.isLoggedIn && !hasBackendSession)
   const inviteLink = useMemo(() => {
     if (!inviteCode || typeof window === 'undefined') return ''
     const url = new URL('/register', window.location.origin)
     url.searchParams.set('inviteCode', inviteCode)
     return url.toString()
   }, [inviteCode])
-  const localLedgerRecords = useMemo(() => [
-    ...billing.rechargeHistory
-      .map((record) => ({
-        id: record.id,
-        createdAt: record.createdAt,
-        type: (record.status === 'success' ? 'income' : 'neutral') as LedgerRecordType,
-        title: record.status === 'success' ? '余额码兑换' : record.status === 'failed' ? '兑换失败' : '兑换取消',
-        meta: record.code ? `余额码 ${record.code}` : '余额码',
-        amount: record.status === 'success' ? record.amount : 0,
-        amountLabel: record.status === 'success' ? `+${formatAmount(record.amount)}` : '0',
-        balanceAfter: record.balanceAfter ?? account.balance,
-      })),
-    ...billing.usageHistory.map((record) => ({
-      id: record.id,
-      createdAt: record.createdAt,
-      type: 'expense' as const,
-      title: '创作扣费',
-      meta: `${record.sourceMode === 'agent' ? '对话创作' : '工作台创作'} · 按规格计费 · ${record.outputCount} 张`,
-      amount: -record.amount,
-      amountLabel: `-${formatAmount(record.amount)}`,
-      balanceAfter: record.balanceAfter,
-    })),
-  ].sort((a, b) => b.createdAt - a.createdAt), [account.balance, billing.rechargeHistory, billing.usageHistory])
   const balanceLedgerRecords = useMemo(() => {
-    if (accountLedger) {
-      return accountLedger.map(mapAccountLedgerRecord).sort((a, b) => b.createdAt - a.createdAt)
-    }
-    return canUseLocalBilling ? localLedgerRecords : []
-  }, [accountLedger, canUseLocalBilling, localLedgerRecords])
+    if (!accountLedger) return []
+    return accountLedger.map(mapAccountLedgerRecord).sort((a, b) => b.createdAt - a.createdAt)
+  }, [accountLedger])
 
   const filteredLedgerRecords = useMemo(() => balanceLedgerRecords.filter((record) => {
     if (ledgerFilter === 'all') return true
@@ -246,7 +220,7 @@ export default function PlanAndBillingView() {
         </div>
 
         <div className="plan-billing-layout">
-          <div className={`plan-utility-row ${account.isLoggedIn ? '' : 'is-solo'}`}>
+          <div className={`plan-utility-row ${hasBackendSession ? '' : 'is-solo'}`}>
             <section className="plan-card plan-ledger-card">
               <div className="plan-card-head plan-ledger-head">
                 <div>
@@ -314,10 +288,12 @@ export default function PlanAndBillingView() {
                 </div>
               ) : (
                 <div className="plan-empty-note">
-                  <strong>暂无余额流水</strong>
+                  <strong>{requiresBackendSession ? '请登录真实账号查看余额流水' : '暂无余额流水'}</strong>
                   <p>
                     {accountLedgerError
                       ? accountLedgerError
+                      : requiresBackendSession
+                      ? '当前页面只展示服务端权威账本。请重新登录真实账号后再查看。'
                       : account.isLoggedIn
                       ? '完成余额码兑换或出图扣费后会显示在这里。'
                       : '登录后，余额变化会显示在这里。'}
@@ -326,7 +302,7 @@ export default function PlanAndBillingView() {
               )}
             </section>
 
-            {account.isLoggedIn ? (
+            {hasBackendSession ? (
               <section id="invite-registration" className="plan-card plan-invite-card" aria-label="邀请链接">
                 <div className="plan-card-head plan-invite-head">
                   <div>

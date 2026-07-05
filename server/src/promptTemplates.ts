@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { extname, join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import type { Pool } from 'pg'
@@ -14,6 +14,16 @@ const MAX_IMPORT_CANDIDATES = 80
 const assetRoot = join(process.cwd(), 'public', 'prompt-template-assets')
 const MIN_IMPORT_PROMPT_LENGTH = 80
 const OFFICIAL_TEMPLATE_HIDDEN_SETTING_KEY = 'prompt_library_hidden_template_ids'
+const IMPORT_FETCH_RETRY_COUNT = 2
+const IMPORT_FETCH_TIMEOUT_MS = 20000
+const COMMON_GITHUB_IMPORT_PATHS = [
+  'docs/gallery-part-1.md',
+  'docs/gallery-part-2.md',
+  'docs/gallery.md',
+  'docs/examples.md',
+  'examples.md',
+  'README.md',
+]
 
 const QUALITY_HINTS = [
   '光',
@@ -81,6 +91,17 @@ interface PromptTemplateRow {
   published_at?: string | null
 }
 
+const PUBLIC_TEMPLATE_CATEGORIES = new Set([
+  '海报插画',
+  '人像摄影',
+  '产品静物',
+  '空间氛围',
+  '品牌广告',
+  'UI / 社媒视觉',
+  '角色设定',
+  '信息图解',
+])
+
 interface ImportRunRow {
   id: string
   source_url: string
@@ -90,6 +111,7 @@ interface ImportRunRow {
   total_candidates: number
   approved_count: number
   rejected_count: number
+  diagnostic_summary?: string | null
   error_summary?: string | null
   created_by_admin_id?: string | null
   created_at: string
@@ -187,9 +209,10 @@ function normalizePagination(query: Record<string, unknown>) {
 }
 
 function serializeTemplate(row: PromptTemplateRow) {
+  const normalizedTitle = localizeCandidateDisplayTitle(row.title, row.prompt)
   return {
     id: row.id,
-    title: row.title,
+    title: normalizedTitle,
     category: row.category,
     tags: Array.isArray(row.tags) ? row.tags : [],
     prompt: row.prompt,
@@ -205,6 +228,42 @@ function serializeTemplate(row: PromptTemplateRow) {
   }
 }
 
+function normalizePublicTemplateCategory(category: string) {
+  return PUBLIC_TEMPLATE_CATEGORIES.has(category) ? category : '海报插画'
+}
+
+function buildPublicTemplateSummary(prompt: string) {
+  const normalized = prompt.replace(/\s+/g, ' ').trim()
+  if (!normalized) return '来自后台审核通过的官方提示词模板。'
+  return normalized.length > 96 ? `${normalized.slice(0, 96)}...` : normalized
+}
+
+function serializePublicTemplate(row: PromptTemplateRow) {
+  const previewImageUrl = row.image_path?.trim() || ''
+  const normalizedTitle = localizeCandidateDisplayTitle(row.title, row.prompt)
+  return {
+    id: row.id,
+    title: normalizedTitle,
+    summary: buildPublicTemplateSummary(row.prompt),
+    category: normalizePublicTemplateCategory(row.category),
+    ratio: '1:1',
+    tags: Array.isArray(row.tags) ? row.tags : [],
+    prompt: row.prompt,
+    negativePrompt: '',
+    guidance: [],
+    image: previewImageUrl || 'linear-gradient(145deg, rgba(30,41,59,0.96), rgba(100,116,139,0.72))',
+    thumbnailImageUrl: previewImageUrl || undefined,
+    previewImageUrl: previewImageUrl || undefined,
+    featured: false,
+    source: 'official',
+    templateType: 'reusable',
+    sourceName: '后台模板',
+    sourceUrl: row.source_url ?? undefined,
+    createdAt: row.created_at,
+    publishedAt: row.published_at ?? null,
+  }
+}
+
 function serializeRun(row: ImportRunRow) {
   return {
     id: row.id,
@@ -215,6 +274,7 @@ function serializeRun(row: ImportRunRow) {
     totalCandidates: row.total_candidates,
     approvedCount: row.approved_count,
     rejectedCount: row.rejected_count,
+    diagnosticSummary: row.diagnostic_summary ?? null,
     errorSummary: row.error_summary ?? null,
     createdByAdminId: row.created_by_admin_id ?? null,
     createdAt: row.created_at,
@@ -285,10 +345,68 @@ function inferExtension(contentType: string, url: string) {
   return '.jpg'
 }
 
-async function fetchText(url: string) {
-  const response = await fetch(url, { headers: { 'User-Agent': 'gpt-image-playground-admin-importer' } })
-  if (!response.ok) throw new ApiError(400, 'source_fetch_failed', `来源读取失败：HTTP ${response.status}`)
-  return await response.text()
+function getFetchErrorMessage(error: unknown) {
+  if (!(error instanceof Error)) return String(error)
+  const cause = error.cause instanceof Error ? `，${error.cause.message}` : ''
+  return `${error.message}${cause}`
+}
+
+async function fetchText(url: string, options: { optional?: boolean } = {}) {
+  let lastError: unknown = null
+  for (let attempt = 0; attempt <= IMPORT_FETCH_RETRY_COUNT; attempt += 1) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), IMPORT_FETCH_TIMEOUT_MS)
+    try {
+      const response = await fetch(url, {
+        headers: { 'User-Agent': 'gpt-image-playground-admin-importer' },
+        signal: controller.signal,
+      })
+      if (!response.ok) {
+        if (options.optional && response.status === 404) return null
+        throw new ApiError(400, 'source_fetch_failed', `来源读取失败：${url} HTTP ${response.status}`)
+      }
+      return await response.text()
+    } catch (error) {
+      lastError = error
+      if (attempt >= IMPORT_FETCH_RETRY_COUNT) break
+      await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)))
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  if (options.optional) return null
+  throw new ApiError(400, 'source_fetch_failed', `来源读取失败：${url}，${getFetchErrorMessage(lastError)}`)
+}
+
+function isImportTextPath(path: string) {
+  return /\.(md|mdx|txt|json)$/i.test(path)
+}
+
+function isLikelyGalleryImportPath(path: string) {
+  return /(?:^|\/)(?:gallery|case|cases|examples?|showcase)[^/]*\.(?:md|mdx|txt|json)$/i.test(path)
+}
+
+function compareGithubImportPaths(left: string, right: string) {
+  const leftGallery = isLikelyGalleryImportPath(left)
+  const rightGallery = isLikelyGalleryImportPath(right)
+  if (leftGallery !== rightGallery) return leftGallery ? -1 : 1
+  const leftMarkdown = /\.(md|mdx)$/i.test(left)
+  const rightMarkdown = /\.(md|mdx)$/i.test(right)
+  if (leftMarkdown !== rightMarkdown) return leftMarkdown ? -1 : 1
+  const leftReadme = /(?:^|\/)readme(?:\.[a-z-]+)?\.md$/i.test(left)
+  const rightReadme = /(?:^|\/)readme(?:\.[a-z-]+)?\.md$/i.test(right)
+  if (leftReadme !== rightReadme) return leftReadme ? 1 : -1
+  return left.localeCompare(right)
+}
+
+async function fetchCommonGithubImportTexts(owner: string, repo: string, branch: string) {
+  const texts = []
+  for (const path of COMMON_GITHUB_IMPORT_PATHS) {
+    const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path}`
+    const text = await fetchText(rawUrl, { optional: true })
+    if (text) texts.push({ sourceUrl: rawUrl, text })
+  }
+  return texts
 }
 
 async function fetchGithubTexts(sourceUrl: string) {
@@ -296,20 +414,41 @@ async function fetchGithubTexts(sourceUrl: string) {
   const parts = parsed.pathname.split('/').filter(Boolean)
   if (parts.length < 2) throw new ApiError(400, 'invalid_github_url', 'GitHub 仓库链接格式无效')
   const [owner, repo] = parts
+
+  if (parts[2] === 'blob' && parts[3] && parts.length > 4) {
+    const branch = parts[3]
+    const path = parts.slice(4).join('/')
+    if (!isImportTextPath(path)) throw new ApiError(400, 'unsupported_github_file', 'GitHub 文件必须是 md、mdx、txt 或 json')
+    const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path}`
+    return [{ sourceUrl: rawUrl, text: await fetchText(rawUrl) }]
+  }
+
   const branch = parts[2] === 'tree' && parts[3] ? parts[3] : 'HEAD'
   const rootPath = parts[2] === 'tree' && parts[3] ? parts.slice(4).join('/') : ''
+  if (!rootPath) {
+    const commonTexts = await fetchCommonGithubImportTexts(owner, repo, branch)
+    if (commonTexts.some((item) => parseMarkdownCandidates(item.text, item.sourceUrl).some((candidate) => candidate.imageUrl))) {
+      return commonTexts.slice(0, MAX_IMPORT_FILES)
+    }
+  }
+
   const treeUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`
   const treePayload = await fetchText(treeUrl)
+  if (!treePayload) throw new ApiError(400, 'source_fetch_failed', `来源读取失败：${treeUrl}`)
   const tree = JSON.parse(treePayload) as { tree?: Array<{ path?: string; type?: string }> }
-  const filePaths = (tree.tree ?? [])
+  const matchingPaths = (tree.tree ?? [])
     .filter((item) => item.type === 'blob' && typeof item.path === 'string')
     .map((item) => item.path ?? '')
-    .filter((path) => (!rootPath || path.startsWith(`${rootPath}/`) || path === rootPath) && /\.(md|mdx|txt|json)$/i.test(path))
+    .filter((path) => (!rootPath || path.startsWith(`${rootPath}/`) || path === rootPath) && isImportTextPath(path))
+  const galleryPaths = matchingPaths.filter(isLikelyGalleryImportPath)
+  const filePaths = (galleryPaths.length ? galleryPaths : matchingPaths)
+    .sort(compareGithubImportPaths)
     .slice(0, MAX_IMPORT_FILES)
   const texts = []
   for (const path of filePaths) {
     const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch === 'HEAD' ? 'HEAD' : branch}/${path}`
-    texts.push({ sourceUrl: rawUrl, text: await fetchText(rawUrl) })
+    const text = await fetchText(rawUrl, { optional: true })
+    if (text) texts.push({ sourceUrl: rawUrl, text })
   }
   return texts
 }
@@ -340,45 +479,249 @@ function normalizeImportedTitle(title: string, prompt: string, index?: number) {
   return `精选提示词 ${index == null ? '' : index + 1}`.trim()
 }
 
+function stripImportedTitlePrefix(title: string) {
+  return title
+    .trim()
+    .replace(/^(?:例|case|example|prompt)\s*\d+\s*[:：.\-]\s*/i, '')
+    .replace(/^\d+(?:\.\d+)*[.)]\s*/, '')
+    .trim()
+}
+
+const GENERIC_IMPORTED_TITLES = new Set([
+  '插画艺术风格创作',
+  '插画艺术创作图',
+  '人像写实摄影图',
+  '写实摄影风格创作',
+  '写实摄影风格图',
+  '主题海报版式设计',
+  '信息图可视化设计',
+  '电商商品展示设计',
+  '建筑空间场景图',
+  '室内空间渲染图',
+  '人物角色设定图',
+  '社媒界面截图',
+  '应用界面样机图',
+  '科普百科图',
+  '关系图谱信息图',
+  '漫画分镜叙事设计',
+  '中文候选提示词',
+])
+
+const CATEGORY_FALLBACK_TITLES: Record<string, string> = {
+  '海报插画': '主题海报创作',
+  '人像摄影': '人物摄影模板',
+  '产品静物': '产品静物模板',
+  '空间氛围': '空间氛围模板',
+  '品牌广告': '品牌广告模板',
+  'UI / 社媒视觉': '界面视觉模板',
+  '角色设定': '角色设定模板',
+  '信息图解': '信息图解模板',
+}
+
+function isGenericImportedTitle(title: string) {
+  return GENERIC_IMPORTED_TITLES.has(title)
+}
+
+function resolvePromptArgumentDefaults(value: string) {
+  if (!value.trim()) return ''
+  return value
+    .replace(/\\"/g, '"')
+    .replace(/\{argument\s+name=(?:"[^"]*"|'[^']*'|[^\s}]+)\s+default=(?:"([^"]*)"|'([^']*)')\s*\}/gi, (_match, quoted, singleQuoted) => {
+      const resolved = quoted ?? singleQuoted ?? ''
+      return resolved.trim()
+    })
+}
+
+function normalizeInferenceText(value: string) {
+  return resolvePromptArgumentDefaults(value)
+    .replace(/\r/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function cleanGeneratedTitle(value: string) {
+  let text = normalizeInferenceText(value)
+  if (!text) return ''
+  text = text
+    .replace(/^[`"'“”‘’《》\[\](){}【】]+/, '')
+    .replace(/[`"'“”‘’《》\[\](){}【】]+$/, '')
+    .replace(/^(?:请)?(?:根据【[^】]+】)?(?:自动)?(?:生成|画|绘制|制作)(?:一张|一幅|一个|一组|一套)?/u, '')
+    .replace(/^a\s+(?:highly\s+)?(?:detailed|realistic|photorealistic|cinematic|vintage|striking|professional|clean|technical|scientific)\s+/i, '')
+    .replace(/^an?\s+/i, '')
+    .replace(/^(?:of|for)\s+/i, '')
+    .replace(/\s*[：:|]\s*$/, '')
+    .trim()
+
+  if (/[\u4e00-\u9fff]/.test(text)) {
+    text = text.replace(/\s+[A-Z][A-Z0-9\s\-]{3,}$/g, '').trim()
+  }
+  return text.slice(0, 80)
+}
+
+function normalizeTitleTopic(value: string) {
+  return cleanGeneratedTitle(value)
+    .replace(/\s+for\s+[^,，。;；]+$/i, '')
+    .replace(/\s+\|\s+.*$/u, '')
+    .trim()
+}
+
+function parsePromptRecord(prompt: string) {
+  const trimmed = prompt.trim()
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return null
+  try {
+    const parsed = JSON.parse(trimmed)
+    return isRecord(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function readPromptRecordString(record: Record<string, unknown> | null, path: string) {
+  if (!record) return ''
+  const value = path.split('.').reduce<unknown>((current, key) => (isRecord(current) ? current[key] : undefined), record)
+  return typeof value === 'string' ? cleanGeneratedTitle(value) : ''
+}
+
+function pickMeaningfulTitle(...values: string[]) {
+  for (const value of values) {
+    const cleaned = normalizeTitleTopic(value)
+    if (!cleaned) continue
+    if (isGenericImportedTitle(cleaned)) continue
+    return cleaned
+  }
+  return ''
+}
+
+function inferCategoryFromPrompt(title: string, prompt: string) {
+  const body = stripImportedTitlePrefix(title)
+  const sourceTitle = isGenericImportedTitle(body) ? '' : body
+  const text = `${sourceTitle}\n${normalizeInferenceText(prompt)}`.toLowerCase()
+  if (/(infographic|flowchart|timeline|atlas|guide|diagram|exploded view|lookbook|map infographic|recipe|百科|图鉴|地图|流程图|关系图谱|信息图)/.test(text)) return '信息图解'
+  if (/(screenshot|status bar|dialog box|interface|mockup|feed|social post|x 的内容截图|手机截图|界面|样机图)/.test(text)) return 'UI / 社媒视觉'
+  if (/(martial arts battle|avatar|character|dojo|samurai|doll|coser|角色|人设|角色设定|战斗)/.test(text)) return '角色设定'
+  if (/(interior|architecture|hall|cathedral|museum|space|room|建筑|室内|空间)/.test(text)) return '空间氛围'
+  if (/(poster|layout|main visual|double exposure|cinematic promotional poster|版式|海报|主视觉|电影海报)/.test(text)) return '海报插画'
+  if (/(banner advertisements|promotional banner|advertisement grid|campaign|advertising|brand|广告组图|广告横幅|宣传海报)/.test(text)) return '品牌广告'
+  if (/(still life|packshot|product photo|product render|beverage|cosmetic|商品展示|静物|产品照)/.test(text)) return '产品静物'
+  if (/(portrait|selfie|fashion|photograph|young woman|young man|人像|写真|摄影)/.test(text)) return '人像摄影'
+  return '待审核'
+}
+
+function buildStructuredPromptTitle(prompt: string, category: string) {
+  const record = parsePromptRecord(prompt)
+  if (!record) return ''
+
+  const structuredType = readPromptRecordString(record, 'type')
+  const explicitTitle = pickMeaningfulTitle(
+    readPromptRecordString(record, 'header.title'),
+    readPromptRecordString(record, 'header.title_cn'),
+    readPromptRecordString(record, 'title_section.text'),
+    readPromptRecordString(record, 'title'),
+    readPromptRecordString(record, 'title_cn'),
+    readPromptRecordString(record, 'subject'),
+  )
+  if (explicitTitle) return explicitTitle
+
+  const theme = pickMeaningfulTitle(
+    readPromptRecordString(record, 'theme'),
+    readPromptRecordString(record, 'header.subject'),
+    readPromptRecordString(record, 'subject'),
+    readPromptRecordString(record, 'plant species'),
+  )
+  const cityName = readPromptRecordString(record, 'title_section.text')
+  const productName = pickMeaningfulTitle(
+    readPromptRecordString(record, 'product_name'),
+    readPromptRecordString(record, 'panels.0.product_name'),
+  )
+
+  if (/banner advertisements|promotional banner/i.test(structuredType)) {
+    return cleanGeneratedTitle(`${normalizeTitleTopic(theme || '品牌')}广告组图`)
+  }
+  if (/character avatar grid/i.test(structuredType)) {
+    return cleanGeneratedTitle(`${normalizeTitleTopic(theme || '主题')}角色头像组图`)
+  }
+  if (/character portrait grid/i.test(structuredType)) {
+    return cleanGeneratedTitle(`${normalizeTitleTopic(theme || '主题')}角色肖像组图`)
+  }
+  if (/portrait grid/i.test(structuredType)) {
+    return cleanGeneratedTitle(`${normalizeTitleTopic(theme || '人物')}人像组图`)
+  }
+  if (/illustrated map infographic/i.test(structuredType)) {
+    return cleanGeneratedTitle(`${normalizeTitleTopic(theme || cityName || '主题')}图鉴地图`)
+  }
+  if (/flowchart/i.test(structuredType)) {
+    return cleanGeneratedTitle(`${normalizeTitleTopic(theme || '主题')}流程图`)
+  }
+  if (/lookbook/i.test(structuredType)) {
+    return cleanGeneratedTitle(`${normalizeTitleTopic(theme || '主题')}穿搭图鉴`)
+  }
+  if (/infographic|timeline|atlas|diagram/i.test(structuredType)) {
+    return cleanGeneratedTitle(`${normalizeTitleTopic(theme || '主题')}信息图`)
+  }
+  if (/collage/i.test(structuredType)) {
+    return cleanGeneratedTitle(`${normalizeTitleTopic(theme || '主题')}拼贴叙事图`)
+  }
+  if (/promotional poster/i.test(structuredType)) {
+    return cleanGeneratedTitle(`${normalizeTitleTopic(theme || '主题')}宣传海报`)
+  }
+  if (/product advertisement/i.test(structuredType) && productName) {
+    return cleanGeneratedTitle(`${normalizeTitleTopic(productName)}广告组图`)
+  }
+  return CATEGORY_FALLBACK_TITLES[category] ?? ''
+}
+
+function buildPromptTextTitle(prompt: string, category: string) {
+  const text = normalizeInferenceText(prompt)
+  if (!text) return ''
+
+  const explicitTitle = text.match(/标题[《:："]\s*([^》"\n]{3,40})/u)?.[1]
+  if (explicitTitle) return cleanGeneratedTitle(explicitTitle)
+
+  const titledLabel = text.match(/titled\s*[“"`']([^”"`']{2,40})[”"`']/i)?.[1]
+  if (titledLabel) return cleanGeneratedTitle(titledLabel)
+
+  const titleArea = text.match(/title area.*?[`:：]\s*[`"'“”]?([^`"'“”\n]{2,40})/iu)?.[1]
+  if (titleArea) return cleanGeneratedTitle(titleArea)
+
+  const screenshotTarget = text.match(/画一张\s*([^，。；\n]{2,24})\s*的内容截图/u)?.[1]
+  if (screenshotTarget) return cleanGeneratedTitle(`${screenshotTarget}内容截图`)
+
+  const themedMap = text.match(/以([^，。；\n]{2,20})为主题/u)?.[1]
+  if (themedMap && /城市美食地图/.test(text)) return cleanGeneratedTitle(`${themedMap}城市美食地图`)
+
+  if (/史诗叙事海报|剪影轮廓填充式叙事/.test(text)) return '史诗叙事主题海报'
+  if (/城市美食地图/.test(text)) return '城市美食地图'
+  if (/科普百科图|popular science encyclopedia image/i.test(text)) return '科普百科信息图'
+  if (/martial arts battle|female fighters|martial arts dojo/i.test(text)) return '动漫武斗场景：双人对决'
+  if (/2x2 grid of banner advertisements|promotional banner ads|banner advertisements/i.test(text)) {
+    const theme = text.match(/(?:theme|course theme|school name)"?\s*[:：]\s*"?(.*?)"?(?:,|$)/i)?.[1]
+    return cleanGeneratedTitle(`${theme || '品牌'}广告组图`)
+  }
+  if (/crouching down|looking slightly down at the camera|low angle/.test(text) && /portrait of a young woman|photorealistic anime-style portrait/.test(text)) {
+    return '低机位长发人像写真'
+  }
+  if (/double exposure|史诗感艺术海报|院线动画电影海报|球队/.test(text)) return '双重曝光史诗电影海报'
+  if (/奇幻风格插画|日系唯美奇幻/.test(text)) return '日系唯美奇幻插画'
+  if (/gothic hall|dark fantasy/.test(text)) return '黑暗哥特大厅场景'
+  if (/whiteboard/.test(text) && /samurai/.test(text)) return '白板武士速写摄影'
+  if (/arcade machine/.test(text)) return '街机维修纪实摄影'
+
+  const quotedTitle = text.match(/[「《"]([^」》"\n]{3,40})[」》"]/u)?.[1]
+  if (quotedTitle && !isGenericImportedTitle(cleanGeneratedTitle(quotedTitle))) return cleanGeneratedTitle(quotedTitle)
+  return CATEGORY_FALLBACK_TITLES[category] ?? ''
+}
+
 function localizeCandidateDisplayTitle(title: string, prompt: string) {
-  const trimmed = title.trim()
-  const prefixMatch = trimmed.match(/^((?:\d+(?:\.\d+)*\.)\s*)/)
-  const prefix = prefixMatch?.[1] ?? ''
-  const body = trimmed.replace(/^((?:\d+(?:\.\d+)*\.)\s*)/, '').trim()
-  const normalized = `${body}\n${prompt}`.toLowerCase()
-
-  if (/miniature soccer game on smartphone screen/.test(normalized)) return `${prefix}手机屏幕微缩足球赛`
-  if (/japanese cuisine/.test(normalized) && /okonomiyaki/.test(normalized)) return `${prefix}日式料理：微缩大阪烧与食物历史`
-  if (/delicious burger exploded view|burger exploded-view composition/.test(normalized)) return `${prefix}汉堡拆解图：新鲜食材`
-  if (/cute 3d render character|pink hair girl/.test(normalized)) return `${prefix}可爱 3D 角色：粉发女孩与现代穿搭`
-  if (/midnight spark grape soda can|grape drink|luxury beverage/.test(normalized)) return `${prefix}午夜星芒葡萄汽水罐：清爽产品照`
-  if (/woman posing with red lip gloss|beauty campaign|bagel/.test(normalized)) return `${prefix}红色唇釉美妆拍摄`
-  if (/watercolor portrait|traditional dress/.test(normalized)) return `${prefix}水彩肖像：传统服饰女性`
-  if (/volleyball player clapping|indoor sports action/.test(normalized)) return `${prefix}室内排球赛举手鼓掌`
-  if (/gym selfie|post-workout|hydration|fitness & wellness/.test(normalized)) return `${prefix}健身后镜前自拍`
-  if (/cyberpunk male character portrait/.test(normalized)) return `${prefix}赛博朋克男性角色肖像`
-  if (/doodle art work mode|coffee break/.test(normalized)) return `${prefix}涂鸦工作模式：咖啡休息女孩`
-  if (/paper art|origami|miniature doll/.test(normalized)) return `${prefix}纸艺折纸与迷你人偶`
-  if (/comfort/.test(normalized) && /furniture|catalog/.test(normalized)) return `${prefix}舒适科学：概念家具广告`
-  if (/culinary atlas|food history|chicken, bacon/.test(normalized)) return `${prefix}美食图谱：鸡肉培根全球料理`
-  if (/cookies|milk splash/.test(normalized)) return `${prefix}饼干牛奶飞溅食物摄影`
-  if (/taco/.test(normalized)) return `${prefix}塔可拆解图：食材说明`
-  if (/beauty|lip gloss|makeup/.test(normalized)) return `${prefix}美妆品牌视觉`
-  if (/soda can|beverage|product photo/.test(normalized)) return `${prefix}产品静物：饮料罐广告`
-
-  if (/[\u4e00-\u9fff]/.test(body)) return `${prefix}${body}`.slice(0, 140)
-  return `${prefix}中文候选提示词`.slice(0, 140)
+  const body = stripImportedTitlePrefix(title)
+  const category = inferCategoryFromPrompt(title, prompt)
+  if (/[\u4e00-\u9fff]/.test(body) && !isGenericImportedTitle(body)) return body.slice(0, 140)
+  return buildStructuredPromptTitle(prompt, category)
+    || buildPromptTextTitle(prompt, category)
+    || (CATEGORY_FALLBACK_TITLES[category] ?? '中文候选提示词')
 }
 
 function localizeCandidateDisplayCategory(title: string, prompt: string) {
-  const text = `${title}\n${prompt}`.toLowerCase()
-  if (/exploded view|breakdown|history|atlas|guide|analysis|timeline|annotation|ingredients/.test(text)) return '信息图解'
-  if (/3d render character|character|origami|paper art|samurai|doll|cyberpunk/.test(text)) return '角色设定'
-  if (/smartphone screen|\bui\b|interface|social|screen transformed|phone screen/.test(text)) return 'UI / 社媒视觉'
-  if (/beauty|lip gloss|makeup|campaign|brand|advertising|product shoot/.test(text)) return '品牌广告'
-  if (/burger|taco|cookies|milk splash|food|cuisine|soda can|beverage|still life|product photo/.test(text)) return '产品静物'
-  if (/portrait|selfie|gym|volleyball|woman|man|model/.test(text)) return '人像摄影'
-  return '待审核'
+  return inferCategoryFromPrompt(title, prompt)
 }
 
 function localizeCandidateDisplay(candidate: CandidateInput): CandidateInput {
@@ -387,6 +730,34 @@ function localizeCandidateDisplay(candidate: CandidateInput): CandidateInput {
     title: localizeCandidateDisplayTitle(candidate.title, candidate.prompt),
     category: localizeCandidateDisplayCategory(candidate.title, candidate.prompt),
   }
+}
+
+function decodeHtmlEntities(value: string) {
+  return value
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+}
+
+function readHtmlAttribute(tag: string, name: string) {
+  const pattern = new RegExp(`${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i')
+  const match = tag.match(pattern)
+  return decodeHtmlEntities(match?.[1] ?? match?.[2] ?? match?.[3] ?? '').trim()
+}
+
+function stripHtml(value: string) {
+  return decodeHtmlEntities(value)
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<img\b[^>]*>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim()
 }
 
 function normalizePromptText(value: string) {
@@ -424,7 +795,37 @@ function parseJsonCandidates(text: string, sourceUrl: string): CandidateInput[] 
     .filter((item): item is CandidateInput => Boolean(item))
 }
 
+function parseHtmlGalleryCandidates(text: string, sourceUrl: string): CandidateInput[] {
+  const cells = Array.from(text.matchAll(/<td\b[\s\S]*?<\/td>/gi)).map((match) => match[0])
+  if (cells.length < 2) return []
+  const candidates: CandidateInput[] = []
+  for (const cell of cells) {
+    const imageTag = cell.match(/<img\b[^>]*>/i)?.[0] ?? ''
+    const linkTag = cell.match(/<a\b[^>]*>/i)?.[0] ?? ''
+    const strongText = stripHtml(cell.match(/<strong\b[^>]*>([\s\S]*?)<\/strong>/i)?.[1] ?? '')
+    const imageAlt = imageTag ? readHtmlAttribute(imageTag, 'alt') : ''
+    const imageSrc = imageTag ? readHtmlAttribute(imageTag, 'src') : ''
+    const linkHref = linkTag ? readHtmlAttribute(linkTag, 'href') : ''
+    const title = normalizeImportedTitle((strongText || imageAlt || '候选提示词').slice(0, 140), stripHtml(cell), candidates.length)
+    const prompt = normalizePromptText(stripHtml(cell.replace(/<strong\b[^>]*>[\s\S]*?<\/strong>/i, ''))).slice(0, 5000)
+    if (prompt.length < 40 || !imageSrc) continue
+    candidates.push({
+      title,
+      category: '待归类',
+      tags: [],
+      prompt,
+      imageUrl: absoluteUrl(imageSrc, sourceUrl),
+      sourceUrl: (linkHref ? absoluteUrl(linkHref, sourceUrl) : null) ?? sourceUrl,
+    })
+    if (candidates.length >= MAX_IMPORT_CANDIDATES) break
+  }
+  return candidates
+}
+
 function parseMarkdownCandidates(text: string, sourceUrl: string): CandidateInput[] {
+  const galleryCandidates = parseHtmlGalleryCandidates(text, sourceUrl)
+  if (galleryCandidates.length) return galleryCandidates
+
   const blocks = text.split(/\n(?=#{1,3}\s+)/g)
   const candidates: CandidateInput[] = []
   for (const rawBlock of blocks) {
@@ -502,6 +903,29 @@ function filterReviewableCandidates(candidates: CandidateInput[]) {
   return candidates.filter((candidate) => !getImportCandidateBlockReason(candidate))
 }
 
+function formatImportDiagnosticSummary(input: {
+  extracted: number
+  qualityCandidates: number
+  reviewableCandidates: number
+  duplicateFreeCandidates: number
+  missingImage: number
+  svgOrWatermark: number
+  created: number
+}) {
+  const qualityRejected = Math.max(0, input.extracted - input.qualityCandidates)
+  const reviewBlocked = Math.max(0, input.qualityCandidates - input.reviewableCandidates)
+  const duplicateRejected = Math.max(0, input.reviewableCandidates - input.duplicateFreeCandidates)
+  return [
+    `抓取 ${input.extracted}`,
+    `质量过滤 ${qualityRejected}`,
+    `风险过滤 ${reviewBlocked}`,
+    `已有模板去重 ${duplicateRejected}`,
+    `无可用图片 ${input.missingImage}`,
+    `SVG/水印过滤 ${input.svgOrWatermark}`,
+    `入库 ${input.created}`,
+  ].join('；')
+}
+
 function normalizeOriginalImageUrl(imageUrl: string | null) {
   if (!imageUrl || !/^https?:\/\//i.test(imageUrl)) return null
   return imageUrl.slice(0, 2000)
@@ -546,12 +970,20 @@ async function saveHiddenOfficialTemplateIds(db: Db, adminUserId: string, ids: s
 
 async function filterExistingTemplateDuplicates(db: Db, candidates: CandidateInput[]) {
   if (!candidates.length) return candidates
-  const result = await db.query<{ prompt: string }>(`
+  const templateResult = await db.query<{ prompt: string }>(`
     SELECT prompt
     FROM prompt_templates
     WHERE status IN ('draft', 'pending_review', 'published')
   `)
-  const existing = new Set(result.rows.map((row) => createHash('sha1').update(row.prompt.trim().toLowerCase()).digest('hex')))
+  const candidateResult = await db.query<{ prompt: string }>(`
+    SELECT prompt
+    FROM prompt_template_candidates
+    WHERE status IN ('pending', 'approved')
+  `)
+  const existing = new Set([
+    ...templateResult.rows,
+    ...candidateResult.rows,
+  ].map((row) => createHash('sha1').update(row.prompt.trim().toLowerCase()).digest('hex')))
   return candidates.filter((candidate) => {
     const digest = createHash('sha1').update(candidate.prompt.trim().toLowerCase()).digest('hex')
     return !existing.has(digest)
@@ -609,10 +1041,38 @@ async function extractCandidates(sourceUrl: string) {
     : [{ sourceUrl, text: await fetchText(sourceUrl) }]
   const candidates = []
   for (const item of texts) {
+    if (!item.text) continue
     const jsonCandidates = parseJsonCandidates(item.text, item.sourceUrl)
     candidates.push(...(jsonCandidates.length ? jsonCandidates : parseMarkdownCandidates(item.text, item.sourceUrl)))
   }
   return dedupeCandidates(candidates)
+}
+
+export const __promptTemplateImportInternals = {
+  fetchGithubTexts,
+  parseMarkdownCandidates,
+  filterExistingTemplateDuplicates,
+  formatImportDiagnosticSummary,
+  localizeCandidateDisplayTitle,
+  localizeCandidateDisplayCategory,
+}
+
+async function removeImportRunAssets(localAssetRoot?: string | null) {
+  const root = typeof localAssetRoot === 'string' ? localAssetRoot.trim() : ''
+  if (!root.startsWith('/prompt-template-assets/')) return
+  const relativePath = root.replace(/^\/prompt-template-assets\//, '').trim()
+  if (!relativePath) return
+  await rm(join(assetRoot, relativePath), { recursive: true, force: true })
+}
+
+async function hasPublishedTemplatesUsingImportRun(db: Db, runId: string) {
+  const row = (await db.query<{ total: string }>(`
+    SELECT COUNT(*)::text AS total
+    FROM prompt_templates
+    WHERE import_run_id = $1
+      AND status = 'published'
+  `, [runId])).rows[0]
+  return Number(row?.total ?? 0) > 0
 }
 
 async function recalculateRunCounts(db: Db, runId: string, updatedAt = nowIso()) {
@@ -623,8 +1083,8 @@ async function recalculateRunCounts(db: Db, runId: string, updatedAt = nowIso())
       updated_at = $2
     FROM (
       SELECT
-        SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END)::int AS approved_count,
-        SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END)::int AS rejected_count
+        COALESCE(SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END), 0)::int AS approved_count,
+        COALESCE(SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END), 0)::int AS rejected_count
       FROM prompt_template_candidates
       WHERE import_run_id = $1
     ) counts
@@ -633,6 +1093,51 @@ async function recalculateRunCounts(db: Db, runId: string, updatedAt = nowIso())
 }
 
 export function registerPromptTemplateRoutes(app: FastifyInstance, db: Pool) {
+  app.get('/api/templates', async (request, reply) => {
+    try {
+      const query = isRecord(request.query) ? request.query : {}
+      const category = typeof query.category === 'string' ? query.category.trim() : ''
+      const search = typeof query.search === 'string' ? query.search.trim() : ''
+      const limit = Math.min(Math.max(Number(query.limit) || 200, 1), 500)
+      const offset = Math.max(Number(query.offset) || 0, 0)
+      const values: unknown[] = ['published']
+      const where: string[] = ['status = $1']
+      if (category) {
+        values.push(category)
+        where.push(`category = $${values.length}`)
+      }
+      if (search) {
+        values.push(`%${search}%`)
+        where.push(`(title ILIKE $${values.length} OR prompt ILIKE $${values.length})`)
+      }
+      const whereSql = `WHERE ${where.join(' AND ')}`
+      const result = await db.query<PromptTemplateRow>(`
+        SELECT id, title, category, tags, prompt, image_path, source_url, import_run_id,
+          status, review_note, created_by_admin_id, created_at::text, updated_at::text, published_at::text
+        FROM prompt_templates
+        ${whereSql}
+        ORDER BY COALESCE(published_at, updated_at, created_at) DESC, updated_at DESC
+        LIMIT $${values.length + 1} OFFSET $${values.length + 2}
+      `, [...values, limit, offset])
+      const total = (await db.query<{ total: string }>(`
+        SELECT COUNT(*)::text AS total
+        FROM prompt_templates
+        ${whereSql}
+      `, values)).rows[0]
+      return reply.send({
+        ok: true,
+        templates: result.rows.map(serializePublicTemplate),
+        pagination: {
+          limit,
+          offset,
+          total: Number(total?.total ?? 0),
+        },
+      })
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
   app.get('/api/prompt-library/official-template-overrides', async (_request, reply) => {
     try {
       return reply.send({
@@ -883,19 +1388,39 @@ export function registerPromptTemplateRoutes(app: FastifyInstance, db: Pool) {
       `, [runId, sourceUrl, sourceType, `/prompt-template-assets/${runId}`, admin.admin_user_id, createdAt])
 
       try {
-        const rawCandidates = await filterExistingTemplateDuplicates(db, filterReviewableCandidates(filterQualityCandidates(await extractCandidates(sourceUrl))))
+        const extractedCandidates = await extractCandidates(sourceUrl)
+        const qualityCandidates = filterQualityCandidates(extractedCandidates)
+        const reviewableCandidates = filterReviewableCandidates(qualityCandidates)
+        const rawCandidates = await filterExistingTemplateDuplicates(db, reviewableCandidates)
         const candidates = []
+        let missingImageCount = 0
+        let svgOrWatermarkCount = 0
         for (let index = 0; index < rawCandidates.length; index += 1) {
           const candidate = rawCandidates[index]
           const localizedCandidate = localizeCandidateDisplay(candidate)
           const imagePath = await localizeImage(candidate.imageUrl, runId, index)
-          if (!imagePath) continue
-          if (await hasLikelySvgLogoOrWatermark(imagePath)) continue
+          if (!imagePath) {
+            missingImageCount += 1
+            continue
+          }
+          if (await hasLikelySvgLogoOrWatermark(imagePath)) {
+            svgOrWatermarkCount += 1
+            continue
+          }
           candidates.push({
             ...localizedCandidate,
             imagePath,
           })
         }
+        const diagnosticSummary = formatImportDiagnosticSummary({
+          extracted: extractedCandidates.length,
+          qualityCandidates: qualityCandidates.length,
+          reviewableCandidates: reviewableCandidates.length,
+          duplicateFreeCandidates: rawCandidates.length,
+          missingImage: missingImageCount,
+          svgOrWatermark: svgOrWatermarkCount,
+          created: candidates.length,
+        })
         for (const candidate of candidates) {
           await db.query(`
             INSERT INTO prompt_template_candidates (
@@ -918,12 +1443,12 @@ export function registerPromptTemplateRoutes(app: FastifyInstance, db: Pool) {
         const updatedAt = nowIso()
         const run = (await db.query<ImportRunRow>(`
           UPDATE prompt_template_import_runs
-          SET status = 'completed', total_candidates = $1, updated_at = $2
-          WHERE id = $3
+          SET status = 'completed', total_candidates = $1, diagnostic_summary = $2, updated_at = $3
+          WHERE id = $4
           RETURNING id, source_url, source_type, status, local_asset_root, total_candidates,
-            approved_count, rejected_count, error_summary, created_by_admin_id,
+            approved_count, rejected_count, diagnostic_summary, error_summary, created_by_admin_id,
             created_at::text, updated_at::text
-        `, [candidates.length, updatedAt, runId])).rows[0]
+        `, [candidates.length, diagnosticSummary, updatedAt, runId])).rows[0]
         await writeAuditLog(db, {
           adminUserId: admin.admin_user_id,
           action: 'prompt_template_import_run_create',
@@ -940,7 +1465,7 @@ export function registerPromptTemplateRoutes(app: FastifyInstance, db: Pool) {
           SET status = 'failed', error_summary = $1, updated_at = $2
           WHERE id = $3
           RETURNING id, source_url, source_type, status, local_asset_root, total_candidates,
-            approved_count, rejected_count, error_summary, created_by_admin_id,
+            approved_count, rejected_count, diagnostic_summary, error_summary, created_by_admin_id,
             created_at::text, updated_at::text
         `, [message.slice(0, 1000), failedAt, runId])).rows[0]
         return reply.status(400).send({ ok: false, error: 'import_failed', message, importRun: serializeRun(run) })
@@ -958,7 +1483,7 @@ export function registerPromptTemplateRoutes(app: FastifyInstance, db: Pool) {
       const total = (await db.query<{ total: string }>('SELECT COUNT(*)::text AS total FROM prompt_template_import_runs')).rows[0]
       const result = await db.query<ImportRunRow>(`
         SELECT id, source_url, source_type, status, local_asset_root, total_candidates,
-          approved_count, rejected_count, error_summary, created_by_admin_id,
+          approved_count, rejected_count, diagnostic_summary, error_summary, created_by_admin_id,
           created_at::text, updated_at::text
         FROM prompt_template_import_runs
         ORDER BY created_at DESC
@@ -985,7 +1510,7 @@ export function registerPromptTemplateRoutes(app: FastifyInstance, db: Pool) {
       const id = typeof params.id === 'string' ? params.id.trim() : ''
       const row = (await db.query<ImportRunRow>(`
         SELECT id, source_url, source_type, status, local_asset_root, total_candidates,
-          approved_count, rejected_count, error_summary, created_by_admin_id,
+          approved_count, rejected_count, diagnostic_summary, error_summary, created_by_admin_id,
           created_at::text, updated_at::text
         FROM prompt_template_import_runs
         WHERE id = $1
@@ -993,6 +1518,53 @@ export function registerPromptTemplateRoutes(app: FastifyInstance, db: Pool) {
       `, [id])).rows[0]
       if (!row) throw new ApiError(404, 'import_run_not_found', '导入任务不存在')
       return reply.send({ ok: true, importRun: serializeRun(row) })
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
+  app.delete('/api/admin/content/template-import-runs/:id', async (request, reply) => {
+    try {
+      const admin = await requireAdminSession(db, request.headers.authorization)
+      const params = isRecord(request.params) ? request.params : {}
+      const id = typeof params.id === 'string' ? params.id.trim() : ''
+      if (!id) throw new ApiError(400, 'missing_import_run_id', '缺少导入任务编号')
+
+      const before = (await db.query<ImportRunRow>(`
+        SELECT id, source_url, source_type, status, local_asset_root, total_candidates,
+          approved_count, rejected_count, diagnostic_summary, error_summary, created_by_admin_id,
+          created_at::text, updated_at::text
+        FROM prompt_template_import_runs
+        WHERE id = $1
+        LIMIT 1
+      `, [id])).rows[0]
+      if (!before) throw new ApiError(404, 'import_run_not_found', '导入任务不存在')
+
+      const shouldKeepAssets = await hasPublishedTemplatesUsingImportRun(db, id)
+
+      await withTransaction(db, async (tx) => {
+        await tx.query(`
+          UPDATE prompt_templates
+          SET import_run_id = NULL,
+            updated_at = $2
+          WHERE import_run_id = $1
+        `, [id, nowIso()])
+
+        await tx.query('DELETE FROM prompt_template_import_runs WHERE id = $1', [id])
+        await writeAuditLog(tx, {
+          adminUserId: admin.admin_user_id,
+          action: 'prompt_template_import_run_delete',
+          targetType: 'prompt_template_import_run',
+          targetId: id,
+          beforeSnapshot: serializeRun(before),
+          reason: shouldKeepAssets ? 'published_templates_still_reference_assets' : null,
+        })
+      })
+
+      if (!shouldKeepAssets) {
+        await removeImportRunAssets(before.local_asset_root)
+      }
+      return reply.send({ ok: true })
     } catch (error) {
       return sendError(reply, error)
     }
@@ -1053,6 +1625,44 @@ export function registerPromptTemplateRoutes(app: FastifyInstance, db: Pool) {
       `, [id])).rows[0]
       if (!row) throw new ApiError(404, 'candidate_not_found', '候选不存在')
       return reply.send({ ok: true, candidate: serializeCandidate(row) })
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
+  app.delete('/api/admin/content/template-candidates/:id', async (request, reply) => {
+    try {
+      const admin = await requireAdminSession(db, request.headers.authorization)
+      const params = isRecord(request.params) ? request.params : {}
+      const id = typeof params.id === 'string' ? params.id.trim() : ''
+      if (!id) throw new ApiError(400, 'missing_candidate_id', '缺少候选编号')
+
+      const before = (await db.query<CandidateRow>(`
+        SELECT id, import_run_id, title, category, tags, prompt, image_path, original_image_url, source_url,
+          status, review_note, approved_template_id, created_at::text, updated_at::text
+        FROM prompt_template_candidates
+        WHERE id = $1
+        LIMIT 1
+      `, [id])).rows[0]
+      if (!before) throw new ApiError(404, 'candidate_not_found', '候选不存在')
+      if (before.status === 'approved' || before.approved_template_id) {
+        throw new ApiError(409, 'candidate_already_approved', '已通过并发布的候选不能直接删除，请先处理对应模板')
+      }
+
+      const updatedAt = nowIso()
+      await withTransaction(db, async (tx) => {
+        await tx.query('DELETE FROM prompt_template_candidates WHERE id = $1', [id])
+        await recalculateRunCounts(tx, before.import_run_id, updatedAt)
+        await writeAuditLog(tx, {
+          adminUserId: admin.admin_user_id,
+          action: 'prompt_template_candidate_delete',
+          targetType: 'prompt_template_candidate',
+          targetId: id,
+          beforeSnapshot: serializeCandidate(before),
+        })
+      })
+
+      return reply.send({ ok: true })
     } catch (error) {
       return sendError(reply, error)
     }

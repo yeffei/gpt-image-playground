@@ -48,7 +48,7 @@ function getRedirectSupportCopy(view: 'workbench' | 'plan' | 'library' | 'prompt
   if (view === 'plan') return '登录后会继续回到计划与额度入口，查看当前点数、套餐和充值路径。'
   if (view === 'library') return '登录后会回到作品库，继续查看你自己的生成结果和历史记录。'
   if (view === 'promptLibrary') return '刚挑中的模板方向不会丢，登录后还能继续回到提示词库和工作台之间来回切换。'
-  return '当前工作台草稿会保留，登录后可以直接提交生成，并把结果沉淀到账号里。'
+  return '当前工作台草稿会保留，登录后可以直接提交生成，并把个人结果沉淀到账号里。'
 }
 
 function getErrorMessage(error: unknown) {
@@ -237,7 +237,7 @@ export default function AuthView() {
           <span>返回{redirectTitle}</span>
           <span>试填内容会保留</span>
           <span>官方模板可浏览</span>
-          <span>登录后同步资产</span>
+          <span>登录后同步个人结果</span>
         </div>
       </aside>
       <section className="auth-card">
@@ -253,7 +253,7 @@ export default function AuthView() {
                 <p className="auth-view-subtitle">{getModeSubtitle(authViewMode)}返回{redirectTitle}时会保留当前入口。</p>
                 <div className="auth-return-hint" aria-label="返回说明">
                   <span>返回{redirectTitle}</span>
-                  <span>当前草稿会保留</span>
+                  <span>当前设备草稿会保留</span>
                 </div>
               </div>
             </div>

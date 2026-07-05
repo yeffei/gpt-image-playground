@@ -12,7 +12,7 @@ type InspirationLatestState = {
   }
 }
 
-const LATEST_PAGE_SIZE = 12
+const LATEST_PAGE_SIZE = 20
 
 function LatestCardSkeleton() {
   return (
@@ -58,7 +58,7 @@ export function InspirationLatestContent(props: {
 
   return (
     <section className="w-full" aria-label="最新入选">
-      <section className="prototype-canvas-panel mx-auto w-full max-w-[1440px] rounded-[30px] px-5 py-5 lg:px-7 lg:py-7">
+      <section className="prototype-canvas-panel mx-auto w-full rounded-[30px] px-5 py-5 lg:px-7 lg:py-7">
         <div className="prototype-canvas-content space-y-8">
           <div className="space-y-2.5">
             <div className="flex flex-wrap items-center justify-between gap-2">

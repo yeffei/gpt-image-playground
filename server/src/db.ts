@@ -1,5 +1,5 @@
 import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from 'pg'
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { ServerEnv } from './env.js'
@@ -20,9 +20,13 @@ export function createDbClient(env: ServerEnv) {
 }
 
 export async function runMigrations(client: Db) {
-  const migrationPath = join(migrationsDir, '001_init.sql')
-  const sql = await readFile(migrationPath, 'utf8')
-  await client.query(sql)
+  const files = (await readdir(migrationsDir))
+    .filter((name) => /^\d+.*\.sql$/i.test(name))
+    .sort((left, right) => left.localeCompare(right))
+  for (const file of files) {
+    const sql = await readFile(join(migrationsDir, file), 'utf8')
+    await client.query(sql)
+  }
 }
 
 export async function withTransaction<T>(pool: Pool, callback: (client: PoolClient) => Promise<T>) {

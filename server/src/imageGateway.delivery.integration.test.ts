@@ -6,6 +6,23 @@ import type { Pool } from 'pg'
 import { buildApp } from './app'
 
 type FetchInput = Parameters<typeof fetch>[0]
+type TestRouteRow = {
+  route_id: string
+  route_name: string
+  model_name: string
+  provider: 'openai-compatible' | 'gemini-native'
+  base_url: string
+  api_key_ref: string
+  compatibility_strategy: 'relay_extended'
+  default_upstream_model: string
+  upstream_model: string
+  max_supported_long_edge: number | null
+  priority: number
+  weight: number
+  timeout_seconds: number
+  consecutive_failures: number
+  cooldown_until: null
+}
 
 function parsePngSize(bytes: Buffer) {
   expect(bytes.length).toBeGreaterThanOrEqual(24)
@@ -26,8 +43,36 @@ async function createPngBytes(width: number, height: number) {
   }).png().toBuffer()
 }
 
-function buildTestDb() {
+function createRoute(input: {
+  id: string
+  name: string
+  baseUrl: string
+  apiKeyRef: string
+  maxSupportedLongEdge: number | null
+  priority: number
+}): TestRouteRow {
+  return {
+    route_id: input.id,
+    route_name: input.name,
+    model_name: 'GPT Image 2',
+    provider: 'openai-compatible',
+    base_url: input.baseUrl,
+    api_key_ref: input.apiKeyRef,
+    compatibility_strategy: 'relay_extended',
+    default_upstream_model: 'gpt-image-2',
+    upstream_model: 'gpt-image-2',
+    max_supported_long_edge: input.maxSupportedLongEdge,
+    priority: input.priority,
+    weight: 1,
+    timeout_seconds: 30,
+    consecutive_failures: 0,
+    cooldown_until: null,
+  }
+}
+
+function buildTestDb(routes: TestRouteRow[]) {
   const insertedOutputs: Array<Record<string, unknown>> = []
+  const persistedDeliveryPlans: Array<Record<string, unknown>> = []
   const query = async (text: string, values?: unknown[]) => {
     const sql = text.replace(/\s+/g, ' ').trim()
     if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return { rows: [], rowCount: 0 }
@@ -42,26 +87,7 @@ function buildTestDb() {
         : { rows: [], rowCount: 0 }
     }
     if (sql.includes('FROM model_route_bindings b JOIN gateway_routes r ON r.id = b.route_id')) {
-      return {
-        rows: [{
-          route_id: 'route_4k',
-          route_name: '4K Route',
-          model_name: 'GPT Image 2',
-          provider: 'openai-compatible',
-          base_url: 'https://route-4k.example.test/v1',
-          api_key_ref: 'ROUTE_4K_KEY',
-          compatibility_strategy: 'relay_extended',
-          default_upstream_model: 'gpt-image-2',
-          upstream_model: 'gpt-image-2',
-          max_supported_long_edge: 3840,
-          priority: 1,
-          weight: 1,
-          timeout_seconds: 30,
-          consecutive_failures: 0,
-          cooldown_until: null,
-        }],
-        rowCount: 1,
-      }
+      return { rows: routes, rowCount: routes.length }
     }
     if (sql === "SELECT value_json FROM system_settings WHERE key = 'gateway_failover_enabled' LIMIT 1") return { rows: [], rowCount: 0 }
     if (sql === 'SELECT balance::text FROM accounts WHERE user_id = $1 FOR UPDATE') return { rows: [{ balance: '20' }], rowCount: 1 }
@@ -73,6 +99,9 @@ function buildTestDb() {
     if (sql === 'SELECT balance::text, frozen_balance::text FROM accounts WHERE user_id = $1 FOR UPDATE') return { rows: [{ balance: '20', frozen_balance: '0' }], rowCount: 1 }
     if (sql === 'UPDATE accounts SET balance = $1, frozen_balance = $2, updated_at = $3 WHERE user_id = $4') return { rows: [], rowCount: 1 }
     if (sql.startsWith('INSERT INTO balance_ledger (')) return { rows: [], rowCount: 1 }
+    if (sql === "SELECT COUNT(*)::text AS count FROM generation_task_outputs WHERE user_id = $1 AND deleted_at IS NULL AND storage_status = 'active'") {
+      return { rows: [{ count: '1' }], rowCount: 1 }
+    }
     if (sql.startsWith('INSERT INTO generation_task_outputs (')) {
       insertedOutputs.push({
         id: values?.[0],
@@ -89,13 +118,20 @@ function buildTestDb() {
       })
       return { rows: [], rowCount: 1 }
     }
+    if (sql.startsWith('UPDATE generation_tasks SET request_json = jsonb_set(')) {
+      const persistedDeliveryPlan = typeof values?.[1] === 'string'
+        ? JSON.parse(values[1] as string) as Record<string, unknown>
+        : {}
+      persistedDeliveryPlans.push(persistedDeliveryPlan)
+      return { rows: [], rowCount: 1 }
+    }
     if (sql === 'SELECT status FROM generation_tasks WHERE id = $1 FOR UPDATE') return { rows: [{ status: 'running' }], rowCount: 1 }
     if (sql.startsWith("UPDATE generation_tasks SET status = 'succeeded'")) return { rows: [], rowCount: 1 }
     throw new Error(`Unhandled query: ${sql}`)
   }
 
   const client = { query, release() {} }
-  return { db: { query, connect: async () => client } as unknown as Pool, insertedOutputs }
+  return { db: { query, connect: async () => client } as unknown as Pool, insertedOutputs, persistedDeliveryPlans }
 }
 
 function buildTestApp(db: Pool, imageStorageDir: string) {
@@ -112,6 +148,10 @@ function buildTestApp(db: Pool, imageStorageDir: string) {
     expiredShareCleanupLimit: 5000,
     expiredShareCleanupIntervalMinutes: 360,
     expiredShareCleanupRunOnStartup: true,
+    trashedOutputCleanupEnabled: false,
+    trashedOutputCleanupLimit: 5000,
+    trashedOutputCleanupIntervalMinutes: 360,
+    trashedOutputCleanupRunOnStartup: true,
   })
 }
 
@@ -124,12 +164,22 @@ describe('image gateway delivery integration', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
     delete process.env.ROUTE_4K_KEY
+    delete process.env.ROUTE_2K_KEY
   })
 
-  it('stores and serves a 4K file even when upstream only returns a 1536x1024 base image', async () => {
-    const sourcePng = await createPngBytes(1536, 1024)
+  it('requests native 4K directly when a real 4K route is available', async () => {
+    const sourcePng = await createPngBytes(3840, 2160)
     const storageDir = await mkdtemp(join(tmpdir(), 'gpt-image-delivery-'))
-    const { db } = buildTestDb()
+    const { db, persistedDeliveryPlans } = buildTestDb([
+      createRoute({
+        id: 'route_4k',
+        name: '4K Route',
+        baseUrl: 'https://route-4k.example.test/v1',
+        apiKeyRef: 'ROUTE_4K_KEY',
+        maxSupportedLongEdge: 3840,
+        priority: 1,
+      }),
+    ])
     const app = buildTestApp(db, storageDir)
     process.env.ROUTE_4K_KEY = 'route-4k-secret'
     const upstreamBodies: Array<{ size?: string; output_format?: string }> = []
@@ -161,11 +211,12 @@ describe('image gateway delivery integration', () => {
       })
 
       expect(response.statusCode).toBe(200)
-      expect(upstreamBodies).toEqual([expect.objectContaining({ size: '1536x1024', output_format: 'png' })])
+      expect(upstreamBodies).toEqual([expect.objectContaining({ size: '3840x2160', output_format: 'png' })])
 
-      const payload = response.json() as { persistedImages: Array<{ url: string; storageKey: string; mimeType: string }> }
+      const payload = response.json() as { persistedImages: Array<{ url: string; storageKey: string; mimeType: string }>; deliveryPlan?: { baseSize: string; strategy: string } }
+      expect(payload.deliveryPlan).toMatchObject({ baseSize: '3840x2160', strategy: 'direct' })
+      expect(persistedDeliveryPlans.at(-1)).toMatchObject({ baseSize: '3840x2160', strategy: 'direct' })
       expect(payload.persistedImages).toHaveLength(1)
-      expect(payload.persistedImages[0].mimeType).toBe('image/png')
 
       const diskBytes = await readFile(join(storageDir, payload.persistedImages[0].storageKey))
       expect(parsePngSize(diskBytes)).toEqual({ width: 3840, height: 2160 })
@@ -180,16 +231,113 @@ describe('image gateway delivery integration', () => {
     }
   })
 
-  it('stores 2K delivery outputs as png even when the request asked for jpeg', async () => {
-    const sourcePng = await createPngBytes(1536, 1024)
+  it('falls back from native 4K to 2K plus upscale when 4K delivery fails', async () => {
+    const sourcePng = await createPngBytes(2560, 1440)
     const storageDir = await mkdtemp(join(tmpdir(), 'gpt-image-delivery-'))
-    const { db, insertedOutputs } = buildTestDb()
+    const { db, insertedOutputs, persistedDeliveryPlans } = buildTestDb([
+      createRoute({
+        id: 'route_4k',
+        name: '4K Route',
+        baseUrl: 'https://route-4k.example.test/v1',
+        apiKeyRef: 'ROUTE_4K_KEY',
+        maxSupportedLongEdge: 3840,
+        priority: 1,
+      }),
+      createRoute({
+        id: 'route_2k',
+        name: '2K Route',
+        baseUrl: 'https://route-2k.example.test/v1',
+        apiKeyRef: 'ROUTE_2K_KEY',
+        maxSupportedLongEdge: 2560,
+        priority: 2,
+      }),
+    ])
     const app = buildTestApp(db, storageDir)
     process.env.ROUTE_4K_KEY = 'route-4k-secret'
+    process.env.ROUTE_2K_KEY = 'route-2k-secret'
+    const upstreamBodies: Array<{ url: string; body: { size?: string; output_format?: string } }> = []
+
+    vi.stubGlobal('fetch', vi.fn(async (input: FetchInput, init?: RequestInit) => {
+      const url = String(input)
+      if (url === 'https://route-4k.example.test/v1/images/generations') {
+        const body = JSON.parse(String(init?.body ?? '{}')) as { size?: string; output_format?: string }
+        upstreamBodies.push({ url, body })
+        return new Response(JSON.stringify({ error: { message: 'invalid size 3840x2160 for this route' } }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      if (url === 'https://route-2k.example.test/v1/images/generations') {
+        const body = JSON.parse(String(init?.body ?? '{}')) as { size?: string; output_format?: string }
+        upstreamBodies.push({ url, body })
+        return new Response(JSON.stringify({ data: [{ b64_json: sourcePng.toString('base64') }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      return new Response(JSON.stringify({ error: { message: `unexpected url ${url}` } }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/image/generate',
+        headers: { Authorization: 'Bearer sess_user' },
+        payload: {
+          prompt: 'cinematic aerial city panorama',
+          modelSku: 'gpt-image-2',
+          params: { size: '3840x2160', output_format: 'png', n: 1 },
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(upstreamBodies[0]).toEqual(expect.objectContaining({
+        url: 'https://route-4k.example.test/v1/images/generations',
+        body: expect.objectContaining({ size: '3840x2160', output_format: 'png' }),
+      }))
+      expect(upstreamBodies.at(-1)).toEqual(expect.objectContaining({
+        url: 'https://route-2k.example.test/v1/images/generations',
+        body: expect.objectContaining({ size: '2560x1440', output_format: 'png' }),
+      }))
+
+      const payload = response.json() as {
+        persistedImages: Array<{ url: string; storageKey: string; mimeType: string }>
+        deliveryPlan?: { baseSize: string; strategy: string }
+      }
+      expect(payload.deliveryPlan).toMatchObject({ baseSize: '2560x1440', strategy: 'upscale' })
+      expect(persistedDeliveryPlans.at(-1)).toMatchObject({ baseSize: '2560x1440', strategy: 'upscale' })
+      expect(insertedOutputs[0]).toEqual(expect.objectContaining({ width: 3840, height: 2160 }))
+
+      const diskBytes = await readFile(join(storageDir, payload.persistedImages[0].storageKey))
+      expect(parsePngSize(diskBytes)).toEqual({ width: 3840, height: 2160 })
+    } finally {
+      await app.close()
+      await rm(storageDir, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps 2K requests on native 2K delivery instead of the old small-base upscale path', async () => {
+    const sourcePng = await createPngBytes(2560, 1440)
+    const storageDir = await mkdtemp(join(tmpdir(), 'gpt-image-delivery-'))
+    const { db, insertedOutputs, persistedDeliveryPlans } = buildTestDb([
+      createRoute({
+        id: 'route_2k',
+        name: '2K Route',
+        baseUrl: 'https://route-2k.example.test/v1',
+        apiKeyRef: 'ROUTE_2K_KEY',
+        maxSupportedLongEdge: 2560,
+        priority: 1,
+      }),
+    ])
+    const app = buildTestApp(db, storageDir)
+    process.env.ROUTE_2K_KEY = 'route-2k-secret'
     const upstreamBodies: Array<{ size?: string; output_format?: string }> = []
 
     vi.stubGlobal('fetch', vi.fn(async (input: FetchInput, init?: RequestInit) => {
-      if (String(input) === 'https://route-4k.example.test/v1/images/generations') {
+      if (String(input) === 'https://route-2k.example.test/v1/images/generations') {
         upstreamBodies.push(JSON.parse(String(init?.body ?? '{}')) as { size?: string; output_format?: string })
         return new Response(JSON.stringify({ data: [{ b64_json: sourcePng.toString('base64') }] }), {
           status: 200,
@@ -215,10 +363,14 @@ describe('image gateway delivery integration', () => {
       })
 
       expect(response.statusCode).toBe(200)
-      expect(upstreamBodies).toEqual([expect.objectContaining({ size: '1536x1024', output_format: 'png' })])
+      expect(upstreamBodies).toEqual([expect.objectContaining({ size: '2560x1440', output_format: 'png' })])
 
-      const payload = response.json() as { persistedImages: Array<{ url: string; storageKey: string; mimeType: string }> }
-      expect(payload.persistedImages).toHaveLength(1)
+      const payload = response.json() as {
+        persistedImages: Array<{ url: string; storageKey: string; mimeType: string }>
+        deliveryPlan?: { baseSize: string; strategy: string }
+      }
+      expect(payload.deliveryPlan).toMatchObject({ baseSize: '2560x1440', strategy: 'direct' })
+      expect(persistedDeliveryPlans.at(-1)).toMatchObject({ baseSize: '2560x1440', strategy: 'direct' })
       expect(payload.persistedImages[0].mimeType).toBe('image/png')
       expect(insertedOutputs[0]).toEqual(expect.objectContaining({ width: 2560, height: 1440 }))
 
@@ -230,6 +382,3 @@ describe('image gateway delivery integration', () => {
     }
   })
 })
-
-
-

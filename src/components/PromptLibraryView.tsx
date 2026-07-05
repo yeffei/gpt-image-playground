@@ -10,11 +10,14 @@ import {
 } from '../lib/accessCopy'
 import {
   PROMPT_LIBRARY_TEMPLATES,
+  ensureSearchablePromptTemplate,
+  mergeOfficialPromptTemplates,
   type PromptTemplateItem,
   type PromptTemplateSearchableItem,
 } from '../lib/promptLibrary'
 import { buildAdminApiUrl } from '../lib/adminApi'
 import { sanitizeNegativePrompt } from '../lib/negativePromptSafety'
+import { fetchPublicPromptTemplates } from '../lib/promptTemplateApi'
 
 type PromptLibraryFilterGroup =
   | '全部'
@@ -45,7 +48,6 @@ const PROMPT_LIBRARY_TABS = [
   { key: 'mine', label: '我的模板' },
   { key: 'recent', label: '最近使用' },
 ] as const
-const OFFICIAL_TEMPLATE_BY_ID = new Map(PROMPT_LIBRARY_TEMPLATES.map((item) => [item.id, item]))
 const OFFICIAL_TEMPLATE_OVERRIDES_PATH = '/api/prompt-library/official-template-overrides'
 
 function getOfficialTemplateOverridesUrls() {
@@ -94,19 +96,8 @@ function createMineTemplateId() {
   return `mine-template-${Date.now()}`
 }
 
-function createSearchText(item: PromptTemplateItem) {
-  return [item.title, item.summary, item.category, item.tags.join(' '), item.prompt].join(' ').toLowerCase()
-}
-
 function ensureSearchableTemplate(item: PromptTemplateItem): PromptTemplateSearchableItem {
-  if ('searchText' in item && typeof item.searchText === 'string') {
-    return item as PromptTemplateSearchableItem
-  }
-
-  return {
-    ...item,
-    searchText: createSearchText(item),
-  }
+  return ensureSearchablePromptTemplate(item)
 }
 
 interface PromptLibraryCardProps {
@@ -252,6 +243,7 @@ export default function PromptLibraryView() {
   const [previewOrientation, setPreviewOrientation] = useState<'landscape' | 'portrait' | 'square'>('landscape')
   const [hiddenOfficialTemplateIds, setHiddenOfficialTemplateIds] = useState<string[]>([])
   const [officialTemplateOverridesLoaded, setOfficialTemplateOverridesLoaded] = useState(false)
+  const [serverOfficialTemplates, setServerOfficialTemplates] = useState<PromptTemplateSearchableItem[]>([])
   const cardGridRef = useRef<HTMLDivElement | null>(null)
   const isGuest = !account.isLoggedIn
   const isLockedPersonalTab = isGuest && promptLibraryTab !== 'official'
@@ -267,6 +259,16 @@ export default function PromptLibraryView() {
     [searchableMyPromptTemplates],
   )
 
+  const officialTemplates = useMemo(
+    () => mergeOfficialPromptTemplates(PROMPT_LIBRARY_TEMPLATES, serverOfficialTemplates),
+    [serverOfficialTemplates],
+  )
+
+  const officialTemplateById = useMemo(
+    () => new Map(officialTemplates.map((item) => [item.id, item])),
+    [officialTemplates],
+  )
+
   const recentIndexById = useMemo(
     () => new Map(recentPromptTemplateIds.map((id, index) => [id, index])),
     [recentPromptTemplateIds],
@@ -276,20 +278,20 @@ export default function PromptLibraryView() {
     () => account.isLoggedIn
       ? recentPromptTemplateIds
           .map((id) => {
-            const officialMatch = OFFICIAL_TEMPLATE_BY_ID.get(id)
+            const officialMatch = officialTemplateById.get(id)
             if (officialMatch) return officialMatch
             return searchableMyTemplateById.get(id)
           })
           .filter((item): item is PromptTemplateSearchableItem => Boolean(item))
       : [],
-    [account.isLoggedIn, recentPromptTemplateIds, searchableMyTemplateById],
+    [account.isLoggedIn, officialTemplateById, recentPromptTemplateIds, searchableMyTemplateById],
   )
 
   const visibleOfficialTemplates = useMemo(() => {
-    if (!hiddenOfficialTemplateIds.length) return PROMPT_LIBRARY_TEMPLATES
+    if (!hiddenOfficialTemplateIds.length) return officialTemplates
     const hiddenIds = new Set(hiddenOfficialTemplateIds)
-    return PROMPT_LIBRARY_TEMPLATES.filter((item) => !hiddenIds.has(item.id))
-  }, [hiddenOfficialTemplateIds])
+    return officialTemplates.filter((item) => !hiddenIds.has(item.id))
+  }, [hiddenOfficialTemplateIds, officialTemplates])
 
   const tabTemplates = useMemo(() => {
     if (promptLibraryTab === 'mine') return account.isLoggedIn ? searchableMyPromptTemplates : []
@@ -405,6 +407,25 @@ export default function PromptLibraryView() {
       }
     }
     void loadHiddenOfficialTemplateIds()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const loadServerOfficialTemplates = async () => {
+      try {
+        const templates = await fetchPublicPromptTemplates()
+        if (cancelled) return
+        setServerOfficialTemplates(templates.map(ensureSearchableTemplate))
+      } catch {
+        if (!cancelled) {
+          setServerOfficialTemplates([])
+        }
+      }
+    }
+    void loadServerOfficialTemplates()
     return () => {
       cancelled = true
     }

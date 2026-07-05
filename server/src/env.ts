@@ -15,6 +15,10 @@ export interface ServerEnv {
   expiredShareCleanupLimit: number
   expiredShareCleanupIntervalMinutes: number
   expiredShareCleanupRunOnStartup: boolean
+  trashedOutputCleanupEnabled: boolean
+  trashedOutputCleanupLimit: number
+  trashedOutputCleanupIntervalMinutes: number
+  trashedOutputCleanupRunOnStartup: boolean
 }
 
 const currentDir = dirname(fileURLToPath(import.meta.url))
@@ -90,5 +94,9 @@ export function loadServerEnv(input: NodeJS.ProcessEnv = process.env): ServerEnv
     expiredShareCleanupLimit: parseIntegerEnv(env.EXPIRED_SHARE_CLEANUP_LIMIT, 5000, { min: 1, max: 10000 }),
     expiredShareCleanupIntervalMinutes: parseIntegerEnv(env.EXPIRED_SHARE_CLEANUP_INTERVAL_MINUTES, 360, { min: 5, max: 10080 }),
     expiredShareCleanupRunOnStartup: parseBooleanEnv(env.EXPIRED_SHARE_CLEANUP_RUN_ON_STARTUP, true),
+    trashedOutputCleanupEnabled: parseBooleanEnv(env.TRASHED_OUTPUT_CLEANUP_ENABLED, true),
+    trashedOutputCleanupLimit: parseIntegerEnv(env.TRASHED_OUTPUT_CLEANUP_LIMIT, 5000, { min: 1, max: 10000 }),
+    trashedOutputCleanupIntervalMinutes: parseIntegerEnv(env.TRASHED_OUTPUT_CLEANUP_INTERVAL_MINUTES, 360, { min: 5, max: 10080 }),
+    trashedOutputCleanupRunOnStartup: parseBooleanEnv(env.TRASHED_OUTPUT_CLEANUP_RUN_ON_STARTUP, true),
   }
 }

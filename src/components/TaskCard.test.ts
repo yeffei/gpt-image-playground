@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_PARAMS, type TaskRecord } from '../types'
 import { getFailureDisplay } from '../lib/taskResultDisplay'
-import { getTaskCardResultSummary } from './TaskCard'
+import { getTaskCardCoverBadge, getTaskCardResultSummary } from './TaskCard'
 
 function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
   return {
@@ -72,6 +72,46 @@ describe('getTaskCardResultSummary', () => {
     }))).toEqual({
       label: '扣点结果',
       value: '已扣 3 点',
+    })
+  })
+})
+
+describe('getTaskCardCoverBadge', () => {
+  it('uses task size params for done image cards before thumbnail metadata is ready', () => {
+    expect(getTaskCardCoverBadge(task({
+      outputImages: ['img-1'],
+      params: { ...DEFAULT_PARAMS, size: '2560x1440' },
+    }))).toEqual({
+      ratio: '16:9',
+      size: '2560×1440',
+    })
+  })
+
+  it('prefers actual output size when the server rewrites the requested size', () => {
+    expect(getTaskCardCoverBadge(task({
+      outputImages: ['img-1'],
+      params: { ...DEFAULT_PARAMS, size: '1024x1024' },
+      actualParamsByImage: {
+        'img-1': {
+          size: '1536x1024',
+        },
+      },
+    }))).toEqual({
+      ratio: '3:2',
+      size: '1536×1024',
+    })
+  })
+
+  it('uses task-level actual size when server library tasks have not hydrated thumbnail metadata yet', () => {
+    expect(getTaskCardCoverBadge(task({
+      outputImages: ['img-1'],
+      params: { ...DEFAULT_PARAMS, size: '1024x1024' },
+      actualParams: {
+        size: '1792x1024',
+      },
+    }))).toEqual({
+      ratio: '≈9:5',
+      size: '1792×1024',
     })
   })
 })

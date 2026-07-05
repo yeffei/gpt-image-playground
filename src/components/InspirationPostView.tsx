@@ -49,6 +49,12 @@ export function InspirationPostContent(props: {
   onBackToWorkbench: () => void
   onOpenPost: (postId: string) => void
 }) {
+  const [detailImageFit, setDetailImageFit] = useState<'cover' | 'contain'>('cover')
+
+  useEffect(() => {
+    setDetailImageFit('cover')
+  }, [props.state.post?.id])
+
   if (!props.state.post) return null
 
   const post = props.state.post
@@ -77,10 +83,18 @@ export function InspirationPostContent(props: {
         <div className="grid gap-0 xl:grid-cols-[minmax(0,1.14fr)_minmax(0,0.86fr)] 2xl:grid-cols-[minmax(0,1.16fr)_minmax(0,0.84fr)]">
           <div className="relative overflow-hidden border-b border-white/70 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.82),rgba(236,241,248,0.78)_48%,rgba(226,232,240,0.72))] xl:border-b-0 xl:border-r">
             <div className="absolute inset-x-[8%] top-8 h-28 rounded-full bg-[radial-gradient(circle,rgba(148,163,184,0.18),transparent_72%)] blur-3xl" />
-            <div className="relative flex h-full min-h-[300px] items-stretch justify-center px-4 py-6 sm:min-h-[380px] sm:px-8 sm:py-8 lg:min-h-[480px] xl:min-h-[540px] xl:px-8 xl:py-10 2xl:min-h-[580px] 2xl:px-10 2xl:py-12">
-              <div className="flex h-full w-full max-w-[920px] overflow-hidden rounded-[28px] border border-white/80 bg-white/72 p-3 shadow-[0_22px_64px_rgba(15,23,42,0.1)] backdrop-blur sm:rounded-[30px] sm:p-4">
-                <div className="overflow-hidden rounded-[24px] bg-[linear-gradient(180deg,rgba(248,250,252,0.98),rgba(241,245,249,0.92))]">
-                  <img src={post.imageUrl} alt={post.title ?? post.category} className="h-full w-full object-cover" />
+            <div className="relative flex h-[clamp(320px,58vh,680px)] items-stretch justify-center p-0 sm:h-[clamp(380px,62vh,720px)] xl:h-[clamp(520px,64vh,760px)]">
+              <div className="flex h-full w-full overflow-hidden rounded-none border-0 bg-white/72 shadow-none backdrop-blur sm:rounded-none xl:rounded-r-[1px]">
+                <div className="h-full w-full overflow-hidden rounded-none bg-[linear-gradient(180deg,rgba(248,250,252,0.98),rgba(241,245,249,0.92))]">
+                  <img
+                    src={post.imageUrl}
+                    alt={post.title ?? post.category}
+                    onLoad={(event) => {
+                      const image = event.currentTarget
+                      setDetailImageFit(image.naturalHeight > image.naturalWidth ? 'contain' : 'cover')
+                    }}
+                    className={`h-full w-full ${detailImageFit === 'contain' ? 'object-contain' : 'object-cover'}`}
+                  />
                 </div>
               </div>
             </div>
@@ -270,7 +284,7 @@ export default function InspirationPostView({ postId }: InspirationPostViewProps
 
   return (
     <section className="w-full" aria-label="灵感作品详情">
-      <section className="prototype-canvas-panel mx-auto w-full max-w-[1440px] rounded-[30px] px-5 py-5 lg:px-7 lg:py-7">
+      <section className="prototype-canvas-panel mx-auto w-full rounded-[30px] px-5 py-5 lg:px-7 lg:py-7">
         <div className="prototype-canvas-content space-y-8">
           {loading ? (
             <div className="rounded-[28px] border border-white/60 bg-white/72 px-6 py-12 text-center text-sm text-slate-500 shadow-[0_18px_44px_rgba(15,23,42,0.06)]">

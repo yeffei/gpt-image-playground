@@ -45,6 +45,8 @@
     "admin:read-smoke": "node scripts/admin-read-smoke.mjs",
     "admin:maintenance:reset": "node scripts/admin-maintenance-reset.mjs",
     "admin:maintenance:cleanup-expired-shares": "node scripts/cleanup-expired-shares.mjs",
+    "admin:maintenance:cleanup-trashed-outputs": "node scripts/cleanup-trashed-outputs.mjs",
+    "admin:maintenance:backfill-inspiration-metadata": "node scripts/backfill-inspiration-metadata.mjs",
     "verify:admin-backend-config": "node scripts/verify-admin-backend-config.mjs",
     "verify:server-deploy-config": "node scripts/verify-server-deployment-config.mjs",
     "verify:prelaunch": "node scripts/verify-prelaunch.mjs",

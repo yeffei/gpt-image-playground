@@ -28,12 +28,18 @@ interface AdminRow {
 type DashboardTaskRow = {
   id: string
   user_id: string
+  user_email?: string | null
+  user_display_name?: string | null
   status: string
   mode: string
   model_sku: string
+  model_display_name?: string | null
+  route_id?: string | null
+  route_name?: string | null
   output_count: number
   charged_points: string
   created_at: string
+  finished_at?: string | null
 }
 
 export interface AdminSessionRow extends AdminRow {
@@ -224,9 +230,26 @@ export function registerAdminAuthRoutes(app: FastifyInstance, db: Pool, env: Ser
         WHERE created_at >= $1::timestamptz AND created_at < $2::timestamptz
       `, [todayStart, todayEnd])
       const recentTasks = await db.query<DashboardTaskRow>(`
-        SELECT id, user_id, status, mode, model_sku, output_count, charged_points::text, created_at::text
-        FROM generation_tasks
-        ORDER BY created_at DESC
+        SELECT
+          t.id,
+          t.user_id,
+          u.email AS user_email,
+          u.display_name AS user_display_name,
+          t.status,
+          t.mode,
+          t.model_sku,
+          m.display_name AS model_display_name,
+          t.route_id,
+          r.name AS route_name,
+          t.output_count,
+          t.charged_points::text,
+          t.created_at::text,
+          t.finished_at::text
+        FROM generation_tasks t
+        LEFT JOIN users u ON u.id = t.user_id
+        LEFT JOIN model_skus m ON m.id = t.model_sku
+        LEFT JOIN gateway_routes r ON r.id = t.route_id
+        ORDER BY t.created_at DESC
         LIMIT 5
       `)
       const codes = await db.query<{ total: string; active: string; redeemed: string }>(`
@@ -290,12 +313,21 @@ export function registerAdminAuthRoutes(app: FastifyInstance, db: Pool, env: Ser
         recentTasks: recentTasks.rows.map((row) => ({
           id: row.id,
           userId: row.user_id,
+          userEmail: row.user_email ?? null,
+          userDisplayName: row.user_display_name ?? null,
+          userLabel: row.user_email ?? row.user_display_name ?? row.user_id,
           status: row.status,
           mode: row.mode,
           modelSku: row.model_sku,
+          modelDisplayName: row.model_display_name ?? null,
+          modelLabel: row.model_display_name ?? row.model_sku,
+          routeId: row.route_id ?? null,
+          routeName: row.route_name ?? null,
+          routeLabel: row.route_name ?? row.route_id ?? null,
           outputCount: row.output_count,
           chargedPoints: Number(row.charged_points),
           createdAt: row.created_at,
+          finishedAt: row.finished_at ?? null,
         })),
         recentAuditLogs: auditLogs.rows.map((row) => ({
           id: row.id,

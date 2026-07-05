@@ -177,9 +177,28 @@ CREATE TABLE IF NOT EXISTS generation_task_outputs (
   height INTEGER CHECK (height IS NULL OR height > 0),
   revised_prompt TEXT,
   raw_source_url TEXT,
+  deleted_at TIMESTAMPTZ,
+  delete_source TEXT CHECK (delete_source IS NULL OR delete_source IN ('user', 'admin', 'system')),
+  delete_reason TEXT,
+  purge_after TIMESTAMPTZ,
+  storage_status TEXT NOT NULL DEFAULT 'active' CHECK (storage_status IN ('active', 'pending_delete', 'deleted', 'purge_failed')),
+  deleted_by_user_id TEXT REFERENCES users(id),
+  deleted_by_admin_id TEXT REFERENCES admin_users(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (task_id, output_index)
 );
+
+ALTER TABLE generation_task_outputs ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE generation_task_outputs ADD COLUMN IF NOT EXISTS delete_source TEXT;
+ALTER TABLE generation_task_outputs ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+ALTER TABLE generation_task_outputs ADD COLUMN IF NOT EXISTS purge_after TIMESTAMPTZ;
+ALTER TABLE generation_task_outputs ADD COLUMN IF NOT EXISTS storage_status TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE generation_task_outputs ADD COLUMN IF NOT EXISTS deleted_by_user_id TEXT REFERENCES users(id);
+ALTER TABLE generation_task_outputs ADD COLUMN IF NOT EXISTS deleted_by_admin_id TEXT REFERENCES admin_users(id);
+ALTER TABLE generation_task_outputs DROP CONSTRAINT IF EXISTS generation_task_outputs_delete_source_check;
+ALTER TABLE generation_task_outputs ADD CONSTRAINT generation_task_outputs_delete_source_check CHECK (delete_source IS NULL OR delete_source IN ('user', 'admin', 'system'));
+ALTER TABLE generation_task_outputs DROP CONSTRAINT IF EXISTS generation_task_outputs_storage_status_check;
+ALTER TABLE generation_task_outputs ADD CONSTRAINT generation_task_outputs_storage_status_check CHECK (storage_status IN ('active', 'pending_delete', 'deleted', 'purge_failed'));
 
 CREATE TABLE IF NOT EXISTS generation_output_shares (
   id TEXT PRIMARY KEY,
@@ -368,6 +387,7 @@ CREATE TABLE IF NOT EXISTS prompt_template_import_runs (
   total_candidates INTEGER NOT NULL DEFAULT 0 CHECK (total_candidates >= 0),
   approved_count INTEGER NOT NULL DEFAULT 0 CHECK (approved_count >= 0),
   rejected_count INTEGER NOT NULL DEFAULT 0 CHECK (rejected_count >= 0),
+  diagnostic_summary TEXT,
   error_summary TEXT,
   created_by_admin_id TEXT REFERENCES admin_users(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -410,6 +430,9 @@ CREATE TABLE IF NOT EXISTS prompt_template_candidates (
 
 ALTER TABLE prompt_template_candidates
   ADD COLUMN IF NOT EXISTS original_image_url TEXT;
+
+ALTER TABLE prompt_template_import_runs
+  ADD COLUMN IF NOT EXISTS diagnostic_summary TEXT;
 
 CREATE TABLE IF NOT EXISTS system_settings (
   key TEXT PRIMARY KEY,

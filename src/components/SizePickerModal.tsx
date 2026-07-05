@@ -28,10 +28,10 @@ const TIER_HINTS: Record<SizeTier, string> = {
   '4K': '高精输出',
 }
 const QUICK_PRESETS = [
-  { label: '方图封面', hint: '通用首图', tier: '1K' as const, ratio: '1:1' },
-  { label: '横版展示', hint: '产品与场景', tier: '2K' as const, ratio: '16:9' },
-  { label: '竖版海报', hint: '手机竖幅', tier: '2K' as const, ratio: '9:16' },
-  { label: '宽屏横幅', hint: '叙事横构图', tier: '2K' as const, ratio: '21:9' },
+  { label: '方图封面', hint: '首图', tier: '1K' as const, ratio: '1:1' },
+  { label: '横版展示', hint: '场景', tier: '2K' as const, ratio: '16:9' },
+  { label: '竖版海报', hint: '竖幅', tier: '2K' as const, ratio: '9:16' },
+  { label: '宽屏横幅', hint: '横构', tier: '2K' as const, ratio: '21:9' },
 ]
 
 interface Props {
@@ -40,7 +40,7 @@ interface Props {
   onClose: () => void
   allowAuto?: boolean
   supportedSizes?: string[]
-  maxSupportedLongEdge?: number | null
+  maxDeliveryLongEdge?: number | null
 }
 
 type Mode = 'auto' | 'ratio' | 'fixed'
@@ -63,16 +63,16 @@ function findPresetForSize(size: string) {
   return null
 }
 
-export function getAvailableSizeTiers(maxSupportedLongEdge?: number | null): SizeTier[] {
-  if (typeof maxSupportedLongEdge !== 'number' || !Number.isFinite(maxSupportedLongEdge) || maxSupportedLongEdge <= 0) {
+export function getAvailableSizeTiers(maxDeliveryLongEdge?: number | null): SizeTier[] {
+  if (typeof maxDeliveryLongEdge !== 'number' || !Number.isFinite(maxDeliveryLongEdge) || maxDeliveryLongEdge <= 0) {
     return TIERS
   }
-  const tiers = TIERS.filter((tier) => TIER_LONG_EDGE[tier] <= maxSupportedLongEdge)
+  const tiers = TIERS.filter((tier) => TIER_LONG_EDGE[tier] <= maxDeliveryLongEdge)
   return tiers.length ? tiers : ['1K']
 }
 
-export function getNearestAllowedSizeTier(tier: SizeTier, maxSupportedLongEdge?: number | null): SizeTier {
-  const available = getAvailableSizeTiers(maxSupportedLongEdge)
+export function getNearestAllowedSizeTier(tier: SizeTier, maxDeliveryLongEdge?: number | null): SizeTier {
+  const available = getAvailableSizeTiers(maxDeliveryLongEdge)
   if (available.includes(tier)) return tier
   return available[available.length - 1] ?? '1K'
 }
@@ -93,6 +93,11 @@ export function getSizePickerModeLabels(input: { allowAuto: boolean; hasSupporte
   return input.allowAuto ? ['自动', '按比例'] : ['按比例']
 }
 
+export function getTierResolutionHint(tier: SizeTier, ratio: string) {
+  const size = calculateImageSize(tier, ratio)
+  return size ? `${ratio} · ${normalizeImageSize(size)}` : null
+}
+
 function getReadableSizeLabel(size: string, allowAuto: boolean) {
   if (!size || size === 'auto') {
     return allowAuto ? '自动' : '智能适配'
@@ -104,7 +109,7 @@ function getReadableSizeLabel(size: string, allowAuto: boolean) {
   return ratio ? `${ratio} · ${normalizeImageSize(size)}` : normalizeImageSize(size)
 }
 
-export default function SizePickerModal({ currentSize, onSelect, onClose, allowAuto = true, supportedSizes = [], maxSupportedLongEdge = null }: Props) {
+export default function SizePickerModal({ currentSize, onSelect, onClose, allowAuto = true, supportedSizes = [], maxDeliveryLongEdge = null }: Props) {
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   usePreventBackgroundScroll(true, scrollAreaRef)
   const pushRecentSizePreset = useStore((s) => s.pushRecentSizePreset)
@@ -144,8 +149,8 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
   }))
 
   // Ratio mode state
-  const availableSizeTiers = useMemo(() => getAvailableSizeTiers(maxSupportedLongEdge), [maxSupportedLongEdge])
-  const [tier, setTier] = useState<SizeTier>(getNearestAllowedSizeTier(currentPreset?.tier ?? '1K', maxSupportedLongEdge))
+  const availableSizeTiers = useMemo(() => getAvailableSizeTiers(maxDeliveryLongEdge), [maxDeliveryLongEdge])
+  const [tier, setTier] = useState<SizeTier>(getNearestAllowedSizeTier(currentPreset?.tier ?? '1K', maxDeliveryLongEdge))
   const [ratio, setRatio] = useState(currentPreset?.ratio ?? (effectiveAllowAuto ? '1:1' : '4:3'))
   const [customRatio, setCustomRatio] = useState('16:9')
   const [selectedSupportedSize, setSelectedSupportedSize] = useState(() => {
@@ -240,7 +245,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
 
   const applyQuickPreset = (nextTier: SizeTier, nextRatio: string) => {
     setMode('ratio')
-    setTier(getNearestAllowedSizeTier(nextTier, maxSupportedLongEdge))
+    setTier(getNearestAllowedSizeTier(nextTier, maxDeliveryLongEdge))
     setRatio(nextRatio)
   }
 
@@ -348,17 +353,17 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
               <div className="space-y-3 animate-fade-in">
                 <section>
                   <div className="mb-2 text-xs font-medium text-gray-400 dark:text-gray-500">常用预设</div>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-4 gap-1.5">
                     {QUICK_PRESETS.map((item) => {
                       const active = tier === item.tier && ratio === item.ratio
                       return (
                         <button
                           key={`${item.tier}-${item.ratio}`}
-                          className={`${buttonClass(active)} text-left`}
+                          className={`${buttonClass(active)} min-h-[72px] !px-2 !py-2 text-center`}
                           onClick={() => applyQuickPreset(item.tier, item.ratio)}
                         >
-                          <div className="text-[13px] font-medium leading-tight">{item.label}</div>
-                          <div className="mt-0.5 text-[11px] opacity-70">{item.hint}</div>
+                          <div className="text-[12px] font-medium leading-tight">{item.label}</div>
+                          <div className="mt-0.5 text-[10px] opacity-70">{item.hint}</div>
                         </button>
                       )
                     })}
@@ -368,12 +373,16 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                 <section>
                   <div className="mb-2 text-xs font-medium text-gray-400 dark:text-gray-500">分辨率档位</div>
                   <div className="grid grid-cols-3 gap-2">
-                    {availableSizeTiers.map((item) => (
-                      <button key={item} className={`${buttonClass(tier === item)} text-left`} onClick={() => setTier(item)}>
-                        <div className="text-[13px] font-medium">{item}</div>
-                        <div className="mt-0.5 text-[11px] opacity-70">{TIER_HINTS[item]}</div>
-                      </button>
-                    ))}
+                    {availableSizeTiers.map((item) => {
+                      const resolutionHint = getTierResolutionHint(item, activeRatio)
+                      return (
+                        <button key={item} className={`${buttonClass(tier === item)} text-left`} onClick={() => setTier(item)}>
+                          <div className="text-[13px] font-medium">{item}</div>
+                          <div className="mt-0.5 text-[11px] opacity-70">{TIER_HINTS[item]}</div>
+                          {resolutionHint && <div className="mt-1 text-[10px] opacity-60">{resolutionHint}</div>}
+                        </button>
+                      )
+                    })}
                   </div>
                   {availableSizeTiers.length < TIERS.length && (
                     <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-700 dark:bg-amber-400/10 dark:text-amber-200">

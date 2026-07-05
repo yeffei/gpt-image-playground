@@ -7,6 +7,7 @@ import { DEFAULT_IMAGES_MODEL, DEFAULT_FAL_MODEL } from '../lib/apiProfiles'
 import { getModelSku } from '../lib/modelSkus'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { getFailureDisplay, getPublicTaskResultView, SERVER_IMAGE_INTERRUPTED_MESSAGE, STOPPED_GENERATION_MESSAGE } from '../lib/taskResultDisplay'
+import { RestoreIcon } from './icons'
 import ViewportTooltip from './ViewportTooltip'
 
 interface Props {
@@ -26,6 +27,36 @@ function formatDuration(seconds: number | null) {
   const mm = String(Math.floor(safeSeconds / 60)).padStart(2, '0')
   const ss = String(safeSeconds % 60).padStart(2, '0')
   return `${mm}:${ss}`
+}
+
+function parseImageSize(size: string | undefined | null) {
+  if (typeof size !== 'string') return null
+  const match = size.trim().match(/^(\d+)\s*[xX×]\s*(\d+)$/)
+  if (!match) return null
+  const width = Number(match[1])
+  const height = Number(match[2])
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null
+  }
+  return { width, height }
+}
+
+export function getTaskCardCoverBadge(task: TaskRecord) {
+  const coverImageId = task.outputImages[0]
+  const preferredSize =
+    (coverImageId ? task.actualParamsByImage?.[coverImageId]?.size : undefined)
+    ?? task.actualParams?.size
+    ?? task.params.size
+
+  const parsedSize = parseImageSize(preferredSize)
+  if (!parsedSize) {
+    return { ratio: '', size: '' }
+  }
+
+  return {
+    ratio: formatImageRatio(parsedSize.width, parsedSize.height),
+    size: `${parsedSize.width}×${parsedSize.height}`,
+  }
 }
 
 function getRunningDisplay(elapsedSeconds: number, requestedOutputCount: number) {
@@ -368,6 +399,9 @@ export default function TaskCard({
   const isFalReconnecting = task.status === 'error' && task.falRecoverable
   const isCustomReconnecting = task.status === 'error' && task.customRecoverable
   const showRunningTimer = task.status === 'running' || isFalReconnecting || isCustomReconnecting
+  const fallbackCoverBadge = getTaskCardCoverBadge(task)
+  const displayCoverRatio = coverRatio || fallbackCoverBadge.ratio
+  const displayCoverSize = coverSize || fallbackCoverBadge.size
   const swipeBgClass = showSwipeAction
     ? swipeStartedSelected
       ? 'bg-gray-500 dark:bg-gray-600'
@@ -680,23 +714,23 @@ export default function TaskCard({
           )}
           {/* 运行中显示耗时，完成后显示封面图比例与分辨率标签 */}
           <div className="absolute top-3 left-3 flex items-center gap-1">
-            {showRunningTimer || task.status !== 'done' || !coverRatio || !coverSize ? (
+            {showRunningTimer || task.status !== 'done' ? (
               <span className="flex items-center gap-1 rounded-full bg-black/50 text-white text-[10px] sm:text-xs px-2 py-1 backdrop-blur-sm font-mono">
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
                 {duration}
               </span>
-            ) : (
+            ) : displayCoverRatio && displayCoverSize ? (
               <>
                 <span className="rounded-full bg-black/50 text-white text-[10px] sm:text-xs px-2 py-1 backdrop-blur-sm font-mono">
-                  {coverRatio}
+                  {displayCoverRatio}
                 </span>
                 <span className="rounded-full bg-black/50 text-white/90 text-[10px] sm:text-xs px-2 py-1 backdrop-blur-sm font-medium">
-                  {coverSize}
+                  {displayCoverSize}
                 </span>
               </>
-            )}
+            ) : null}
           </div>
           {task.status === 'done' && (
             <div className="absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/40 via-black/12 to-transparent pointer-events-none" />
@@ -825,23 +859,27 @@ export default function TaskCard({
                   </svg>
                 </TaskActionButton>
                 <TaskActionButton
-                  tooltip="删除记录"
+                  tooltip={task.libraryState === 'trashed' ? '恢复作品' : '移入回收站'}
                   onClick={onDelete}
                   className="task-mini-action danger"
                 >
-                  <svg
-                    className="w-4 h-4"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                    />
-                  </svg>
+                  {task.libraryState === 'trashed' ? (
+                    <RestoreIcon className="w-4 h-4" />
+                  ) : (
+                    <svg
+                      className="w-4 h-4"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                      />
+                    </svg>
+                  )}
                 </TaskActionButton>
               </div>
             </div>
