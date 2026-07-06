@@ -2476,6 +2476,40 @@ export default function AgentWorkflowView() {
     taskId: activeLocalEditSource?.taskId ?? null,
     maskUpdatedAt: activeLocalEditSource?.maskUpdatedAt ?? null,
   })
+  const hasProjectAssets = resultHasOutputs || referenceAssets.length > 0 || projectList.length > 0 || activeRecipes.length > 0 || archivedRecipePreview.length > 0
+  const shouldCompactAssets = !hasProjectAssets && !assetActionNotice
+  const assetSummaryItems = [
+    { key: 'outputs', label: '输出', value: resultHasOutputs ? `${outputImageIds.length || serverOutputs.length} 张` : '待生成' },
+    { key: 'references', label: '参考', value: referenceAssets.length ? `${referenceAssets.length} 个` : '待添加' },
+    { key: 'projects', label: '项目', value: projectList.length ? `${projectList.length} 个` : needsLogin ? '需登录' : '暂无' },
+    { key: 'recipes', label: '配方', value: activeRecipes.length ? `${activeRecipes.length} 个` : needsLogin ? '需登录' : '暂无' },
+  ]
+  const inspectorPriorityItems = [
+    {
+      key: 'route',
+      label: '路线',
+      value: routeReady ? statusCopy.label : '待规划',
+      detail: routeReady ? routeLifecycleCopy.primaryActionLabel : needsLogin ? '登录后规划路线' : '先生成路线',
+    },
+    {
+      key: 'cost',
+      label: '点数',
+      value: planSummary.estimatedPoints,
+      detail: canConfirm(run) ? '确认后锁定' : run?.confirmedPoints ? '已确认' : '未扣点',
+    },
+    {
+      key: 'reference',
+      label: '参考',
+      value: referenceAssets.length ? `${referenceAssets.length} 个素材` : '未提供',
+      detail: referenceAssets.length ? '可用于一致性控制' : '产品或风格需人工确认',
+    },
+    {
+      key: 'next',
+      label: '下一步',
+      value: executionControlSummary.title,
+      detail: executionControlSummary.chips[0] ?? executionControlSummary.detail,
+    },
+  ]
 
   useEffect(() => {
     const activeIds = new Set(agentReferenceImages.map((image) => image.id))
@@ -3860,12 +3894,7 @@ export default function AgentWorkflowView() {
 
   const renderProjectPrimaryAction = () => {
     if (!run) {
-      return (
-        <button type="button" className="agent-project-primary" onClick={handlePlan} disabled={isBusy}>
-          <PlusIcon className="agent-workflow-icon" aria-hidden="true" />
-          <span>{busyAction === 'plan' ? '正在生成路线' : needsLogin ? '登录后生成路线' : '生成路线'}</span>
-        </button>
-      )
+      return null
     }
     if (canConfirm(run)) {
       return (
@@ -3908,7 +3937,7 @@ export default function AgentWorkflowView() {
   }
 
   return (
-    <section className="agent-workflow-view" aria-label="智能创作流">
+    <section className={`agent-workflow-view ${!run ? 'is-empty-agent-project' : ''} ${needsLogin ? 'is-guest-agent-project' : ''}`} aria-label="智能创作流">
       <header className="agent-project-bar">
         <div className="agent-project-title">
           <span className="agent-workflow-eyebrow">Agent 创作项目</span>
@@ -3970,7 +3999,7 @@ export default function AgentWorkflowView() {
 
       {error ? <div className="agent-workflow-error" role="alert">{error}</div> : null}
 
-      <div className="agent-workbench-grid">
+      <div className={`agent-workbench-grid ${!run ? 'is-empty-project' : ''}`}>
         <section className="agent-panel agent-mission-console" aria-labelledby="agent-mission-title">
           <div className="agent-panel-head">
             <div>
@@ -4551,93 +4580,105 @@ export default function AgentWorkflowView() {
           <div className="agent-panel-head">
             <div>
               <h2 id="agent-inspector-title">Inspector</h2>
-              <p>技术细节和成本检查。</p>
+              <p>下一步判断优先，技术细节按需展开。</p>
             </div>
           </div>
-          <div className="agent-inspector-list">
-            <div className="agent-creative-review">
-              <span>创意总监评审</span>
-              <div className="agent-creative-review-list">
-                {creativeReviewItems.map((item) => (
-                  <section key={item.key} className={`is-${item.status}`}>
-                    <i aria-hidden="true" />
-                    <strong>{item.label}</strong>
-                    <small>{item.detail}</small>
-                  </section>
-                ))}
+          <div className="agent-inspector-priority" aria-label="当前判断">
+            {inspectorPriorityItems.map((item) => (
+              <div key={item.key}>
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+                <small>{item.detail}</small>
               </div>
-            </div>
-            <div className="agent-inspector-selection">
-              <span>选中输出</span>
-              <strong>{activeOutputReviewSummary.label}</strong>
-              <small>{activeOutputReviewSummary.outputId ? `Output ${activeOutputReviewSummary.outputId}` : '预留主图、局部编辑和变体分支 metadata。'}</small>
-            </div>
-            <div>
-              <span>模型</span>
-              <strong>{planSummary.model}</strong>
-            </div>
-            <div>
-              <span>输出规格</span>
-              <strong>{selectedOutputSize || (selectedServerOnlyOutput?.width && selectedServerOnlyOutput.height ? `${selectedServerOnlyOutput.width}x${selectedServerOnlyOutput.height}` : planSummary.outputSize)}</strong>
-            </div>
-            <div className="agent-inspector-branch">
-              <span>分支判断</span>
-              <strong>{branchInspectorSummary.title}</strong>
-              <p>{branchInspectorSummary.detail}</p>
-              <small>{branchInspectorSummary.action}</small>
-              <div className="agent-inspector-chips">
-                <em>{branchInfo.shortLabel}</em>
-                {branchInspectorSummary.chips.map((chip) => (
-                  <em key={chip}>{chip}</em>
-                ))}
-              </div>
-            </div>
-            <div>
-              <span>来源链路</span>
-              <div className="agent-lineage-row">
-                <p>{lineageText}</p>
-                {lineage.sourceRunId ? (
-                  <button type="button" onClick={() => void jumpToLineageSource()} disabled={isBusy}>
-                    回到来源
-                  </button>
-                ) : null}
-              </div>
-            </div>
-            <div>
-              <span>增强 Prompt</span>
-              <p>{planSummary.prompt}</p>
-            </div>
-            <div>
-              <span>质量控制</span>
-              <p>{planSummary.negativePrompt}</p>
-            </div>
-            <div>
-              <span>评审状态</span>
-              <strong>{reviewStatusLabel}</strong>
-              <small>{review.latestRecipeId ? `Recipe ${review.latestRecipeId}` : primaryOutput.selectedOutputId ? `主图 ${primaryOutput.selectedOutputId}` : activeOutputReviewSummary.outputId ? `当前 ${activeOutputReviewSummary.outputId}` : run?.status === 'succeeded' ? '尚未绑定主图' : '生成完成后启用'}</small>
-            </div>
-            {review.note ? (
-              <div>
-                <span>评审反馈</span>
-                <p>{review.note}</p>
-              </div>
-            ) : null}
-            <div>
-              <span>任务 ID</span>
-              <code>{run?.generationTaskId || '待创建'}</code>
-            </div>
-            <div>
-              <span>任务状态</span>
-              <strong>{serverTaskStatus}</strong>
-              <small>{run?.generationTaskId ? `输出 ${serverTaskProgressText} · 预留 ${displayTaskPoints(serverGenerationTask?.reservedPoints)}` : '启动生成后创建服务端任务'}</small>
-            </div>
-            {serverGenerationTask?.failureKind || serverGenerationTask?.errorSummary ? (
-              <div>
-                <span>任务错误</span>
-                <p>{serverGenerationTask.errorSummary || serverGenerationTask.failureKind}</p>
-              </div>
-            ) : null}
+            ))}
           </div>
+          <details className="agent-inspector-detail-disclosure" open={Boolean(run)}>
+            <summary>技术细节</summary>
+            <div className="agent-inspector-list">
+              <div className="agent-creative-review">
+                <span>创意总监评审</span>
+                <div className="agent-creative-review-list">
+                  {creativeReviewItems.map((item) => (
+                    <section key={item.key} className={`is-${item.status}`}>
+                      <i aria-hidden="true" />
+                      <strong>{item.label}</strong>
+                      <small>{item.detail}</small>
+                    </section>
+                  ))}
+                </div>
+              </div>
+              <div className="agent-inspector-selection">
+                <span>选中输出</span>
+                <strong>{activeOutputReviewSummary.label}</strong>
+                <small>{activeOutputReviewSummary.outputId ? `Output ${activeOutputReviewSummary.outputId}` : '预留主图、局部编辑和变体分支 metadata。'}</small>
+              </div>
+              <div>
+                <span>模型</span>
+                <strong>{planSummary.model}</strong>
+              </div>
+              <div>
+                <span>输出规格</span>
+                <strong>{selectedOutputSize || (selectedServerOnlyOutput?.width && selectedServerOnlyOutput.height ? `${selectedServerOnlyOutput.width}x${selectedServerOnlyOutput.height}` : planSummary.outputSize)}</strong>
+              </div>
+              <div className="agent-inspector-branch">
+                <span>分支判断</span>
+                <strong>{branchInspectorSummary.title}</strong>
+                <p>{branchInspectorSummary.detail}</p>
+                <small>{branchInspectorSummary.action}</small>
+                <div className="agent-inspector-chips">
+                  <em>{branchInfo.shortLabel}</em>
+                  {branchInspectorSummary.chips.map((chip) => (
+                    <em key={chip}>{chip}</em>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <span>来源链路</span>
+                <div className="agent-lineage-row">
+                  <p>{lineageText}</p>
+                  {lineage.sourceRunId ? (
+                    <button type="button" onClick={() => void jumpToLineageSource()} disabled={isBusy}>
+                      回到来源
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              <div>
+                <span>增强 Prompt</span>
+                <p>{planSummary.prompt}</p>
+              </div>
+              <div>
+                <span>质量控制</span>
+                <p>{planSummary.negativePrompt}</p>
+              </div>
+              <div>
+                <span>评审状态</span>
+                <strong>{reviewStatusLabel}</strong>
+                <small>{review.latestRecipeId ? `Recipe ${review.latestRecipeId}` : primaryOutput.selectedOutputId ? `主图 ${primaryOutput.selectedOutputId}` : activeOutputReviewSummary.outputId ? `当前 ${activeOutputReviewSummary.outputId}` : run?.status === 'succeeded' ? '尚未绑定主图' : '生成完成后启用'}</small>
+              </div>
+              {review.note ? (
+                <div>
+                  <span>评审反馈</span>
+                  <p>{review.note}</p>
+                </div>
+              ) : null}
+              <div>
+                <span>任务 ID</span>
+                <code>{run?.generationTaskId || '待创建'}</code>
+              </div>
+              <div>
+                <span>任务状态</span>
+                <strong>{serverTaskStatus}</strong>
+                <small>{run?.generationTaskId ? `输出 ${serverTaskProgressText} · 预留 ${displayTaskPoints(serverGenerationTask?.reservedPoints)}` : '启动生成后创建服务端任务'}</small>
+              </div>
+              {serverGenerationTask?.failureKind || serverGenerationTask?.errorSummary ? (
+                <div>
+                  <span>任务错误</span>
+                  <p>{serverGenerationTask.errorSummary || serverGenerationTask.failureKind}</p>
+                </div>
+              ) : null}
+            </div>
+          </details>
         </aside>
       </div>
 
@@ -4721,7 +4762,7 @@ export default function AgentWorkflowView() {
         </ol>
       </section>
 
-      <section className="agent-panel agent-assets-panel" aria-labelledby="agent-assets-title">
+      <section className={`agent-panel agent-assets-panel ${shouldCompactAssets ? 'is-compact-empty' : ''}`} aria-labelledby="agent-assets-title">
         <div className="agent-panel-head">
           <div>
             <h2 id="agent-assets-title">Project Assets</h2>
@@ -4749,13 +4790,28 @@ export default function AgentWorkflowView() {
           </div>
         ) : null}
 
-        <div className="agent-asset-lanes" aria-label="项目资产分区预留">
-          {PROJECT_ASSET_LANES.map((lane) => (
-            <span key={lane}>{lane}</span>
+        <div className="agent-asset-summary-row" aria-label="资产摘要">
+          {assetSummaryItems.map((item) => (
+            <div key={item.key}>
+              <span>{item.label}</span>
+              <strong>{item.value}</strong>
+            </div>
           ))}
         </div>
 
-        <div className="agent-assets-grid">
+        <details className="agent-assets-disclosure" open={!shouldCompactAssets}>
+          <summary>
+            <strong>{shouldCompactAssets ? '展开资产区' : '资产明细'}</strong>
+            <span>{shouldCompactAssets ? '有输出、项目或配方后会自动展开' : '输出 / 参考 / 配方 / 历史'}</span>
+          </summary>
+
+          <div className="agent-asset-lanes" aria-label="项目资产分区预留">
+            {PROJECT_ASSET_LANES.map((lane) => (
+              <span key={lane}>{lane}</span>
+            ))}
+          </div>
+
+          <div className="agent-assets-grid">
           {resultHasOutputs ? (
             <div className="agent-asset-column">
               <div className="agent-asset-column-head">
@@ -5126,7 +5182,8 @@ export default function AgentWorkflowView() {
               </div>
             )}
           </div>
-        </div>
+          </div>
+        </details>
       </section>
     </section>
   )
