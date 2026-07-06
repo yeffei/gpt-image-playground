@@ -51,6 +51,7 @@ type AdminSectionKey =
   | 'rechargeCodes'
   | 'modelSkus'
   | 'tasks'
+  | 'agentWorkflow'
   | 'gateway'
   | 'content'
   | 'growth'
@@ -130,10 +131,12 @@ const ADMIN_PRIMARY_FILTER_KEYS: Partial<Record<string, string[]>> = {
   tasks: ['status', 'user'],
   inspiration: ['queue', 'status', 'category', 'user'],
   shares: ['status', 'user'],
+  agentWorkflow: ['status', 'projectStatus', 'user', 'search'],
 }
 const ADMIN_ADVANCED_FILTER_SUMMARY: Partial<Record<string, string>> = {
   users: '邮箱验证、充值与生成行为',
   tasks: '模型、线路、失败类型与扣点',
+  agentWorkflow: '来源、失败类型、任务编号与时间',
   inspiration: 'AI 展示判断、审核结论与发布快照',
   shares: 'Token、记录编号、访问码与时间',
 }
@@ -173,6 +176,7 @@ const ADMIN_VALUE_LABELS: Record<string, string> = {
   error: '错误',
   timeout: '超时',
   cancelled: '已取消',
+  canceled: '已取消',
   redeemed: '已兑换',
   invalid: '无效',
   ok: '正常',
@@ -221,6 +225,11 @@ const ADMIN_VALUE_LABELS: Record<string, string> = {
   featured_candidates: 'AI 推荐精选',
   latest: '最新展示',
   completed: '已完成',
+  confirmed: '已确认',
+  reference_image: '参考图',
+  recipe: '配方',
+  rerun: '重试',
+  text: '文本',
   hero_featured: '主视觉精选',
   secondary_featured: '次级精选',
   latest_grid: '最新列表',
@@ -240,6 +249,7 @@ const READABLE_FIELD_KEYS: Record<string, string[]> = {
   codeId: ['codePreview'],
   ledgerId: ['ledgerLabel'],
   taskId: ['taskLabel'],
+  generationTaskId: ['taskLabel'],
   modelSku: ['modelLabel', 'modelDisplayName', 'displayName', 'name'],
   modelLabel: ['modelDisplayName', 'displayName', 'name'],
   routeLabel: ['routeName', 'name'],
@@ -290,6 +300,7 @@ const ADMIN_SECTIONS: Array<{ key: AdminSectionKey; label: string; meta: string 
   { key: 'users', label: '用户与余额', meta: '账号 / 点数' },
   { key: 'rechargeCodes', label: '充值码', meta: '批次 / 兑换' },
   { key: 'tasks', label: '任务与扣点', meta: '出图 / 扣点' },
+  { key: 'agentWorkflow', label: 'Agent 观测', meta: 'Run / 成本 / 失败' },
   { key: 'gateway', label: '网关管理', meta: '线路 / 调度' },
   { key: 'content', label: '内容配置', meta: '模板 / 导入' },
   { key: 'inspiration', label: '灵感广场', meta: '展示 / 运营' },
@@ -305,6 +316,7 @@ const ADMIN_HOME_ACTIONS: Array<{
   { key: 'rechargeCodes', label: '进入处理', title: '充值码批次管理', description: '生成新批次、导出可用兑换码，并继续追踪兑换成功和失败记录。' },
   { key: 'users', label: '进入处理', title: '用户与点数处理', description: '按邮箱或账号查用户，核对余额与流水，并处理点数调整和账号状态。' },
   { key: 'tasks', label: '进入处理', title: '任务与扣点排查', description: '查看出图任务、扣点结果和失败原因，确认该去看账务还是继续查上游线路。' },
+  { key: 'agentWorkflow', label: '进入查看', title: 'Agent 运行观测', description: '查看 Agent 创作流、关联出图任务、配方沉淀和失败聚合，方便判断工作台运行质量。' },
   { key: 'content', label: '进入处理', title: '模板与候选维护', description: '维护正式模板，或从网址 / GitHub 导入候选后再做人工审核。' },
   { key: 'gateway', label: '进入处理', title: '线路与调度配置', description: '维护真实出图线路、模型和绑定规则，并继续做连通性和 2K / 4K 实测。' },
   { key: 'inspiration', label: '进入处理', title: '灵感广场运营', description: '查看 AI 初审和展示状态，处理公开信息、精选位和可见性。' },
@@ -403,6 +415,26 @@ const ADMIN_MODULES: Record<Exclude<AdminSectionKey, 'dashboard'>, AdminModuleCo
       { key: 'chargedPoints', label: '扣点' },
       { key: 'failureKind', label: '失败类型' },
       { key: 'createdAt', label: '提交时间' },
+    ],
+  },
+  agentWorkflow: {
+    summaryPath: '/api/admin/agent-runs/summary',
+    listPath: '/api/admin/agent-runs?limit=25&offset=0',
+    listKey: 'agentRuns',
+    detailBasePath: '/api/admin/agent-runs',
+    detailIdKey: 'id',
+    title: 'Agent 观测',
+    description: '查看 Agent 创作流、关联出图任务、配方沉淀和失败原因，判断工作台从计划到出图的真实运行质量。',
+    columns: [
+      { key: 'title', label: '项目' },
+      { key: 'userLabel', label: '用户' },
+      { key: 'status', label: 'Run 状态' },
+      { key: 'projectStatus', label: '项目状态' },
+      { key: 'sourceType', label: '来源' },
+      { key: 'confirmedPoints', label: '确认点数' },
+      { key: 'generationTaskStatus', label: '任务状态' },
+      { key: 'failureKind', label: '失败类型' },
+      { key: 'updatedAt', label: '更新时间' },
     ],
   },
   gateway: {
@@ -707,6 +739,17 @@ const ADMIN_FILTERS: Partial<Record<Exclude<AdminSectionKey, 'dashboard'> | User
     { key: 'failureKind', label: '失败类型', type: 'select', options: TASK_FAILURE_KIND_OPTIONS },
     { key: 'chargedOnly', label: '仅扣点', type: 'checkbox' },
   ],
+  agentWorkflow: [
+    { key: 'status', label: 'Run 状态', type: 'select', options: ['draft', 'planned', 'confirmed', 'running', 'succeeded', 'failed', 'canceled'] },
+    { key: 'projectStatus', label: '项目状态', type: 'select', options: ['active', 'archived'] },
+    { key: 'user', label: '用户', placeholder: '邮箱 / 昵称 / 用户ID' },
+    { key: 'search', label: '搜索', placeholder: '标题 / 需求 / 分类' },
+    { key: 'sourceType', label: '来源', type: 'select', options: ['text', 'reference_image', 'recipe', 'rerun'] },
+    { key: 'failureKind', label: '失败类型', type: 'select', options: TASK_FAILURE_KIND_OPTIONS },
+    { key: 'generationTaskId', label: '任务编号' },
+    { key: 'dateFrom', label: '开始日期', type: 'date' },
+    { key: 'dateTo', label: '结束日期', type: 'date' },
+  ],
   inspiration: [
     { key: 'queue', label: '队列', type: 'select', options: ['featured_candidates', 'needs_review', 'auto_hidden', 'latest'] },
     { key: 'status', label: '状态', type: 'select', options: ['ai_reviewing', 'published', 'needs_review', 'hidden', 'removed'] },
@@ -870,7 +913,7 @@ function isLikelyAdminTechnicalId(value: unknown) {
   if (typeof value !== 'string') return false
   const text = value.trim()
   if (!text) return false
-  return /^(task|user|model|route|ledger|share|output|audit|referral|binding|code)_[a-z0-9]+/i.test(text)
+  return /^(task|user|model|route|ledger|share|output|audit|referral|binding|code|run|recipe|step)_[a-z0-9]+/i.test(text)
 }
 
 function isAdminSecondaryIdentifierField(key: string) {
@@ -880,6 +923,11 @@ function isAdminSecondaryIdentifierField(key: string) {
     'routeId',
     'modelSkuId',
     'taskId',
+    'generationTaskId',
+    'runId',
+    'sourceRunId',
+    'sourceTaskId',
+    'sourceOutputId',
     'outputId',
     'shareId',
     'targetId',
@@ -1138,6 +1186,27 @@ function humanizeAdminKey(key: string) {
     lastRecoveryAt: '预计恢复时间',
     restoresAt: '预计恢复时间',
     requestId: '请求编号',
+    runId: 'Run 编号',
+    sourceRunId: '来源 Run',
+    sourceTaskId: '来源任务',
+    sourceOutputId: '来源图片',
+    sourceType: '来源',
+    projectStatus: '项目状态',
+    generationTaskId: '出图任务',
+    generationTaskStatus: '任务状态',
+    generationTaskChargedPoints: '任务扣点',
+    recommendedModelSku: '推荐模型',
+    recommendedModelDisplayName: '推荐模型名称',
+    recommendedModelLabel: '推荐模型',
+    recommendedOutputCount: '建议出图数',
+    estimatedPoints: '预估点数',
+    confirmedPoints: '确认点数',
+    recipeCount: '配方数',
+    stepCount: '步骤数',
+    failedStepCount: '失败步骤数',
+    confirmedAt: '确认时间',
+    startedAt: '开始时间',
+    archivedAt: '归档时间',
     outputCount: '出图张数',
     outputs: '结果图',
     outputIndex: '图片序号',
@@ -1186,7 +1255,7 @@ function humanizeAdminKey(key: string) {
 
 function getStatusTone(value: unknown) {
   const text = String(value ?? '').toLowerCase()
-  if (['active', 'enabled', 'published', 'succeeded', 'success', 'redeemed', 'ok', 'available', 'healthy', 'publish', 'recommend_featured', 'completed'].includes(text)) return 'good'
+  if (['active', 'enabled', 'published', 'succeeded', 'success', 'redeemed', 'ok', 'available', 'healthy', 'publish', 'recommend_featured', 'completed', 'confirmed'].includes(text)) return 'good'
   if ([
     'disabled',
     'expired',
@@ -1220,7 +1289,7 @@ function getStatusTone(value: unknown) {
 
 function shouldRenderAsBadge(key: string, value: unknown) {
   if (typeof value === 'boolean') return true
-  return ['status', 'enabled', 'featured', 'result', 'failureKind', 'healthStatus', 'supportsEdit', 'supportsMask', 'cooldownActive', 'aiDecision', 'aiReviewStatus', 'queue'].includes(key)
+  return ['status', 'enabled', 'featured', 'result', 'failureKind', 'healthStatus', 'supportsEdit', 'supportsMask', 'cooldownActive', 'aiDecision', 'aiReviewStatus', 'queue', 'projectStatus', 'generationTaskStatus'].includes(key)
 }
 
 function formatAdminDate(value: string) {
@@ -1436,6 +1505,7 @@ function AdminTableCell(props: { row: Record<string, unknown>; column: AdminTabl
 function getTableShellClassName(section: Exclude<AdminSectionKey, 'dashboard'>, actionScope: string) {
   const names = ['admin-table-shell']
   if (section === 'tasks') names.push('is-task-list')
+  if (section === 'agentWorkflow') names.push('is-agent-run-list')
   if (actionScope === 'routes') names.push('is-route-list')
   if (actionScope === 'modelSkus') names.push('is-model-list')
   if (actionScope === 'bindings') names.push('is-binding-list')
@@ -1838,6 +1908,152 @@ function AdminTaskDetailView(props: { detail: Record<string, unknown>; selectedI
           <div><span>账务流水</span><strong>{Array.isArray(ledger) ? `${ledger.length} 条` : '0 条'}</strong></div>
           <div><span>审计日志</span><strong>{Array.isArray(auditLogs) ? `${auditLogs.length} 条` : '0 条'}</strong></div>
         </div>
+      </section>
+
+      <AdminRawData payload={props.detail} />
+    </div>
+  )
+}
+
+function getAgentRunDetailRecord(detail: Record<string, unknown>) {
+  const run = getValueByPath(detail, 'agentRun')
+  return isRecord(run) ? run : detail
+}
+
+function AdminAgentWorkflowDetailView(props: { detail: Record<string, unknown>; selectedId: string }) {
+  const run = getAgentRunDetailRecord(props.detail)
+  const generationTask = getValueByPath(props.detail, 'generationTask')
+  const task = isRecord(generationTask) ? generationTask : null
+  const steps = getValueByPath(props.detail, 'steps')
+  const recipes = getValueByPath(props.detail, 'recipes')
+  const stepRows = Array.isArray(steps) ? steps.filter(isRecord) : []
+  const recipeRows = Array.isArray(recipes) ? recipes.filter(isRecord) : []
+  const runLabel = props.selectedId || String(getValueByPath(run, 'title') || getValueByPath(run, 'id') || '未命名 Run')
+
+  return (
+    <div className="admin-detail-stack">
+      <section className="admin-detail-block">
+        <div className="admin-detail-title">
+          <span>Run 概览</span>
+          <strong>{runLabel}</strong>
+        </div>
+        <AdminDetailMetricList
+          items={[
+            { key: 'status', label: 'Run 状态', value: getValueByPath(run, 'status') },
+            { key: 'projectStatus', label: '项目状态', value: getValueByPath(run, 'projectStatus') },
+            { key: 'sourceType', label: '来源', value: getValueByPath(run, 'sourceType') },
+            { key: 'category', label: '分类', value: getValueByPath(run, 'category') },
+            { key: 'confirmedPoints', label: '确认点数', value: getValueByPath(run, 'confirmedPoints') },
+            { key: 'generationTaskChargedPoints', label: '任务扣点', value: getValueByPath(run, 'generationTaskChargedPoints') },
+            { key: 'stepCount', label: '步骤数', value: getValueByPath(run, 'stepCount') },
+            { key: 'recipeCount', label: '配方数', value: getValueByPath(run, 'recipeCount') },
+          ]}
+        />
+        <AdminBusinessFieldList
+          record={run}
+          fields={[
+            { key: 'title', label: '项目名称' },
+            { key: 'userLabel', label: '用户' },
+            { key: 'userPrompt', label: '创作需求' },
+            { key: 'recommendedModelLabel', label: '推荐模型' },
+            { key: 'recommendedOutputCount', label: '建议出图数' },
+            { key: 'estimatedPoints', label: '预估点数' },
+            { key: 'failureKind', label: '失败类型' },
+            { key: 'errorSummary', label: '错误摘要' },
+            { key: 'createdAt', label: '创建时间' },
+            { key: 'updatedAt', label: '更新时间' },
+          ]}
+          hideEmpty
+        />
+      </section>
+
+      <section className="admin-detail-block">
+        <div className="admin-detail-title">
+          <span>出图任务链路</span>
+          <strong>{formatAdminShortId(getValueByPath(run, 'generationTaskId'))}</strong>
+        </div>
+        {task ? (
+          <AdminBusinessFieldList
+            record={task}
+            fields={[
+              { key: 'id', label: '任务编号' },
+              { key: 'status', label: '任务状态' },
+              { key: 'modelLabel', label: '模型' },
+              { key: 'routeLabel', label: '线路' },
+              { key: 'outputCount', label: '出图张数' },
+              { key: 'reservedPoints', label: '预留点数' },
+              { key: 'chargedPoints', label: '扣点' },
+              { key: 'failureKind', label: '失败类型' },
+              { key: 'errorSummary', label: '错误摘要' },
+              { key: 'finishedAt', label: '完成时间' },
+            ]}
+            hideEmpty
+          />
+        ) : (
+          <p className="admin-empty">当前 Run 尚未关联出图任务。</p>
+        )}
+      </section>
+
+      <section className="admin-detail-block">
+        <div className="admin-detail-title">
+          <span>步骤流</span>
+          <strong>{stepRows.length} 步</strong>
+        </div>
+        {stepRows.length ? (
+          <div className="admin-activity-list">
+            {stepRows.map((step) => (
+              <article key={String(getValueByPath(step, 'id') ?? getValueByPath(step, 'stepKey'))} className="admin-activity-item">
+                <AdminBusinessFieldList
+                  record={step}
+                  fields={[
+                    { key: 'stepIndex', label: '序号' },
+                    { key: 'stepKey', label: '步骤' },
+                    { key: 'status', label: '状态' },
+                    { key: 'attemptCount', label: '尝试次数' },
+                    { key: 'generationTaskId', label: '任务编号' },
+                    { key: 'errorKind', label: '错误类型' },
+                    { key: 'errorSummary', label: '错误摘要' },
+                    { key: 'finishedAt', label: '完成时间' },
+                  ]}
+                  hideEmpty
+                />
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="admin-empty">暂无步骤记录。</p>
+        )}
+      </section>
+
+      <section className="admin-detail-block">
+        <div className="admin-detail-title">
+          <span>配方沉淀</span>
+          <strong>{recipeRows.length} 条</strong>
+        </div>
+        {recipeRows.length ? (
+          <div className="admin-activity-list">
+            {recipeRows.map((recipe) => (
+              <article key={String(getValueByPath(recipe, 'id') ?? getValueByPath(recipe, 'title'))} className="admin-activity-item">
+                <AdminBusinessFieldList
+                  record={recipe}
+                  fields={[
+                    { key: 'title', label: '标题' },
+                    { key: 'category', label: '分类' },
+                    { key: 'status', label: '状态' },
+                    { key: 'visibility', label: '可见性' },
+                    { key: 'modelSkuId', label: '模型' },
+                    { key: 'sourceOutputId', label: '来源图片' },
+                    { key: 'useCount', label: '复用次数' },
+                    { key: 'updatedAt', label: '更新时间' },
+                  ]}
+                  hideEmpty
+                />
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="admin-empty">当前 Run 尚未沉淀图片配方。</p>
+        )}
       </section>
 
       <AdminRawData payload={props.detail} />
@@ -2353,6 +2569,10 @@ function AdminDetailView(props: { detail: unknown; selectedId: string; detailLoa
     return <AdminTaskDetailView detail={props.detail} selectedId={props.selectedId} />
   }
 
+  if (props.section === 'agentWorkflow') {
+    return <AdminAgentWorkflowDetailView detail={props.detail} selectedId={props.selectedId} />
+  }
+
   if (props.section === 'inspiration') {
     return <AdminInspirationDetailView detail={props.detail} selectedId={props.selectedId} />
   }
@@ -2622,6 +2842,14 @@ function getAdminQuickFilters(scope: string): AdminQuickFilter[] {
       { label: '仅扣点', values: { chargedOnly: 'true' } },
     ]
   }
+  if (scope === 'agentWorkflow') {
+    return [
+      { label: '全部 Run', values: {} },
+      { label: '失败 Run', values: { status: 'failed' } },
+      { label: '运行中', values: { status: 'running' } },
+      { label: '归档项目', values: { projectStatus: 'archived' } },
+    ]
+  }
   if (scope === 'inspiration') {
     return [
       { label: '全部帖子', values: {} },
@@ -2656,6 +2884,7 @@ function getSelectedLabel(section: Exclude<AdminSectionKey, 'dashboard'>, select
     if (section === 'gateway') return '新增可以直接做；更新线路、模型或绑定规则前，先在左侧选中对应记录。'
     if (section === 'content') return '先选中候选、模板或导入任务，再做通过、拒绝、更新或继续核对。'
     if (section === 'inspiration') return '先选中帖子，再做隐藏、恢复公开、分类修正或重跑 AI 初审。'
+    if (section === 'agentWorkflow') return '这里是只读观测视图；先选中 Run，再查看任务链路、步骤流和配方沉淀。'
     return '先在左侧选中一条记录，右侧才会显示对应操作。'
   }
   return `已选中：${selectedLabel || selectedId}`
@@ -2674,6 +2903,13 @@ function getModuleWorkflow(config: AdminModuleConfig, section: Exclude<AdminSect
       '先看分享状态和审核结果',
       '按用户、任务或时间筛选',
       '选中记录后再核对分享内容',
+    ]
+  }
+  if (config.listKey === 'agentRuns') {
+    return [
+      '先看 Run 状态和项目状态',
+      '按用户、失败类型或来源缩小范围',
+      '选中 Run 后核对任务链路与步骤流',
     ]
   }
   if (config.listKey === 'attempts') {
@@ -2721,6 +2957,7 @@ function getModuleWorkflow(config: AdminModuleConfig, section: Exclude<AdminSect
 function getFilterTitle(config: AdminModuleConfig, section: Exclude<AdminSectionKey, 'dashboard'>) {
   if (config.listKey === 'posts') return '筛选广场内容'
   if (config.listKey === 'shares') return '筛选分享记录'
+  if (config.listKey === 'agentRuns') return '筛选 Agent Run'
   if (config.listKey === 'attempts') return '筛选兑换记录'
   if (section === 'rechargeCodes') return '筛选充值码'
   return '筛选列表'
@@ -2729,6 +2966,7 @@ function getFilterTitle(config: AdminModuleConfig, section: Exclude<AdminSection
 function getFilterHint(config: AdminModuleConfig, section: Exclude<AdminSectionKey, 'dashboard'>, filterCount: number) {
   if (config.listKey === 'posts') return '按队列、状态、分类或发布账号快速缩小范围'
   if (config.listKey === 'shares') return '按分享状态、用户、任务或时间快速定位记录'
+  if (config.listKey === 'agentRuns') return '按用户、状态、来源、失败类型或项目关键词定位 Run'
   if (config.listKey === 'attempts') return '按充值码、用户、结果或时间快速定位兑换记录'
   if (section === 'rechargeCodes') return '按状态、批次或兑换用户快速定位兑换码'
   return filterCount ? `先缩小范围，再处理${config.title}记录` : '可以先按条件筛，再逐条查看'
@@ -2763,6 +3001,8 @@ function formatAdminFilterLabel(key: string, value: string) {
     category: '分类',
     title: '标题',
     sourceType: '来源类型',
+    projectStatus: '项目状态',
+    generationTaskId: '任务编号',
     sourceUrl: '来源',
     q: '关键词',
     search: '搜索',
@@ -2860,6 +3100,7 @@ function getAdminModuleStatus(params: {
 function getListTitle(config: AdminModuleConfig, section: Exclude<AdminSectionKey, 'dashboard'>) {
   if (config.listKey === 'posts') return '广场帖子'
   if (config.listKey === 'shares') return '分享记录'
+  if (config.listKey === 'agentRuns') return 'Agent Run'
   if (config.listKey === 'attempts') return '兑换记录'
   if (section === 'rechargeCodes') return '充值码库存'
   return `${config.title}列表`
@@ -2869,6 +3110,7 @@ function getActionPanelTitle(actionScope: string) {
   if (actionScope === 'codes') return '制码 / 导出 / 禁用'
   if (actionScope === 'redemptionAttempts') return '兑换记录'
   if (actionScope === 'tasks') return '任务记录'
+  if (actionScope === 'agentWorkflow') return '观测详情'
   if (actionScope === 'inspiration') return '精选 / 隐藏 / 恢复'
   if (actionScope === 'candidates') return '候选审核 / 发布'
   if (actionScope === 'importRuns') return '导入任务'
@@ -2889,6 +3131,7 @@ function getAdminDataLayoutClassName(params: {
   if (params.section === 'users' && params.actionScope === 'users') names.push('admin-user-workbench-layout')
   if (params.section === 'rechargeCodes') names.push('admin-recharge-workbench-layout')
   if (params.section === 'tasks') names.push('admin-task-workbench-layout')
+  if (params.section === 'agentWorkflow') names.push('admin-task-workbench-layout')
   if (params.section === 'gateway') names.push('admin-gateway-data-layout')
   if (params.section === 'content') names.push('admin-content-workbench-layout')
   if (params.section === 'inspiration') names.push('admin-audit-workbench-layout')
@@ -2900,7 +3143,7 @@ function shouldUseInlineWorkbench(params: {
   section: Exclude<AdminSectionKey, 'dashboard'>
   actionScope: string
 }) {
-  return (params.section === 'users' && params.actionScope === 'users') || params.section === 'tasks' || params.section === 'shares' || params.section === 'inspiration'
+  return (params.section === 'users' && params.actionScope === 'users') || params.section === 'tasks' || params.section === 'agentWorkflow' || params.section === 'shares' || params.section === 'inspiration'
 }
 
 function AdminDetailQuickActions(props: {
@@ -2926,7 +3169,7 @@ function AdminDetailQuickActions(props: {
 }
 
 function isReadOnlyActionScope(actionScope: string) {
-  return ['billingLedger', 'referrals', 'creditRecords', 'growth', 'shares', 'auditLogs', 'redemptionAttempts'].includes(actionScope)
+  return ['billingLedger', 'referrals', 'creditRecords', 'growth', 'shares', 'auditLogs', 'redemptionAttempts', 'agentWorkflow'].includes(actionScope)
 }
 
 function getBulkDeleteConfig(params: {

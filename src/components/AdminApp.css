@@ -1557,6 +1557,10 @@
   min-width: 980px;
 }
 
+.admin-table-shell.is-agent-run-list .admin-table {
+  min-width: 1040px;
+}
+
 .admin-table-shell.is-user-list .admin-table {
   min-width: 860px;
 }

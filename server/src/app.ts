@@ -9,6 +9,7 @@ import { registerAdminImageShareRoutes } from './adminImageShares.js'
 import { registerAdminInspirationPostRoutes } from './adminInspirationPosts.js'
 import { registerAdminTaskRoutes } from './adminTasks.js'
 import { registerAdminUserRoutes } from './adminUsers.js'
+import { registerAdminAgentWorkflowRoutes } from './adminAgentWorkflow.js'
 import { registerAgentWorkflowRoutes } from './agentWorkflow.js'
 import type { ServerEnv } from './env.js'
 import { registerGatewayModelRoutes } from './gatewayModels.js'
@@ -149,6 +150,7 @@ export function buildApp(db: Pool, env: ServerEnv) {
   registerAdminImageShareRoutes(app, db)
   registerAdminInspirationPostRoutes(app, db)
   registerAdminTaskRoutes(app, db)
+  registerAdminAgentWorkflowRoutes(app, db)
   registerAdminUserRoutes(app, db)
   registerRechargeCodeRoutes(app, db)
   registerGatewayModelRoutes(app, db)
