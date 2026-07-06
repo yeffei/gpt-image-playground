@@ -1234,6 +1234,59 @@
   opacity: 0.52;
 }
 
+.agent-production-nudge {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  max-width: 620px;
+  border: 1px solid rgba(15, 118, 110, 0.16);
+  border-radius: 10px;
+  background: rgba(240, 253, 250, 0.48);
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.agent-production-nudge.is-attention {
+  border-color: rgba(183, 121, 31, 0.22);
+  background: rgba(255, 247, 237, 0.72);
+}
+
+.agent-production-nudge.is-pending {
+  border-color: rgba(22, 32, 31, 0.1);
+  background: rgba(255, 255, 255, 0.64);
+}
+
+.agent-production-nudge span {
+  color: var(--agent-ink);
+  font-size: 12px;
+  font-weight: 840;
+  line-height: 1.2;
+}
+
+.agent-production-nudge small {
+  color: var(--agent-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.agent-production-nudge div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.agent-production-nudge em {
+  border: 1px solid rgba(22, 32, 31, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.68);
+  color: var(--agent-soft);
+  padding: 3px 7px;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 820;
+  line-height: 1;
+}
+
 .agent-stage-large-icon {
   width: 46px;
   height: 46px;

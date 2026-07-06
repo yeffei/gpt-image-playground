@@ -2396,6 +2396,30 @@ export default function AgentWorkflowView() {
   const review = useMemo(() => getRunReview(run), [run])
   const primaryOutput = useMemo(() => getRunPrimaryOutput(run), [run])
   const reviewStatusLabel = getReviewDecisionLabel(review)
+  const productionNudge = useMemo(() => {
+    if (!run) return null
+    if (run.status === 'failed' || run.status === 'canceled') {
+      const recovery = buildRecoveryActionSummary(run)
+      return {
+        tone: 'attention',
+        title: recovery.title,
+        detail: recovery.nextStep,
+        chips: recovery.chips.slice(0, 3),
+      }
+    }
+    if (run.status === 'succeeded' && !review.recipeSaved) {
+      const hasPrimary = Boolean(primaryOutput.selectedOutputId)
+      return {
+        tone: hasPrimary ? 'ready' : 'pending',
+        title: hasPrimary ? '主图已确定，建议沉淀配方' : '结果已完成，先选择主图',
+        detail: hasPrimary
+          ? '保存配方后，这条路线可以进入复用资产，后续可直接生成变体、版式适配或社媒版本。'
+          : '先把最稳定的一张设为主图，再验收结果或保存为可复用配方。',
+        chips: [hasPrimary ? '可保存配方' : '待选主图', `${serverTaskProgressText} 张`, reviewStatusLabel],
+      }
+    }
+    return null
+  }, [primaryOutput.selectedOutputId, review.recipeSaved, reviewStatusLabel, run, serverTaskProgressText])
   const reviewIterationOutputReference = useMemo(() => getReviewIterationOutputReference({
     run,
     review,
@@ -4278,6 +4302,17 @@ export default function AgentWorkflowView() {
                       <HistoryIcon className="agent-stage-large-icon" aria-hidden="true" />
                       <strong>{run.status === 'failed' ? '流程失败' : '流程已取消'}</strong>
                       <p>{run.errorSummary || run.failureKind || '可以载入本次配置后重新规划。'}</p>
+                      {productionNudge ? (
+                        <div className={`agent-production-nudge is-${productionNudge.tone}`}>
+                          <span>{productionNudge.title}</span>
+                          <small>{productionNudge.detail}</small>
+                          <div>
+                            {productionNudge.chips.map((chip) => (
+                              <em key={chip}>{chip}</em>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
                       <div className="agent-stage-inline-actions">
                         <StageInlineAction onClick={() => void handleRetryCurrentRun()} disabled={isBusy}>
                           {busyAction === 'plan' ? '重新规划中' : '重新规划路线'}
@@ -4465,6 +4500,17 @@ export default function AgentWorkflowView() {
                     >
                       {busyAction === 'reviewIteration' ? '规划中' : '改进路线'}
                     </button>
+                  </div>
+                </div>
+              ) : null}
+              {productionNudge && run?.status === 'succeeded' ? (
+                <div className={`agent-production-nudge is-${productionNudge.tone}`}>
+                  <span>{productionNudge.title}</span>
+                  <small>{productionNudge.detail}</small>
+                  <div>
+                    {productionNudge.chips.map((chip) => (
+                      <em key={chip}>{chip}</em>
+                    ))}
                   </div>
                 </div>
               ) : null}

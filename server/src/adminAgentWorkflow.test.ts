@@ -28,6 +28,7 @@ type RunRecord = {
   failed_step_count: string
   failure_kind: string | null
   error_summary: string | null
+  metadata_json?: unknown
   confirmed_at: string | null
   started_at: string | null
   finished_at: string | null
@@ -63,6 +64,7 @@ function createTestDb() {
       failed_step_count: '0',
       failure_kind: null,
       error_summary: null,
+      metadata_json: { reviewStatus: 'recipe_saved' },
       confirmed_at: '2026-07-05T02:05:00.000Z',
       started_at: '2026-07-05T02:06:00.000Z',
       finished_at: '2026-07-05T02:10:00.000Z',
@@ -95,6 +97,7 @@ function createTestDb() {
       failed_step_count: '1',
       failure_kind: 'upstream_timeout',
       error_summary: '上游超时',
+      metadata_json: {},
       confirmed_at: '2026-07-05T03:05:00.000Z',
       started_at: '2026-07-05T03:06:00.000Z',
       finished_at: '2026-07-05T03:10:00.000Z',
@@ -127,6 +130,7 @@ function createTestDb() {
       failed_step_count: '0',
       failure_kind: null,
       error_summary: null,
+      metadata_json: {},
       confirmed_at: '2026-07-05T04:05:00.000Z',
       started_at: null,
       finished_at: null,
@@ -159,6 +163,7 @@ function createTestDb() {
       failed_step_count: '0',
       failure_kind: null,
       error_summary: null,
+      metadata_json: {},
       confirmed_at: '2026-07-05T05:00:00.000Z',
       started_at: '2026-07-05T05:01:00.000Z',
       finished_at: null,
@@ -191,6 +196,7 @@ function createTestDb() {
       failed_step_count: '0',
       failure_kind: null,
       error_summary: null,
+      metadata_json: {},
       confirmed_at: '2026-07-05T06:01:00.000Z',
       started_at: '2026-07-05T06:02:00.000Z',
       finished_at: '2026-07-05T06:06:00.000Z',
@@ -267,6 +273,7 @@ function createTestDb() {
       updated_at: '2026-07-05T02:11:00.000Z',
     },
   ]
+  const auditLogs: unknown[] = []
 
   const db = {
     async query(text: string, values?: unknown[]) {
@@ -284,6 +291,27 @@ function createTestDb() {
               }]
             : [],
         }
+      }
+      if (text.includes('UPDATE agent_runs') && text.includes('SET metadata_json = $1')) {
+        const run = runs.find((item) => item.id === values?.[2])
+        if (!run) return { rows: [] }
+        run.metadata_json = typeof values?.[0] === 'string' ? JSON.parse(values[0] as string) : values?.[0]
+        run.updated_at = String(values?.[1] ?? run.updated_at)
+        return { rows: [{ id: run.id }] }
+      }
+      if (text.includes('INSERT INTO admin_audit_logs')) {
+        auditLogs.push({
+          id: values?.[0],
+          admin_user_id: values?.[1],
+          action: values?.[2],
+          target_type: values?.[3],
+          target_id: values?.[4],
+          before_snapshot: values?.[5],
+          after_snapshot: values?.[6],
+          reason: values?.[7],
+          created_at: values?.[8],
+        })
+        return { rows: [] }
       }
       if (text.includes('COUNT(*)::text AS total_run_count')) {
         const filtered = values?.length ? applyRunFilters(text, values, runs) : runs
@@ -343,7 +371,7 @@ function createTestDb() {
       throw new Error(`Unhandled query: ${text}`)
     },
   } as unknown as Pool
-  return { db }
+  return { db, runs, auditLogs }
 }
 
 function applyRunFilters(text: string, values: unknown[] | undefined, rows: RunRecord[]) {
@@ -515,6 +543,46 @@ describe('admin agent workflow observation', () => {
       expect(payload.steps).toHaveLength(2)
       expect(payload.recipes).toHaveLength(1)
       expect(payload.recipes[0]).toMatchObject({ id: 'recipe_1', sourceOutputId: 'output_1' })
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('records an admin intervention on an agent run', async () => {
+    const { db, runs, auditLogs } = createTestDb()
+    const app = buildTestApp(db)
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/admin/agent-runs/run_failed/interventions',
+        headers: { Authorization: 'Bearer admin_sess' },
+        payload: {
+          type: 'needs_operator',
+          note: '已确认是上游超时，转人工复核线路。',
+        },
+      })
+      expect(response.statusCode).toBe(200)
+      const payload = response.json()
+      expect(payload.agentRun.metadata).toMatchObject({
+        adminAttention: 'needs_operator',
+        adminIntervention: {
+          type: 'needs_operator',
+          note: '已确认是上游超时，转人工复核线路。',
+          adminUserId: 'admin_1',
+          adminEmail: 'admin@example.com',
+        },
+      })
+      expect(payload.agentRun.metadata.adminInterventionHistory).toHaveLength(1)
+      expect(runs.find((run) => run.id === 'run_failed')?.metadata_json).toMatchObject({
+        adminAttention: 'needs_operator',
+      })
+      expect(auditLogs).toHaveLength(1)
+      expect(auditLogs[0]).toMatchObject({
+        action: 'agent_run_intervention',
+        target_type: 'agent_run',
+        target_id: 'run_failed',
+        reason: '已确认是上游超时，转人工复核线路。',
+      })
     } finally {
       await app.close()
     }

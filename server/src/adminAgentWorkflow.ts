@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import type { Pool } from 'pg'
 import { ApiError, requireAdminSession, sendError } from './adminAuth.js'
@@ -29,11 +30,19 @@ type AgentRunRow = {
   failed_step_count?: string | null
   failure_kind?: string | null
   error_summary?: string | null
+  metadata_json?: unknown
   confirmed_at?: string | null
   started_at?: string | null
   finished_at?: string | null
   created_at: string
   updated_at: string
+}
+
+type AdminInterventionType = 'needs_operator' | 'mark_reviewed' | 'request_recipe' | 'ignore'
+
+type AdminInterventionInput = {
+  type: AdminInterventionType
+  note: string
 }
 
 type AgentStepRow = {
@@ -91,6 +100,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
+function nowIso() {
+  return new Date().toISOString()
+}
+
+function createId(prefix: string) {
+  return `${prefix}_${Date.now().toString(36)}_${randomBytes(6).toString('hex')}`
+}
+
+function normalizeJsonObject(value: unknown) {
+  return isRecord(value) ? value : {}
+}
+
 function normalizePagination(query: Record<string, unknown>) {
   const rawLimit = typeof query.limit === 'string' ? Number.parseInt(query.limit, 10) : 25
   const rawOffset = typeof query.offset === 'string' ? Number.parseInt(query.offset, 10) : 0
@@ -133,12 +154,52 @@ function serializeAgentRun(row: AgentRunRow) {
     failedStepCount: Number(row.failed_step_count ?? 0),
     failureKind: row.failure_kind ?? null,
     errorSummary: row.error_summary ?? null,
+    metadata: row.metadata_json ?? {},
     confirmedAt: row.confirmed_at ?? null,
     startedAt: row.started_at ?? null,
     finishedAt: row.finished_at ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
+}
+
+function parseAdminInterventionInput(payload: Record<string, unknown>): AdminInterventionInput {
+  const rawType = typeof payload.type === 'string' ? payload.type.trim() : ''
+  if (!['needs_operator', 'mark_reviewed', 'request_recipe', 'ignore'].includes(rawType)) {
+    throw new ApiError(400, 'invalid_intervention_type', '请选择有效的处理类型')
+  }
+  const note = typeof payload.note === 'string' ? payload.note.trim().slice(0, 800) : ''
+  if (!note) throw new ApiError(400, 'missing_intervention_note', '请填写处理备注')
+  return { type: rawType as AdminInterventionType, note }
+}
+
+async function writeAuditLog(
+  db: Db,
+  input: {
+    adminUserId: string
+    action: string
+    targetType: string
+    targetId?: string | null
+    beforeSnapshot?: unknown
+    afterSnapshot?: unknown
+    reason?: string | null
+  },
+) {
+  await db.query(`
+    INSERT INTO admin_audit_logs (
+      id, admin_user_id, action, target_type, target_id, before_snapshot, after_snapshot, reason, created_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+  `, [
+    createId('audit'),
+    input.adminUserId,
+    input.action,
+    input.targetType,
+    input.targetId ?? null,
+    input.beforeSnapshot == null ? null : JSON.stringify(input.beforeSnapshot),
+    input.afterSnapshot == null ? null : JSON.stringify(input.afterSnapshot),
+    input.reason ?? null,
+    nowIso(),
+  ])
 }
 
 function serializeAgentStep(row: AgentStepRow) {
@@ -292,6 +353,7 @@ async function listAgentRuns(db: Db, query: Record<string, unknown>) {
       COALESCE(step_counts.failed_step_count, 0)::text AS failed_step_count,
       COALESCE(r.failure_kind, t.failure_kind) AS failure_kind,
       COALESCE(r.error_summary, t.error_summary) AS error_summary,
+      r.metadata_json,
       r.confirmed_at::text, r.started_at::text, r.finished_at::text,
       r.created_at::text, r.updated_at::text
     FROM agent_runs r
@@ -468,6 +530,7 @@ async function getAgentRunById(db: Db, runId: string) {
       COALESCE(step_counts.failed_step_count, 0)::text AS failed_step_count,
       COALESCE(r.failure_kind, t.failure_kind) AS failure_kind,
       COALESCE(r.error_summary, t.error_summary) AS error_summary,
+      r.metadata_json,
       r.confirmed_at::text, r.started_at::text, r.finished_at::text,
       r.created_at::text, r.updated_at::text
     FROM agent_runs r
@@ -490,6 +553,55 @@ async function getAgentRunById(db: Db, runId: string) {
     WHERE r.id = $1
     LIMIT 1
   `, [runId])).rows[0] ?? null
+}
+
+async function recordAdminIntervention(db: Db, input: {
+  run: AgentRunRow
+  adminUserId: string
+  adminEmail?: string | null
+  intervention: AdminInterventionInput
+}) {
+  const createdAt = nowIso()
+  const previousMetadata = normalizeJsonObject(input.run.metadata_json)
+  const previousHistory = Array.isArray(previousMetadata.adminInterventionHistory)
+    ? previousMetadata.adminInterventionHistory.filter(isRecord)
+    : []
+  const intervention = {
+    id: createId('agent_intervention'),
+    type: input.intervention.type,
+    note: input.intervention.note,
+    adminUserId: input.adminUserId,
+    adminEmail: input.adminEmail ?? null,
+    createdAt,
+  }
+  const nextMetadata = {
+    ...previousMetadata,
+    adminAttention: input.intervention.type,
+    adminIntervention: intervention,
+    adminInterventionHistory: [intervention, ...previousHistory].slice(0, 20),
+  }
+  const updated = (await db.query<{ id: string }>(`
+    UPDATE agent_runs
+    SET metadata_json = $1,
+      updated_at = $2
+    WHERE id = $3
+    RETURNING id
+  `, [
+    JSON.stringify(nextMetadata),
+    createdAt,
+    input.run.id,
+  ])).rows[0]
+  if (!updated) throw new ApiError(404, 'agent_run_not_found', '创作流不存在')
+
+  await writeAuditLog(db, {
+    adminUserId: input.adminUserId,
+    action: 'agent_run_intervention',
+    targetType: 'agent_run',
+    targetId: input.run.id,
+    beforeSnapshot: { metadata: previousMetadata },
+    afterSnapshot: { metadata: nextMetadata },
+    reason: input.intervention.note,
+  })
 }
 
 async function getAgentRunDetail(db: Db, runId: string) {
@@ -558,6 +670,28 @@ export function registerAdminAgentWorkflowRoutes(app: FastifyInstance, db: Pool)
       const params = isRecord(request.params) ? request.params : {}
       const runId = typeof params.id === 'string' ? params.id.trim() : ''
       if (!runId) throw new ApiError(400, 'missing_agent_run_id', '缺少创作流编号')
+      return reply.send({ ok: true, ...(await getAgentRunDetail(db, runId)) })
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
+  app.post('/api/admin/agent-runs/:id/interventions', async (request, reply) => {
+    try {
+      const session = await requireAdminSession(db, request.headers.authorization)
+      const params = isRecord(request.params) ? request.params : {}
+      const runId = typeof params.id === 'string' ? params.id.trim() : ''
+      if (!runId) throw new ApiError(400, 'missing_agent_run_id', '缺少创作流编号')
+      const payload = isRecord(request.body) ? request.body : {}
+      const intervention = parseAdminInterventionInput(payload)
+      const run = await getAgentRunById(db, runId)
+      if (!run) throw new ApiError(404, 'agent_run_not_found', '创作流不存在')
+      await recordAdminIntervention(db, {
+        run,
+        adminUserId: session.admin_user_id,
+        adminEmail: session.email,
+        intervention,
+      })
       return reply.send({ ok: true, ...(await getAgentRunDetail(db, runId)) })
     } catch (error) {
       return sendError(reply, error)

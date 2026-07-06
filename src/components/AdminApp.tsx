@@ -291,6 +291,13 @@ const MODEL_QUALITY_OPTIONS = [
   { value: 'high', label: '高' },
 ]
 
+const AGENT_INTERVENTION_OPTIONS = [
+  { value: 'needs_operator', label: '转人工复核' },
+  { value: 'mark_reviewed', label: '标记已处理' },
+  { value: 'request_recipe', label: '建议沉淀配方' },
+  { value: 'ignore', label: '暂不处理' },
+]
+
 class AdminActionNotice extends Error {
   constructor(message: string) {
     super(message)
@@ -1566,6 +1573,20 @@ function getAgentRunOperationalReview(detail: Record<string, unknown>) {
   }
 }
 
+function getAgentInterventionTypeLabel(value: unknown) {
+  const type = typeof value === 'string' ? value : ''
+  return AGENT_INTERVENTION_OPTIONS.find((option) => option.value === type)?.label ?? formatAdminValue(value)
+}
+
+function getAgentRunAdminInterventions(run: Record<string, unknown>) {
+  const metadata = getValueByPath(run, 'metadata')
+  const history = getValueByPath(metadata, 'adminInterventionHistory')
+  const rows = Array.isArray(history) ? history.filter(isRecord) : []
+  const latest = getValueByPath(metadata, 'adminIntervention')
+  if (rows.length) return rows
+  return isRecord(latest) ? [latest] : []
+}
+
 function AdminValue(props: { fieldKey: string; value: unknown }) {
   if (props.fieldKey === 'isOfficial') {
     const isOfficial = props.value === true
@@ -2076,6 +2097,7 @@ function AdminAgentWorkflowDetailView(props: { detail: Record<string, unknown>; 
   const recipeRows = Array.isArray(recipes) ? recipes.filter(isRecord) : []
   const runLabel = props.selectedId || String(getValueByPath(run, 'title') || getValueByPath(run, 'id') || '未命名 Run')
   const operationalReview = getAgentRunOperationalReview(props.detail)
+  const adminInterventions = getAgentRunAdminInterventions(run)
 
   return (
     <div className="admin-detail-stack">
@@ -2093,6 +2115,36 @@ function AdminAgentWorkflowDetailView(props: { detail: Record<string, unknown>; 
             </div>
           ))}
         </div>
+      </section>
+
+      <section className="admin-detail-block admin-agent-intervention-block">
+        <div className="admin-detail-title">
+          <span>运营处理</span>
+          <strong>{adminInterventions.length ? `${adminInterventions.length} 条记录` : '暂无处理记录'}</strong>
+        </div>
+        {adminInterventions.length ? (
+          <div className="admin-activity-list">
+            {adminInterventions.slice(0, 5).map((item, index) => (
+              <article key={String(getValueByPath(item, 'id') ?? index)} className="admin-activity-item">
+                <AdminBusinessFieldList
+                  record={{
+                    ...item,
+                    typeLabel: getAgentInterventionTypeLabel(getValueByPath(item, 'type')),
+                  }}
+                  fields={[
+                    { key: 'typeLabel', label: '处理类型' },
+                    { key: 'note', label: '备注' },
+                    { key: 'adminEmail', label: '管理员' },
+                    { key: 'createdAt', label: '处理时间' },
+                  ]}
+                  hideEmpty
+                />
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="admin-empty">选中 Run 后，可在操作面板记录人工复核、已处理或配方沉淀建议。</p>
+        )}
       </section>
 
       <section className="admin-detail-block">
@@ -3061,7 +3113,7 @@ function getSelectedLabel(section: Exclude<AdminSectionKey, 'dashboard'>, select
     if (section === 'gateway') return '新增可以直接做；更新线路、模型或绑定规则前，先在左侧选中对应记录。'
     if (section === 'content') return '先选中候选、模板或导入任务，再做通过、拒绝、更新或继续核对。'
     if (section === 'inspiration') return '先选中帖子，再做隐藏、恢复公开、分类修正或重跑 AI 初审。'
-    if (section === 'agentWorkflow') return '这里是只读观测视图；先选中 Run，再查看任务链路、步骤流和配方沉淀。'
+    if (section === 'agentWorkflow') return '先选中 Run，再查看任务链路、步骤流、配方沉淀和运营处理记录。'
     return '先在左侧选中一条记录，右侧才会显示对应操作。'
   }
   return `已选中：${selectedLabel || selectedId}`
@@ -3347,7 +3399,7 @@ function AdminDetailQuickActions(props: {
 }
 
 function isReadOnlyActionScope(actionScope: string) {
-  return ['billingLedger', 'referrals', 'creditRecords', 'growth', 'shares', 'auditLogs', 'redemptionAttempts', 'agentWorkflow'].includes(actionScope)
+  return ['billingLedger', 'referrals', 'creditRecords', 'growth', 'shares', 'auditLogs', 'redemptionAttempts'].includes(actionScope)
 }
 
 function getBulkDeleteConfig(params: {
@@ -3883,6 +3935,16 @@ function AdminActionPanel(props: {
           selectedRecord={props.selectedRecord}
         />
       ) : null}
+      {actionScope === 'agentWorkflow' ? (
+        <AgentWorkflowActions
+          disabled={disabledBySubmit}
+          selectedId={props.selectedId}
+          selectedLabel={props.selectedLabel}
+          selectedRecord={props.selectedRecord}
+          onRun={runAction}
+          token={props.token}
+        />
+      ) : null}
       {actionScope === 'inspiration' ? (
         <InspirationPostActions
           disabled={disabledBySubmit}
@@ -4410,6 +4472,88 @@ function TaskActions(props: {
         </div>
         <p className="admin-form-hint">如需继续定位线路、请求或上游报错，请在详情区查看“失败排查”和原始数据。</p>
       </section>
+    </div>
+  )
+}
+
+function AgentWorkflowActions(props: {
+  disabled: boolean
+  selectedId: string
+  selectedLabel: string
+  selectedRecord: Record<string, unknown> | null
+  token: string
+  onRun: (actionName: string, action: () => Promise<void>) => Promise<void>
+}) {
+  const [type, setType] = useState('needs_operator')
+  const [note, setNote] = useState('')
+  const selectedDisabled = props.disabled || !props.selectedId
+  const latestIntervention = props.selectedRecord ? getAgentRunAdminInterventions(props.selectedRecord)[0] : null
+
+  useEffect(() => {
+    setType('needs_operator')
+    setNote('')
+  }, [props.selectedId])
+
+  if (!props.selectedId || !props.selectedRecord) {
+    return (
+      <section className="admin-action-form admin-action-form-wide">
+        <h3>运营处理</h3>
+        <p className="admin-empty">先从左侧选中一条 Agent Run，再记录人工复核、已处理或配方沉淀建议。</p>
+      </section>
+    )
+  }
+
+  return (
+    <div className="admin-action-grid admin-agent-action-grid">
+      <section className="admin-action-form admin-action-form-wide">
+        <h3>Run 摘要</h3>
+        <div className="admin-strategy-list admin-record-list">
+          <div><span>Run</span><strong><AdminValue fieldKey="id" value={getValueByPath(props.selectedRecord, 'id')} /></strong></div>
+          <div><span>用户</span><strong>{formatAdminValue(getValueByPath(props.selectedRecord, 'userLabel'))}</strong></div>
+          <div><span>状态</span><strong><AdminValue fieldKey="status" value={getValueByPath(props.selectedRecord, 'status')} /></strong></div>
+          <div><span>配方</span><strong>{formatAdminValue(getValueByPath(props.selectedRecord, 'recipeCount'))}</strong></div>
+        </div>
+        <p className="admin-form-hint">
+          {latestIntervention
+            ? `最近处理：${getAgentInterventionTypeLabel(getValueByPath(latestIntervention, 'type'))} / ${formatAdminValue(getValueByPath(latestIntervention, 'createdAt'))}`
+            : '当前 Run 还没有人工处理记录。'}
+        </p>
+      </section>
+
+      <form
+        className="admin-action-form admin-action-form-wide"
+        onSubmit={(event) => {
+          event.preventDefault()
+          void props.onRun('记录 Agent 处理', async () => {
+            await adminPost(`/api/admin/agent-runs/${encodeURIComponent(props.selectedId)}/interventions`, props.token, {
+              type,
+              note: note.trim(),
+            })
+          })
+        }}
+      >
+        <h3>记录处理</h3>
+        <p className="admin-empty">{`将处理：${props.selectedLabel || props.selectedId}`}</p>
+        <label>
+          <span>处理类型</span>
+          <select value={type} onChange={(event) => setType(event.target.value)} disabled={selectedDisabled}>
+            {AGENT_INTERVENTION_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>处理备注</span>
+          <textarea
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            required
+            disabled={selectedDisabled}
+            placeholder="记录失败原因、人工复核结论或配方沉淀建议"
+          />
+        </label>
+        <button type="submit" disabled={selectedDisabled || !note.trim()}>保存处理记录</button>
+      </form>
     </div>
   )
 }
