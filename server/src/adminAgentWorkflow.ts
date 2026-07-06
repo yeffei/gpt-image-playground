@@ -236,6 +236,22 @@ function buildAgentRunFilters(query: Record<string, unknown>) {
     where.push(`COALESCE(r.failure_kind, t.failure_kind) = $${values.length}`)
   }
 
+  const attention = typeof query.attention === 'string' ? query.attention.trim() : ''
+  if (attention === 'confirmed_not_started') {
+    where.push(`r.status = 'confirmed' AND r.generation_task_id IS NULL`)
+  } else if (attention === 'running_stale') {
+    where.push(`r.status = 'running' AND r.started_at IS NOT NULL AND r.started_at < NOW() - INTERVAL '30 minutes'`)
+  } else if (attention === 'failed') {
+    where.push(`(r.status = 'failed' OR t.status IN ('failed', 'timeout'))`)
+  } else if (attention === 'succeeded_without_recipe') {
+    where.push(`r.status = 'succeeded' AND NOT EXISTS (
+      SELECT 1
+      FROM image_recipes attention_recipes
+      WHERE attention_recipes.source_run_id = r.id
+        AND attention_recipes.status <> 'deleted'
+    )`)
+  }
+
   const dateFrom = typeof query.dateFrom === 'string' ? query.dateFrom.trim() : ''
   if (dateFrom) {
     values.push(dateFrom)
@@ -322,6 +338,10 @@ async function summarizeAgentRuns(db: Db, query: Record<string, unknown>) {
     unique_users: string
     linked_task_count: string
     recipe_count: string
+    confirmed_not_started_count: string
+    running_stale_count: string
+    failed_attention_count: string
+    succeeded_without_recipe_count: string
     first_created_at?: string | null
     last_created_at?: string | null
   }>(`
@@ -340,6 +360,10 @@ async function summarizeAgentRuns(db: Db, query: Record<string, unknown>) {
       COUNT(DISTINCT r.user_id)::text AS unique_users,
       COUNT(DISTINCT r.generation_task_id)::text AS linked_task_count,
       COALESCE(SUM(recipe_counts.recipe_count), 0)::text AS recipe_count,
+      SUM(CASE WHEN r.status = 'confirmed' AND r.generation_task_id IS NULL THEN 1 ELSE 0 END)::text AS confirmed_not_started_count,
+      SUM(CASE WHEN r.status = 'running' AND r.started_at IS NOT NULL AND r.started_at < NOW() - INTERVAL '30 minutes' THEN 1 ELSE 0 END)::text AS running_stale_count,
+      SUM(CASE WHEN r.status = 'failed' OR t.status IN ('failed', 'timeout') THEN 1 ELSE 0 END)::text AS failed_attention_count,
+      SUM(CASE WHEN r.status = 'succeeded' AND COALESCE(recipe_counts.recipe_count, 0) = 0 THEN 1 ELSE 0 END)::text AS succeeded_without_recipe_count,
       MIN(r.created_at)::text AS first_created_at,
       MAX(r.created_at)::text AS last_created_at
     FROM agent_runs r
@@ -389,6 +413,40 @@ async function summarizeAgentRuns(db: Db, query: Record<string, unknown>) {
     recipeCount: Number(row?.recipe_count ?? 0),
     successRate: totalRunCount > 0 ? Number((succeededCount / totalRunCount).toFixed(4)) : 0,
     failureRate: totalRunCount > 0 ? Number((failedCount / totalRunCount).toFixed(4)) : 0,
+    attentionQueues: [
+      {
+        key: 'confirmed_not_started',
+        label: '已确认未启动',
+        count: Number(row?.confirmed_not_started_count ?? 0),
+        severity: 'warn',
+        filter: { attention: 'confirmed_not_started' },
+        description: '用户已确认路线，但还没有创建出图任务。',
+      },
+      {
+        key: 'running_stale',
+        label: '运行超时',
+        count: Number(row?.running_stale_count ?? 0),
+        severity: 'danger',
+        filter: { attention: 'running_stale' },
+        description: 'Run 已运行超过 30 分钟，需要核对任务队列或上游线路。',
+      },
+      {
+        key: 'failed',
+        label: '失败待查',
+        count: Number(row?.failed_attention_count ?? 0),
+        severity: 'danger',
+        filter: { attention: 'failed' },
+        description: 'Run 或关联出图任务失败，需要查看失败步骤和任务错误。',
+      },
+      {
+        key: 'succeeded_without_recipe',
+        label: '成功未沉淀',
+        count: Number(row?.succeeded_without_recipe_count ?? 0),
+        severity: 'neutral',
+        filter: { attention: 'succeeded_without_recipe' },
+        description: 'Run 已成功但未保存配方，可评估是否需要引导复用。',
+      },
+    ],
     failureKinds: failureRows.rows.map((item) => ({
       failureKind: item.failure_kind ?? 'unknown',
       count: Number(item.count),

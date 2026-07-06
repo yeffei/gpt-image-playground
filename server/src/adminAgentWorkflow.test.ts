@@ -101,6 +101,102 @@ function createTestDb() {
       created_at: '2026-07-05T03:00:00.000Z',
       updated_at: '2026-07-05T03:20:00.000Z',
     },
+    {
+      id: 'run_confirmed_idle',
+      user_id: 'user_1',
+      user_email: 'owner@example.com',
+      user_display_name: 'Owner',
+      status: 'confirmed',
+      source_type: 'text',
+      entrypoint: 'agent_workflow',
+      title: '已确认未启动',
+      project_status: 'active',
+      archived_at: null,
+      user_prompt: '确认路线但还没启动',
+      category: '品牌广告',
+      recommended_model_sku: 'model_default',
+      recommended_model_display_name: 'Default Model',
+      recommended_output_count: 1,
+      estimated_points: '1.00',
+      confirmed_points: '1.00',
+      generation_task_id: null,
+      generation_task_status: null,
+      generation_task_charged_points: null,
+      recipe_count: '0',
+      step_count: '5',
+      failed_step_count: '0',
+      failure_kind: null,
+      error_summary: null,
+      confirmed_at: '2026-07-05T04:05:00.000Z',
+      started_at: null,
+      finished_at: null,
+      created_at: '2026-07-05T04:00:00.000Z',
+      updated_at: '2026-07-05T04:05:00.000Z',
+    },
+    {
+      id: 'run_running_stale',
+      user_id: 'user_1',
+      user_email: 'owner@example.com',
+      user_display_name: 'Owner',
+      status: 'running',
+      source_type: 'text',
+      entrypoint: 'agent_workflow',
+      title: '运行超时',
+      project_status: 'active',
+      archived_at: null,
+      user_prompt: '运行很久的任务',
+      category: '品牌广告',
+      recommended_model_sku: 'model_default',
+      recommended_model_display_name: 'Default Model',
+      recommended_output_count: 1,
+      estimated_points: '1.00',
+      confirmed_points: '1.00',
+      generation_task_id: 'task_running',
+      generation_task_status: 'running',
+      generation_task_charged_points: '0.00',
+      recipe_count: '0',
+      step_count: '6',
+      failed_step_count: '0',
+      failure_kind: null,
+      error_summary: null,
+      confirmed_at: '2026-07-05T05:00:00.000Z',
+      started_at: '2026-07-05T05:01:00.000Z',
+      finished_at: null,
+      created_at: '2026-07-05T05:00:00.000Z',
+      updated_at: '2026-07-05T05:45:00.000Z',
+    },
+    {
+      id: 'run_success_without_recipe',
+      user_id: 'user_1',
+      user_email: 'owner@example.com',
+      user_display_name: 'Owner',
+      status: 'succeeded',
+      source_type: 'text',
+      entrypoint: 'agent_workflow',
+      title: '成功未沉淀',
+      project_status: 'active',
+      archived_at: null,
+      user_prompt: '成功但没有配方',
+      category: '产品静物',
+      recommended_model_sku: 'model_default',
+      recommended_model_display_name: 'Default Model',
+      recommended_output_count: 1,
+      estimated_points: '3.00',
+      confirmed_points: '3.00',
+      generation_task_id: 'task_success_without_recipe',
+      generation_task_status: 'succeeded',
+      generation_task_charged_points: '3.00',
+      recipe_count: '0',
+      step_count: '7',
+      failed_step_count: '0',
+      failure_kind: null,
+      error_summary: null,
+      confirmed_at: '2026-07-05T06:01:00.000Z',
+      started_at: '2026-07-05T06:02:00.000Z',
+      finished_at: '2026-07-05T06:06:00.000Z',
+      created_at: '2026-07-05T06:00:00.000Z',
+      updated_at: '2026-07-05T06:06:00.000Z',
+    },
   ]
   const steps = [
     {
@@ -207,6 +303,10 @@ function createTestDb() {
             unique_users: String(new Set(filtered.map((run) => run.user_id)).size),
             linked_task_count: String(new Set(filtered.map((run) => run.generation_task_id).filter(Boolean)).size),
             recipe_count: sumField(filtered, 'recipe_count'),
+            confirmed_not_started_count: String(filtered.filter((run) => run.status === 'confirmed' && !run.generation_task_id).length),
+            running_stale_count: String(filtered.filter((run) => run.id === 'run_running_stale').length),
+            failed_attention_count: String(filtered.filter((run) => run.status === 'failed' || ['failed', 'timeout'].includes(String(run.generation_task_status))).length),
+            succeeded_without_recipe_count: String(filtered.filter((run) => run.status === 'succeeded' && Number(run.recipe_count) === 0).length),
             first_created_at: filtered[0]?.created_at ?? null,
             last_created_at: filtered.at(-1)?.created_at ?? null,
           }],
@@ -264,6 +364,15 @@ function applyRunFilters(text: string, values: unknown[] | undefined, rows: RunR
   if (text.includes('r.failure_kind = $')) {
     const failureKind = valueList.find((value) => value === 'upstream_timeout')
     if (failureKind) filtered = filtered.filter((run) => run.failure_kind === failureKind)
+  }
+  if (text.includes("r.status = 'confirmed' AND r.generation_task_id IS NULL")) {
+    filtered = filtered.filter((run) => run.status === 'confirmed' && !run.generation_task_id)
+  } else if (text.includes("r.status = 'running' AND r.started_at IS NOT NULL")) {
+    filtered = filtered.filter((run) => run.id === 'run_running_stale')
+  } else if (text.includes("r.status = 'failed' OR t.status IN ('failed', 'timeout')")) {
+    filtered = filtered.filter((run) => run.status === 'failed' || ['failed', 'timeout'].includes(String(run.generation_task_status)))
+  } else if (text.includes("r.status = 'succeeded' AND NOT EXISTS")) {
+    filtered = filtered.filter((run) => run.status === 'succeeded' && Number(run.recipe_count) === 0)
   }
   if (text.includes('lower(coalesce(r.title')) {
     const search = String(valueList.find((value) => typeof value === 'string' && value.includes('%')) ?? '').replace(/%/g, '').toLowerCase()
@@ -326,16 +435,24 @@ describe('admin agent workflow observation', () => {
       })
       expect(summary.statusCode).toBe(200)
       expect(summary.json().summary).toMatchObject({
-        totalRunCount: 2,
-        activeProjectCount: 1,
+        totalRunCount: 5,
+        activeProjectCount: 4,
         archivedProjectCount: 1,
-        succeededCount: 1,
+        plannedCount: 1,
+        runningCount: 1,
+        succeededCount: 2,
         failedCount: 1,
-        confirmedPoints: 6,
-        chargedPoints: 4,
-        linkedTaskCount: 2,
+        confirmedPoints: 11,
+        chargedPoints: 7,
+        linkedTaskCount: 4,
         recipeCount: 1,
       })
+      expect(summary.json().summary.attentionQueues).toEqual([
+        expect.objectContaining({ key: 'confirmed_not_started', count: 1 }),
+        expect.objectContaining({ key: 'running_stale', count: 1 }),
+        expect.objectContaining({ key: 'failed', count: 1 }),
+        expect.objectContaining({ key: 'succeeded_without_recipe', count: 1 }),
+      ])
       expect(summary.json().summary.failureKinds).toEqual([{ failureKind: 'upstream_timeout', count: 1 }])
 
       const listed = await app.inject({
@@ -352,6 +469,19 @@ describe('admin agent workflow observation', () => {
         projectStatus: 'archived',
         sourceType: 'reference_image',
         failureKind: 'upstream_timeout',
+      })
+
+      const attentionListed = await app.inject({
+        method: 'GET',
+        url: '/api/admin/agent-runs?attention=confirmed_not_started',
+        headers: { Authorization: 'Bearer admin_sess' },
+      })
+      expect(attentionListed.statusCode).toBe(200)
+      expect(attentionListed.json().agentRuns).toHaveLength(1)
+      expect(attentionListed.json().agentRuns[0]).toMatchObject({
+        id: 'run_confirmed_idle',
+        status: 'confirmed',
+        generationTaskId: null,
       })
     } finally {
       await app.close()

@@ -2032,6 +2032,143 @@
   padding: 14px;
 }
 
+.admin-agent-observability-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-agent-health-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-agent-health-card {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  min-height: 62px;
+  border: 1px solid #e6edf5;
+  border-radius: 6px;
+  background: #fbfdff;
+  padding: 9px 10px;
+}
+
+.admin-agent-health-card span,
+.admin-agent-attention-grid button span,
+.admin-agent-operational-grid span {
+  color: #66758d;
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.admin-agent-health-card strong {
+  color: #152033;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.admin-agent-health-card small,
+.admin-agent-attention-grid button small,
+.admin-agent-operational-review p {
+  color: #66758d;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.admin-agent-attention-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-agent-attention-grid button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  min-width: 0;
+  min-height: 64px;
+  border: 1px solid #e0e8f2;
+  border-radius: 6px;
+  background: #fff;
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.admin-agent-attention-grid button strong {
+  color: #152033;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.admin-agent-attention-grid button small {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-agent-attention-grid button:hover {
+  border-color: #b9c7d9;
+  background: #f8fbff;
+}
+
+.admin-agent-attention-grid button.is-warn,
+.admin-agent-operational-review.is-warn {
+  border-color: #f3d29b;
+  background: #fff9ed;
+}
+
+.admin-agent-attention-grid button.is-danger,
+.admin-agent-operational-review.is-danger {
+  border-color: #fecaca;
+  background: #fff5f5;
+}
+
+.admin-agent-attention-grid button.is-neutral,
+.admin-agent-operational-review.is-neutral {
+  border-color: #dbe6f2;
+  background: #fafcff;
+}
+
+.admin-agent-operational-review.is-good {
+  border-color: #b7e4c7;
+  background: #f2fcf6;
+}
+
+.admin-agent-operational-review {
+  gap: 10px;
+}
+
+.admin-agent-operational-review p {
+  margin: 0;
+}
+
+.admin-agent-operational-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-agent-operational-grid > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid rgba(214, 222, 234, 0.78);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.76);
+  padding: 8px 10px;
+}
+
+.admin-agent-operational-grid strong {
+  color: #152033;
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .admin-template-visibility-card {
   display: grid;
   gap: 10px;
@@ -3153,6 +3290,12 @@
     justify-content: flex-start;
   }
 
+  .admin-agent-health-grid,
+  .admin-agent-attention-grid,
+  .admin-agent-operational-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .admin-gateway-section-head {
     display: grid;
   }
@@ -3226,6 +3369,12 @@
 
   .admin-tabs button {
     flex: 0 0 auto;
+  }
+
+  .admin-agent-health-grid,
+  .admin-agent-attention-grid,
+  .admin-agent-operational-grid {
+    grid-template-columns: 1fr;
   }
 }
 

@@ -131,7 +131,7 @@ const ADMIN_PRIMARY_FILTER_KEYS: Partial<Record<string, string[]>> = {
   tasks: ['status', 'user'],
   inspiration: ['queue', 'status', 'category', 'user'],
   shares: ['status', 'user'],
-  agentWorkflow: ['status', 'projectStatus', 'user', 'search'],
+  agentWorkflow: ['status', 'projectStatus', 'attention', 'user', 'search'],
 }
 const ADMIN_ADVANCED_FILTER_SUMMARY: Partial<Record<string, string>> = {
   users: '邮箱验证、充值与生成行为',
@@ -177,6 +177,9 @@ const ADMIN_VALUE_LABELS: Record<string, string> = {
   timeout: '超时',
   cancelled: '已取消',
   canceled: '已取消',
+  confirmed_not_started: '已确认未启动',
+  running_stale: '运行超时',
+  succeeded_without_recipe: '成功未沉淀',
   redeemed: '已兑换',
   invalid: '无效',
   ok: '正常',
@@ -742,6 +745,7 @@ const ADMIN_FILTERS: Partial<Record<Exclude<AdminSectionKey, 'dashboard'> | User
   agentWorkflow: [
     { key: 'status', label: 'Run 状态', type: 'select', options: ['draft', 'planned', 'confirmed', 'running', 'succeeded', 'failed', 'canceled'] },
     { key: 'projectStatus', label: '项目状态', type: 'select', options: ['active', 'archived'] },
+    { key: 'attention', label: '异常队列', type: 'select', options: ['confirmed_not_started', 'running_stale', 'failed', 'succeeded_without_recipe'] },
     { key: 'user', label: '用户', placeholder: '邮箱 / 昵称 / 用户ID' },
     { key: 'search', label: '搜索', placeholder: '标题 / 需求 / 分类' },
     { key: 'sourceType', label: '来源', type: 'select', options: ['text', 'reference_image', 'recipe', 'rerun'] },
@@ -1420,6 +1424,148 @@ function getShareAuditSummaryCards(summary: unknown) {
   ]
 }
 
+function getAgentWorkflowSummaryRecord(summary: unknown) {
+  if (isRecord(summary) && isRecord(summary.summary)) return summary.summary
+  return isRecord(summary) ? summary : null
+}
+
+function getAgentWorkflowSummaryCards(summary: unknown) {
+  const record = getAgentWorkflowSummaryRecord(summary)
+  if (!record) return [] as Array<{ label: string; value: string; note: string }>
+  const getNumber = (key: string) => {
+    const value = record[key]
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = Number(value)
+      return Number.isFinite(parsed) ? parsed : 0
+    }
+    return 0
+  }
+  const formatRate = (value: number) => `${Math.round(value * 100)}%`
+  return [
+    { label: '总 Run', value: String(getNumber('totalRunCount')), note: `${getNumber('uniqueUsers')} 个用户` },
+    { label: '成功率', value: formatRate(getNumber('successRate')), note: `${getNumber('succeededCount')} 成功 / ${getNumber('failedCount')} 失败` },
+    { label: '进行中', value: String(getNumber('runningCount')), note: `${getNumber('plannedCount')} 个待确认或待启动` },
+    { label: '点数', value: formatCellValue(getNumber('confirmedPoints')), note: `实扣 ${formatCellValue(getNumber('chargedPoints'))}` },
+    { label: '配方', value: String(getNumber('recipeCount')), note: `${getNumber('linkedTaskCount')} 个任务链路` },
+  ]
+}
+
+type AgentAttentionQueue = {
+  key: string
+  label: string
+  count: number
+  severity: string
+  description: string
+  filter: Record<string, string>
+}
+
+function getAgentAttentionQueues(summary: unknown): AgentAttentionQueue[] {
+  const record = getAgentWorkflowSummaryRecord(summary)
+  const queues = record?.attentionQueues
+  if (!Array.isArray(queues)) return []
+  return queues.filter(isRecord).map((queue) => {
+    const filter = isRecord(queue.filter)
+      ? Object.fromEntries(Object.entries(queue.filter).map(([key, value]) => [key, String(value ?? '')]))
+      : {}
+    return {
+      key: String(queue.key ?? queue.label ?? ''),
+      label: String(queue.label ?? queue.key ?? '队列'),
+      count: typeof queue.count === 'number' ? queue.count : Number(queue.count ?? 0) || 0,
+      severity: String(queue.severity ?? 'neutral'),
+      description: String(queue.description ?? ''),
+      filter,
+    }
+  }).filter((queue) => queue.key)
+}
+
+function getAgentRunOperationalReview(detail: Record<string, unknown>) {
+  const run = getAgentRunDetailRecord(detail)
+  const task = isRecord(getValueByPath(detail, 'generationTask')) ? getValueByPath(detail, 'generationTask') as Record<string, unknown> : null
+  const steps = getValueByPath(detail, 'steps')
+  const recipes = getValueByPath(detail, 'recipes')
+  const stepRows = Array.isArray(steps) ? steps.filter(isRecord) : []
+  const recipeRows = Array.isArray(recipes) ? recipes.filter(isRecord) : []
+  const status = String(getValueByPath(run, 'status') ?? '')
+  const taskStatus = String(getValueByPath(task ?? {}, 'status') ?? getValueByPath(run, 'generationTaskStatus') ?? '')
+  const generationTaskId = getValueByPath(run, 'generationTaskId')
+  const failedStep = stepRows.find((step) => String(getValueByPath(step, 'status') ?? '') === 'failed')
+  const chargedPoints = getValueByPath(task ?? {}, 'chargedPoints') ?? getValueByPath(run, 'generationTaskChargedPoints')
+  const confirmedPoints = getValueByPath(run, 'confirmedPoints')
+  const hasRecipes = recipeRows.length > 0 || Number(getValueByPath(run, 'recipeCount') ?? 0) > 0
+
+  if (status === 'failed' || taskStatus === 'failed' || taskStatus === 'timeout') {
+    return {
+      tone: 'danger',
+      title: '失败 Run，优先查任务链路',
+      detail: getValueByPath(run, 'errorSummary') || getValueByPath(task ?? {}, 'errorSummary') || getValueByPath(failedStep ?? {}, 'errorSummary') || '查看失败步骤和出图任务错误摘要。',
+      items: [
+        { label: '卡点', value: failedStep ? getValueByPath(failedStep, 'stepKey') : '出图任务' },
+        { label: '失败类型', value: getValueByPath(run, 'failureKind') ?? getValueByPath(task ?? {}, 'failureKind') ?? getValueByPath(failedStep ?? {}, 'errorKind') },
+        { label: '扣点', value: chargedPoints ?? confirmedPoints },
+      ],
+    }
+  }
+  if (status === 'confirmed' && !generationTaskId) {
+    return {
+      tone: 'warn',
+      title: '已确认但未启动',
+      detail: '用户已确认路线和点数，但尚未创建服务端出图任务。',
+      items: [
+        { label: '建议动作', value: '核对前台启动动作' },
+        { label: '确认点数', value: confirmedPoints },
+        { label: '任务', value: '未创建' },
+      ],
+    }
+  }
+  if (status === 'running') {
+    return {
+      tone: 'warn',
+      title: generationTaskId ? '生成中，关注任务队列' : '运行中但任务未落库',
+      detail: generationTaskId ? '继续核对任务状态、线路和上游返回。' : '需要检查 start 阶段是否创建任务失败。',
+      items: [
+        { label: '任务状态', value: taskStatus || '未知' },
+        { label: '任务编号', value: generationTaskId },
+        { label: '预留点数', value: getValueByPath(task ?? {}, 'reservedPoints') ?? confirmedPoints },
+      ],
+    }
+  }
+  if (status === 'succeeded' && !hasRecipes) {
+    return {
+      tone: 'neutral',
+      title: '成功但未沉淀配方',
+      detail: '结果已完成，但当前 Run 还没有可复用配方记录。',
+      items: [
+        { label: '建议动作', value: '评估是否引导保存配方' },
+        { label: '任务扣点', value: chargedPoints },
+        { label: '配方数', value: recipeRows.length },
+      ],
+    }
+  }
+  if (status === 'succeeded') {
+    return {
+      tone: 'good',
+      title: '成功且有资产沉淀',
+      detail: 'Run 已完成，任务和配方链路可用于复盘质量。',
+      items: [
+        { label: '任务状态', value: taskStatus || '已完成' },
+        { label: '任务扣点', value: chargedPoints },
+        { label: '配方数', value: recipeRows.length },
+      ],
+    }
+  }
+  return {
+    tone: 'neutral',
+    title: '等待用户继续流程',
+    detail: '当前 Run 尚未进入出图或验收阶段。',
+    items: [
+      { label: 'Run 状态', value: status },
+      { label: '确认点数', value: confirmedPoints },
+      { label: '任务', value: generationTaskId || '待创建' },
+    ],
+  }
+}
+
 function AdminValue(props: { fieldKey: string; value: unknown }) {
   if (props.fieldKey === 'isOfficial') {
     const isOfficial = props.value === true
@@ -1929,9 +2075,26 @@ function AdminAgentWorkflowDetailView(props: { detail: Record<string, unknown>; 
   const stepRows = Array.isArray(steps) ? steps.filter(isRecord) : []
   const recipeRows = Array.isArray(recipes) ? recipes.filter(isRecord) : []
   const runLabel = props.selectedId || String(getValueByPath(run, 'title') || getValueByPath(run, 'id') || '未命名 Run')
+  const operationalReview = getAgentRunOperationalReview(props.detail)
 
   return (
     <div className="admin-detail-stack">
+      <section className={`admin-detail-block admin-agent-operational-review is-${operationalReview.tone}`}>
+        <div className="admin-detail-title">
+          <span>运营判断</span>
+          <strong>{operationalReview.title}</strong>
+        </div>
+        <p>{formatAdminValue(operationalReview.detail)}</p>
+        <div className="admin-agent-operational-grid">
+          {operationalReview.items.map((item) => (
+            <div key={item.label}>
+              <span>{item.label}</span>
+              <strong><AdminValue fieldKey={item.label} value={item.value} /></strong>
+            </div>
+          ))}
+        </div>
+      </section>
+
       <section className="admin-detail-block">
         <div className="admin-detail-title">
           <span>Run 概览</span>
@@ -2682,6 +2845,18 @@ function buildPath(basePath: string, limit: number, offset: number, filters: Rec
   return `${pathname}?${params.toString()}`
 }
 
+function buildSummaryPath(basePath: string, filters: Record<string, string>) {
+  const [pathname, query = ''] = basePath.split('?')
+  const params = new URLSearchParams(query)
+  Object.entries(filters).forEach(([key, value]) => {
+    const trimmed = value.trim()
+    if (trimmed) params.set(key, trimmed)
+    else params.delete(key)
+  })
+  const serialized = params.toString()
+  return serialized ? `${pathname}?${serialized}` : pathname
+}
+
 function getFilterValues(fields: AdminFilterField[], form: HTMLFormElement) {
   return fields.reduce<Record<string, string>>((values, field) => {
     const control = form.elements.namedItem(field.key)
@@ -2847,6 +3022,8 @@ function getAdminQuickFilters(scope: string): AdminQuickFilter[] {
       { label: '全部 Run', values: {} },
       { label: '失败 Run', values: { status: 'failed' } },
       { label: '运行中', values: { status: 'running' } },
+      { label: '已确认未启动', values: { attention: 'confirmed_not_started' } },
+      { label: '成功未沉淀', values: { attention: 'succeeded_without_recipe' } },
       { label: '归档项目', values: { projectStatus: 'archived' } },
     ]
   }
@@ -3002,6 +3179,7 @@ function formatAdminFilterLabel(key: string, value: string) {
     title: '标题',
     sourceType: '来源类型',
     projectStatus: '项目状态',
+    attention: '异常队列',
     generationTaskId: '任务编号',
     sourceUrl: '来源',
     q: '关键词',
@@ -5601,6 +5779,11 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
   const selectedCount = selectedIds.length
   const allSelectableRowsSelected = selectableRowIds.length > 0 && selectableRowIds.every((id) => selectedIdSet.has(id))
   const listPath = useMemo(() => buildPath(config.listPath, pageLimit, pageOffset, filters), [config.listPath, filters, pageLimit, pageOffset])
+  const summaryPath = useMemo(() => (
+    config.summaryPath
+      ? buildSummaryPath(config.summaryPath, props.section === 'agentWorkflow' ? filters : {})
+      : ''
+  ), [config.summaryPath, filters, props.section])
   const workflow = useMemo(() => getModuleWorkflow(config, props.section), [config, props.section])
   const quickFilters = useMemo(() => getAdminQuickFilters(filterScope), [filterScope])
   const recentViews = useMemo(() => getRecentAdminViews(props.section).filter((item) => !(item.scope === filterScope && areAdminFiltersEqual(item.filters, filters))).slice(0, 4), [filterScope, filters, props.section])
@@ -5688,7 +5871,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
         await loadOfficialTemplateData(keepSelectedId)
         return
       }
-      const summaryPayload = config.summaryPath ? await adminGet(config.summaryPath, props.token) : null
+      const summaryPayload = summaryPath ? await adminGet(summaryPath, props.token) : null
       const list = await adminGet(listPath, props.token)
       setSummary(summaryPayload)
       setListPayload(list)
@@ -5715,7 +5898,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
     } finally {
       setLoading(false)
     }
-  }, [config.detailBasePath, config.listKey, config.summaryPath, isOfficialTemplateView, listPath, loadDetail, loadOfficialTemplateData, props.token])
+  }, [config.detailBasePath, config.listKey, isOfficialTemplateView, listPath, loadDetail, loadOfficialTemplateData, props.token, summaryPath])
 
   useEffect(() => {
     let cancelled = false
@@ -5743,7 +5926,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
           setListPayload(payload)
           return
         }
-        const summaryPayload = config.summaryPath ? await adminGet(config.summaryPath, props.token) : null
+        const summaryPayload = summaryPath ? await adminGet(summaryPath, props.token) : null
         const list = await adminGet(listPath, props.token)
         if (cancelled) return
         setSummary(summaryPayload)
@@ -5758,7 +5941,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
     return () => {
       cancelled = true
     }
-  }, [config.summaryPath, filters, isOfficialTemplateView, listPath, pageLimit, pageOffset, props.token])
+  }, [filters, isOfficialTemplateView, listPath, pageLimit, pageOffset, props.token, summaryPath])
 
   useEffect(() => {
     const remembered = getRememberedFilters(filterScope)
@@ -5981,6 +6164,8 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
   const hasInlineActionPanel = useInlineWorkbench && shouldRenderActionPanel && !showActionPanelInWorkspace
   const shareAuditSummaryCards = useMemo(() => useBottomDetailWorkbench ? getShareAuditSummaryCards(summary) : [], [summary, useBottomDetailWorkbench])
   const inspirationSummaryCards = useMemo(() => props.section === 'inspiration' ? getInspirationSummaryCards(summary) : [], [props.section, summary])
+  const agentWorkflowSummaryCards = useMemo(() => props.section === 'agentWorkflow' ? getAgentWorkflowSummaryCards(summary) : [], [props.section, summary])
+  const agentAttentionQueues = useMemo(() => props.section === 'agentWorkflow' ? getAgentAttentionQueues(summary) : [], [props.section, summary])
 
   const detailPanel = (
     <section className={isContentModule ? 'admin-detail-panel admin-content-detail-panel' : `admin-panel admin-detail-panel${useInlineWorkbench ? ' admin-inline-detail-panel' : ''}`}>
@@ -6327,6 +6512,45 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
                   </article>
                 ))}
               </div>
+            </section>
+          ) : null}
+
+          {props.section === 'agentWorkflow' && (agentWorkflowSummaryCards.length || agentAttentionQueues.length) ? (
+            <section className="admin-panel admin-agent-observability-panel" aria-label="Agent 运行健康">
+              <div className="admin-panel-head">
+                <h2>运行健康</h2>
+                <span>按当前筛选范围统计</span>
+              </div>
+              {agentWorkflowSummaryCards.length ? (
+                <div className="admin-agent-health-grid">
+                  {agentWorkflowSummaryCards.map((item) => (
+                    <article key={item.label} className="admin-agent-health-card">
+                      <span>{item.label}</span>
+                      <strong>{item.value}</strong>
+                      <small>{item.note}</small>
+                    </article>
+                  ))}
+                </div>
+              ) : null}
+              {agentAttentionQueues.length ? (
+                <div className="admin-agent-attention-grid" aria-label="异常队列">
+                  {agentAttentionQueues.map((queue) => (
+                    <button
+                      key={queue.key}
+                      type="button"
+                      className={`is-${queue.severity}`}
+                      onClick={() => {
+                        setFilters({ ...getDefaultFiltersForScope(filterScope), ...queue.filter })
+                        setPageOffset(0)
+                      }}
+                    >
+                      <span>{queue.label}</span>
+                      <strong>{queue.count}</strong>
+                      <small>{queue.description}</small>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </section>
           ) : null}
 
