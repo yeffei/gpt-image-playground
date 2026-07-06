@@ -390,7 +390,7 @@ function getTimeoutStreamingHint(profile?: TimeoutStreamingHintProfile | null) {
 }
 
 function isWorkbenchReturnNavSource(view: GalleryView): view is Exclude<GalleryView, 'workbench' | 'auth'> {
-  return view === 'library' || view === 'promptLibrary' || view === 'plan' || view === 'recharge'
+  return view === 'library' || view === 'promptLibrary' || view === 'agentWorkflow' || view === 'plan' || view === 'recharge'
 }
 
 function createOpenAITimeoutError(timeoutSeconds: number, profile?: TimeoutStreamingHintProfile | null) {
@@ -1398,6 +1398,8 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     ? 'auth'
     : persisted.galleryView === 'recharge'
     ? 'plan'
+    : persisted.galleryView === 'agentWorkflow'
+    ? 'agentWorkflow'
     : persisted.galleryView === 'promptLibrary'
     ? 'promptLibrary'
     : persisted.galleryView === 'library'
@@ -1590,6 +1592,7 @@ interface AppState {
   refreshBackendAccount: () => Promise<void>
   refreshAccountLedger: () => Promise<void>
   refreshReferralInfo: () => Promise<void>
+  syncServerLibraryTasks: () => Promise<void>
   refreshTaskFromServer: (taskId: string) => Promise<void>
   logout: () => void
   getWorkbenchAccessState: () => WorkbenchAccessState
@@ -2104,6 +2107,8 @@ export const useStore = create<AppState>()(
         const redirectTo = options?.redirectTo
           ?? (get().galleryView === 'plan'
             ? 'plan'
+            : get().galleryView === 'agentWorkflow'
+            ? 'agentWorkflow'
             : get().galleryView === 'library'
             ? 'library'
             : get().galleryView === 'promptLibrary'
@@ -2263,6 +2268,9 @@ export const useStore = create<AppState>()(
       refreshTaskFromServer: async (taskId) => {
         await refreshTaskFromServer(taskId)
       },
+      syncServerLibraryTasks: async () => {
+        await syncServerLibraryTasksForCurrentSession()
+      },
       logout: () => set(() => ({
         authSessionToken: null,
         account: { ...DEFAULT_ACCOUNT_STATE },
@@ -2403,6 +2411,8 @@ export const useStore = create<AppState>()(
           mode: 'login',
           redirectTo: state.galleryView === 'plan'
             ? 'plan'
+            : state.galleryView === 'agentWorkflow'
+            ? 'agentWorkflow'
             : state.galleryView === 'library'
             ? 'library'
             : state.galleryView === 'promptLibrary'

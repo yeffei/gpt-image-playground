@@ -21,7 +21,7 @@ export const LIBRARY_ACTIVE_OUTPUT_LIMIT = 100
 export const LIBRARY_TRASH_RETENTION_DAYS = 7
 const activeGenerationTaskControllers = new Map<string, AbortController>()
 
-type TaskParams = {
+export type TaskParams = {
   size?: string
   quality?: string
   output_format?: string
@@ -30,13 +30,16 @@ type TaskParams = {
   n?: number
 }
 
-type GatewayRequest = {
+export type GatewayRequest = {
   modelSku?: string
   prompt?: string
   negativePrompt?: string
   params?: TaskParams
   inputImageDataUrls?: string[]
   maskDataUrl?: string
+  source?: string
+  agentRunId?: string
+  agentPlanVersion?: number
 }
 
 type DeliveryPlan = ImageDeliveryPlan
@@ -1175,9 +1178,9 @@ async function callUpstream(route: RuntimeRouteRow, input: GatewayRequest, exter
         form.set('model', upstreamModel)
         form.set('prompt', promptFields.prompt)
         form.set('size', effectiveParams.size || '1024x1024')
-        if (!compatibilityPatch?.omitQuality) form.set('quality', effectiveParams.quality)
-        if (!compatibilityPatch?.omitOutputFormat) form.set('output_format', effectiveOutputFormat)
-        if (!compatibilityPatch?.omitModeration) form.set('moderation', effectiveParams.moderation)
+        if (!compatibilityPatch?.omitQuality && effectiveParams.quality) form.set('quality', effectiveParams.quality)
+        if (!compatibilityPatch?.omitOutputFormat && effectiveOutputFormat) form.set('output_format', effectiveOutputFormat)
+        if (!compatibilityPatch?.omitModeration && effectiveParams.moderation) form.set('moderation', effectiveParams.moderation)
         if (promptFields.negativePrompt) form.set('negative_prompt', promptFields.negativePrompt)
         if (
           !compatibilityPatch?.omitOutputCompression
@@ -1973,6 +1976,10 @@ async function cancelReservedTask(db: Pool, input: { taskId: string; userId: str
   })
 }
 
+export async function cancelGenerationTaskFromWorkflow(db: Pool, input: { taskId: string; userId: string }) {
+  return await cancelReservedTask(db, input)
+}
+
 async function deleteGenerationTask(db: Pool, input: { taskId: string; userId: string }) {
   return await withTransaction(db, async (tx) => {
     const task = (await tx.query<{ id: string; status: GenerationTaskStatus }>(
@@ -2422,6 +2429,64 @@ async function executeReservedGenerationTask(db: Pool, env: ServerEnv, input: {
     })
   } finally {
     clearGenerationTaskController(input.reservation.taskId, taskController)
+  }
+}
+
+export async function submitGenerationTaskFromWorkflow(db: Pool, env: ServerEnv, input: {
+  userId: string
+  payload: GatewayRequest
+  agentRunId?: string
+  agentPlanVersion?: number
+}) {
+  const requestId = createId('imggw')
+  const payload = input.payload
+  const prompt = payload.prompt?.trim() ?? ''
+  if (!prompt) throw new ApiError(400, 'missing_prompt', '缺少提示词')
+  const modelSku = await resolveRequestedModelSku(db, payload.modelSku)
+  const model = await loadModelForGeneration(db, modelSku)
+  if (!model) throw new ApiError(404, 'model_not_found', '模型不存在或未启用')
+  const normalizedPayload: GatewayRequest = {
+    ...payload,
+    source: payload.source ?? 'agent_workflow',
+    agentRunId: input.agentRunId,
+    agentPlanVersion: input.agentPlanVersion,
+    params: normalizeRequestedParamsForModel(payload.params, model),
+  }
+  const routes = filterRoutesForRequestedSize(await loadRoutesForModel(db, modelSku), normalizedPayload.params?.size)
+  const routeStages = buildRouteExecutionStages(routes, normalizedPayload)
+  if (!routeStages.length) throw new ApiError(503, 'no_route', '没有可用的生图线路')
+  const requestedOutputCount = getRequestedOutputCount(normalizedPayload)
+  const workflowMode = ((Array.isArray(normalizedPayload.inputImageDataUrls) && normalizedPayload.inputImageDataUrls.length > 0) || normalizedPayload.maskDataUrl)
+    ? 'agent_edit'
+    : 'agent'
+  const reservation = await createReservedRunningTask(db, {
+    userId: input.userId,
+    requestId,
+    modelSku,
+    mode: workflowMode,
+    requestedOutputCount,
+    params: normalizedPayload.params,
+    deliveryPlan: routeStages[0]?.deliveryPlan,
+    status: 'queued',
+    requestPayload: normalizedPayload,
+  })
+
+  void executeReservedGenerationTask(db, env, {
+    userId: input.userId,
+    payload: normalizedPayload,
+    prompt,
+    modelSku,
+    routeStages,
+    requestedOutputCount,
+    reservation,
+  }).catch(() => undefined)
+
+  return {
+    taskId: reservation.taskId,
+    status: 'queued' as const,
+    requestId,
+    requestedOutputCount,
+    reservedPoints: reservation.reservedPoints,
   }
 }
 

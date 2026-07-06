@@ -111,7 +111,7 @@ export default function Header({ onOpenHelp, onOpenSettings }: HeaderProps) {
         data-no-drag-select
         className="safe-area-top fixed top-0 left-0 right-0 z-40 transition-transform duration-300 ease-in-out translate-y-0"
       >
-        <div className="prototype-topbar">
+        <div className={`prototype-topbar ${galleryView === 'agentWorkflow' ? 'is-agent-workspace-topbar' : ''}`}>
           <div className="prototype-brand">
             <span className="prototype-logo" aria-hidden="true" />
             <span>

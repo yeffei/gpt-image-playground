@@ -142,6 +142,7 @@ vi.mock('./lib/serverImageGatewayApi', () => ({
   deleteServerImageTask: vi.fn(async () => ({ ok: true, taskId: 'server-task-1', deleted: true })),
   deleteAllCompletedServerImageTasks: vi.fn(async () => ({ ok: true, deletedCount: 1, skippedRunningCount: 0 })),
   listServerImageTasks: vi.fn(async () => []),
+  listServerLibraryOutputs: vi.fn(async () => []),
   isServerImageGatewayUnavailableError: vi.fn(() => false),
 }))
 vi.mock('./lib/serverImageGatewayConfig', () => ({
@@ -206,7 +207,7 @@ import { clearAgentConversations, clearImages, clearTasks, getAllAgentConversati
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { callImageApi } from './lib/api'
 import { fetchPublicModelSkus } from './lib/modelSkuApi'
-import { callServerImageGateway, cancelServerImageTask, deleteAllCompletedServerImageTasks, deleteServerImageTask, getServerImageTask, listServerImageTasks, pollServerImageTask } from './lib/serverImageGatewayApi'
+import { callServerImageGateway, cancelServerImageTask, deleteAllCompletedServerImageTasks, deleteServerImageTask, getServerImageTask, listServerImageTasks, listServerLibraryOutputs, pollServerImageTask } from './lib/serverImageGatewayApi'
 import { isClientImageGatewayFallbackEnabled, isServerImageGatewayEnabled } from './lib/serverImageGatewayConfig'
 import { AuthApiError, getAccountLedger, getCurrentAuthAccount, getMyReferralInfo } from './lib/authApi'
 import { RechargeCodeApiError, redeemRechargeCodeWithApi } from './lib/rechargeCodeApi'
@@ -3072,6 +3073,7 @@ describe('server image task recovery', () => {
     vi.mocked(deleteAllCompletedServerImageTasks).mockClear()
     vi.mocked(deleteServerImageTask).mockClear()
     vi.mocked(listServerImageTasks).mockClear()
+    vi.mocked(listServerLibraryOutputs).mockClear()
     vi.mocked(isServerImageGatewayEnabled).mockReturnValue(false)
     useStore.setState({
       account: { userId: 'test-user', isLoggedIn: true, displayName: 'Tester', balance: 20, planName: '体验版' },
@@ -3227,6 +3229,62 @@ describe('server image task recovery', () => {
         serverImageTaskId: 'server-task-history',
       }),
     ])
+  })
+
+  it('syncs backend image tasks on demand for agent workflow outputs', async () => {
+    vi.mocked(isServerImageGatewayEnabled).mockReturnValue(true)
+    vi.mocked(listServerImageTasks).mockResolvedValueOnce([{
+      ok: true,
+      taskId: 'server-task-agent',
+      status: 'succeeded',
+      mode: 'generate',
+      prompt: 'agent prompt',
+      params: { ...DEFAULT_PARAMS, size: '1024x1024', n: 1 },
+      images: ['/api/generated-images/server-task-agent/output-1.jpg'],
+      actualParams: { n: 1 },
+      revisedPrompts: [],
+      rawImageUrls: [],
+      persistedImages: [{
+        id: 'output-agent-1',
+        taskId: 'server-task-agent',
+        outputIndex: 0,
+        url: '/api/generated-images/server-task-agent/output-1.jpg',
+      }],
+      modelSku: 'gpt-image-2-fast',
+      routeId: 'route-agent',
+      upstreamModel: 'gpt-image-2',
+      attempts: [],
+      requestedOutputCount: 1,
+      outputCount: 1,
+      billing: {
+        outputCount: 1,
+        chargedPoints: 1,
+        ledgerId: 'ledger-agent',
+      },
+      createdAt: '2026-07-03T12:00:00.000Z',
+      finishedAt: '2026-07-03T12:00:05.000Z',
+    }])
+    useStore.setState({
+      authSessionToken: 'backend-token',
+      account: {
+        userId: 'test-user',
+        isLoggedIn: true,
+        displayName: 'Tester',
+        balance: 20,
+        planName: '体验版',
+      },
+      tasks: [],
+    })
+
+    await useStore.getState().syncServerLibraryTasks()
+
+    expect(listServerImageTasks).toHaveBeenCalledWith('backend-token', { limit: 100 })
+    expect(useStore.getState().tasks[0]).toMatchObject({
+      id: 'server-task-agent',
+      prompt: 'agent prompt',
+      outputImages: ['server-output-agent-1'],
+      serverImageTaskId: 'server-task-agent',
+    })
   })
 
   it('refreshes the task detail from the backend when opening a server task', async () => {

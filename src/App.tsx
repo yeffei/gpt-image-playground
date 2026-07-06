@@ -14,7 +14,7 @@ import {
 } from './lib/accessCopy'
 
 type PrototypeNavItem = {
-  key: 'workbench' | 'library' | 'promptLibrary' | 'favorites' | 'auth' | 'plan' | 'help' | 'settings' | 'inspiration'
+  key: 'workbench' | 'agentWorkflow' | 'library' | 'promptLibrary' | 'favorites' | 'auth' | 'plan' | 'help' | 'settings' | 'inspiration'
   label: string
   meta?: string
   tooltip: string
@@ -29,6 +29,7 @@ type PrototypeNavSection = {
 }
 
 const PlanAndBillingView = lazy(() => import('./components/PlanAndBillingView'))
+const AgentWorkflowView = lazy(() => import('./components/AgentWorkflowView'))
 const AuthView = lazy(() => import('./components/AuthView'))
 const LibraryView = lazy(() => import('./components/LibraryView'))
 const PromptLibraryView = lazy(() => import('./components/PromptLibraryView'))
@@ -148,6 +149,8 @@ export default function App() {
   }, [account, tasks])
   const authRedirectTarget = galleryView === 'plan'
     ? 'plan'
+    : galleryView === 'agentWorkflow'
+    ? 'agentWorkflow'
     : galleryView === 'library'
     ? 'library'
     : galleryView === 'promptLibrary'
@@ -189,6 +192,7 @@ export default function App() {
         {
           group: '创作',
           items: [
+            { key: 'agentWorkflow', label: '智能创作流', meta: '计划生成', tooltip: '进入智能创作流', icon: 'flow', onClick: () => setGalleryView('agentWorkflow') },
             { key: 'workbench', label: '工作台', meta: '生成入口', tooltip: '进入工作台', icon: 'grid', onClick: () => setGalleryView('workbench') },
           ],
         },
@@ -212,6 +216,7 @@ export default function App() {
         {
           group: '公开入口',
           items: [
+            { key: 'agentWorkflow', label: '智能创作流', meta: '登录使用', tooltip: '进入智能创作流', icon: 'flow', tone: 'public', onClick: () => setGalleryView('agentWorkflow') },
             { key: 'workbench', label: '工作台', meta: '试填入口', tooltip: '进入试填入口', icon: 'grid', tone: 'public', onClick: () => setGalleryView('workbench') },
             { key: 'inspiration', label: '灵感广场', meta: '公开展示', tooltip: '浏览灵感广场', icon: 'spark', tone: 'public', onClick: showInspiration },
             { key: 'promptLibrary', label: '提示词库', meta: '公开浏览', tooltip: '浏览官方模板', icon: 'prompt', tone: 'public', onClick: showPromptLibrary },
@@ -227,6 +232,7 @@ export default function App() {
 
   const isNavItemActive = (key: PrototypeNavItem['key']) => {
     if (key === 'workbench') return galleryView === 'workbench'
+    if (key === 'agentWorkflow') return galleryView === 'agentWorkflow'
     if (key === 'library') return galleryView === 'library' && libraryViewMode === 'all'
     if (key === 'favorites') return galleryView === 'library' && libraryViewMode === 'favorites'
     if (key === 'inspiration') return galleryView === 'inspiration'
@@ -235,6 +241,7 @@ export default function App() {
     if (key === 'plan') return galleryView === 'plan'
     return false
   }
+  const isAgentWorkspace = galleryView === 'agentWorkflow'
 
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search)
@@ -367,9 +374,10 @@ export default function App() {
       <main
         data-home-main
         data-drag-select-surface
-        className={`prototype-page-shell ${navCollapsed ? 'is-nav-collapsed' : ''} ${galleryView === 'inspiration' ? 'is-inspiration-shell' : ''}`}
+        className={`prototype-page-shell ${navCollapsed ? 'is-nav-collapsed' : ''} ${galleryView === 'inspiration' ? 'is-inspiration-shell' : ''} ${isAgentWorkspace ? 'is-agent-workspace-shell' : ''}`}
       >
           <div className="prototype-stage">
+            {!isAgentWorkspace ? (
             <aside id="prototype-sidebar" className="prototype-sidebar" aria-label="产品导航">
               <button
                 type="button"
@@ -406,11 +414,14 @@ export default function App() {
                 ))}
               </nav>
             </aside>
+            ) : null}
 
             <div className="prototype-main">
               <Suspense fallback={<LazyViewFallback />}>
                 {galleryView === 'plan' ? (
                   <PlanAndBillingView />
+                ) : galleryView === 'agentWorkflow' ? (
+                  <AgentWorkflowView />
                 ) : galleryView === 'library' ? (
                   <LibraryView />
                 ) : galleryView === 'inspiration' ? (

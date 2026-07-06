@@ -685,6 +685,23 @@ input[type="number"] {
   clip-path: polygon(50% 0%, 60% 28%, 88% 38%, 60% 50%, 50% 82%, 40% 50%, 12% 38%, 40% 28%);
 }
 
+.prototype-nav-icon-flow::before {
+  width: 17px;
+  height: 17px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  box-shadow: -8px 7px 0 -5px currentColor, 8px -7px 0 -5px currentColor;
+}
+
+.prototype-nav-icon-flow::after {
+  width: 14px;
+  height: 9px;
+  border-top: 2px solid currentColor;
+  border-right: 2px solid currentColor;
+  border-radius: 0 9px 0 0;
+  transform: rotate(-25deg);
+}
+
 .prototype-nav-icon-account::before {
   width: 12px;
   height: 12px;
@@ -5223,4 +5240,124 @@ input[type="number"] {
   font-size: 11px !important;
   line-height: 1.35 !important;
   letter-spacing: 0 !important;
+}
+
+/* Agent workspace shell final pass: keep platform context, remove old sidebar/footer weight. */
+.prototype-page-shell.is-agent-workspace-shell {
+  min-height: calc(100dvh - 90px);
+  padding: 6px 0 12px !important;
+}
+
+.prototype-page-shell.is-agent-workspace-shell .prototype-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  width: 100%;
+  max-width: 1480px;
+  margin: 0 auto;
+  padding-inline: clamp(12px, 1.7vw, 24px);
+}
+
+.prototype-page-shell.is-agent-workspace-shell .prototype-main {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+}
+
+.prototype-page-shell.is-agent-workspace-shell .site-footer,
+.prototype-page-shell.is-agent-workspace-shell .site-footer-shell {
+  display: none !important;
+}
+
+.prototype-topbar.is-agent-workspace-topbar {
+  left: clamp(12px, 1.7vw, 24px);
+  right: clamp(12px, 1.7vw, 24px);
+  min-height: 56px;
+  padding: 8px 10px 8px 12px;
+  border-color: rgba(22, 32, 31, 0.1) !important;
+  border-radius: 15px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(250, 249, 244, 0.9)) !important;
+  box-shadow:
+    0 8px 22px rgba(31, 41, 35, 0.065),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82) !important;
+  color: #16201f;
+  backdrop-filter: blur(16px) saturate(1.08) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(1.08) !important;
+}
+
+.prototype-topbar.is-agent-workspace-topbar .prototype-logo {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #16201f, #0f766e);
+  box-shadow: 0 8px 16px rgba(15, 118, 110, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+
+.prototype-topbar.is-agent-workspace-topbar .prototype-brand strong {
+  color: #16201f;
+  font-size: 14px;
+  letter-spacing: 0;
+}
+
+.prototype-topbar.is-agent-workspace-topbar .prototype-top-actions {
+  gap: 7px;
+}
+
+.prototype-topbar.is-agent-workspace-topbar .prototype-top-button {
+  min-height: 38px;
+  border-color: rgba(22, 32, 31, 0.1) !important;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.74) !important;
+  color: #66736f;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.74) !important;
+}
+
+.prototype-topbar.is-agent-workspace-topbar .prototype-account-status-dot.is-online {
+  background: #0f766e;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+}
+
+.prototype-topbar.is-agent-workspace-topbar .prototype-account-chevron {
+  color: #66736f !important;
+}
+
+@media (max-width: 720px) {
+  .prototype-page-shell.is-agent-workspace-shell,
+  .prototype-page-shell.is-agent-workspace-shell.is-nav-collapsed {
+    min-height: calc(100dvh - 76px);
+    padding-top: 4px !important;
+  }
+
+  .prototype-page-shell.is-agent-workspace-shell .prototype-stage {
+    display: block;
+    padding-inline: 10px;
+  }
+
+  .prototype-topbar.is-agent-workspace-topbar {
+    left: 10px;
+    right: 10px;
+    min-height: 58px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 7px 8px;
+  }
+
+  .prototype-topbar.is-agent-workspace-topbar .prototype-logo {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    border-radius: 11px;
+  }
+
+  .prototype-topbar.is-agent-workspace-topbar .prototype-brand strong {
+    max-width: 8.5em;
+    font-size: 13px;
+  }
+
+  .prototype-topbar.is-agent-workspace-topbar .prototype-account-summary {
+    max-width: 128px;
+    min-height: 36px;
+    padding-inline: 10px;
+  }
 }

@@ -1,12 +1,14 @@
 import './SiteFooter.css'
+import type { GalleryView } from '../types'
 
 type SiteFooterProps = {
-  currentView: 'workbench' | 'library' | 'promptLibrary' | 'plan' | 'recharge' | 'auth' | 'inspiration'
+  currentView: GalleryView
   isLoggedIn: boolean
 }
 
 function getCurrentViewLabel(view: SiteFooterProps['currentView']) {
   if (view === 'library') return '作品库'
+  if (view === 'agentWorkflow') return '智能创作流'
   if (view === 'inspiration') return '灵感广场'
   if (view === 'promptLibrary') return '提示词库'
   if (view === 'plan' || view === 'recharge') return '计划与额度'

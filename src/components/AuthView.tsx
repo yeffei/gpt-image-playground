@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import './AuthView.css'
 import { useStore } from '../store'
+import type { AuthRedirectView } from '../types'
 import {
   AuthApiError,
   accountFromAuthPayload,
@@ -37,14 +38,16 @@ function isLikelyEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
 }
 
-function getRedirectTitle(view: 'workbench' | 'plan' | 'library' | 'promptLibrary') {
+function getRedirectTitle(view: AuthRedirectView) {
+  if (view === 'agentWorkflow') return '智能创作流'
   if (view === 'plan') return '计划与额度'
   if (view === 'library') return '作品库'
   if (view === 'promptLibrary') return '提示词库'
   return '工作台'
 }
 
-function getRedirectSupportCopy(view: 'workbench' | 'plan' | 'library' | 'promptLibrary') {
+function getRedirectSupportCopy(view: AuthRedirectView) {
+  if (view === 'agentWorkflow') return '登录后会回到智能创作流，继续把需求整理成计划、确认费用并启动生成。'
   if (view === 'plan') return '登录后会继续回到计划与额度入口，查看当前点数、套餐和充值路径。'
   if (view === 'library') return '登录后会回到作品库，继续查看你自己的生成结果和历史记录。'
   if (view === 'promptLibrary') return '刚挑中的模板方向不会丢，登录后还能继续回到提示词库和工作台之间来回切换。'
