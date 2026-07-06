@@ -5766,6 +5766,9 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
   }), [config.detailIdKey, rows])
   const pagination = useMemo(() => getPagination(listPayload), [listPayload])
   const activeFilterEntries = useMemo(() => getActiveFilterEntries(filters), [filters])
+  const filterFormKey = useMemo(() => (
+    `${filterScope}:${activeFilterEntries.map(([key, value]) => `${key}=${value}`).join('&')}`
+  ), [activeFilterEntries, filterScope])
   const subsectionLabel = useMemo(() => getSubsectionLabel({
     section: props.section,
     userSubsection,
@@ -6384,7 +6387,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
         <div className="admin-workspace-column">
           {shouldRenderActionPanel && showActionPanelInWorkspace ? actionPanel : null}
           <form
-            key={filterScope}
+            key={filterFormKey}
             className="admin-panel admin-filter-panel"
             onSubmit={(event) => {
               event.preventDefault()
