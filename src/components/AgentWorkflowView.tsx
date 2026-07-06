@@ -445,8 +445,27 @@ function getErrorMessage(error: unknown) {
   return '智能创作流请求失败，请稍后重试'
 }
 
-function getRunStatusCopy(status?: AgentRunStatus) {
-  return STATUS_COPY[status ?? 'draft'] ?? STATUS_COPY.draft
+export function getRunStatusCopy(runOrStatus?: AgentRun | AgentRunStatus | null) {
+  const status = typeof runOrStatus === 'string' ? runOrStatus : runOrStatus?.status
+  const copy = STATUS_COPY[status ?? 'draft'] ?? STATUS_COPY.draft
+  if (status !== 'succeeded' || typeof runOrStatus === 'string' || !runOrStatus) return copy
+
+  const metadata = asRecord(runOrStatus.metadata)
+  const review = asRecord(metadata.review)
+  const decision = review.decision === 'accepted' || review.decision === 'needs_iteration'
+    ? review.decision
+    : null
+  const reviewStatus = typeof metadata.reviewStatus === 'string' ? metadata.reviewStatus : null
+  if (metadata.recipeSaved === true || reviewStatus === 'recipe_saved') {
+    return { ...copy, label: '已沉淀' }
+  }
+  if (reviewStatus === 'accepted' || decision === 'accepted') {
+    return { ...copy, label: '已验收' }
+  }
+  if (reviewStatus === 'needs_iteration' || decision === 'needs_iteration') {
+    return { ...copy, label: '需迭代' }
+  }
+  return copy
 }
 
 function getPlanSummary(run: AgentRun | null) {
@@ -2310,7 +2329,7 @@ export default function AgentWorkflowView() {
     steps: visibleSteps,
     outputCount: serverOutputs.length || outputImageIds.length,
   }), [outputImageIds.length, run, serverOutputs.length, visibleSteps])
-  const statusCopy = getRunStatusCopy(run?.status)
+  const statusCopy = getRunStatusCopy(run)
   const isBusy = busyAction !== null
   const isRecipeBusy = recipeBusyAction !== null
   const needsLogin = !account.isLoggedIn || !authSessionToken
@@ -4774,7 +4793,7 @@ export default function AgentWorkflowView() {
               <div className="agent-asset-list">
                 {historyPreview.map((entry) => {
                   const item = entry.run
-                  const itemStatus = getRunStatusCopy(item.status)
+                  const itemStatus = getRunStatusCopy(item)
                   const itemBranch = getRunBranchInfo(item)
                   const recoverySummary = buildRecoveryActionSummary(item)
                   const nextStepSummary = buildHistoryAssetNextStepSummary(item)

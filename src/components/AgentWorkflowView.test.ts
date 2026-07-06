@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { appendReviewTagToNote, buildAgentReferencePayload, buildBranchInspectorSummary, buildCreativeReviewItems, buildDerivedRoutePlanInput, buildExecutionAssetActionNotice, buildExecutionControlSummary, buildHistoryAssetNextStepSummary, buildLocalEditDraftSummary, buildOutputActionSummary, buildOutputAssetActionNotice, buildOutputAssetActions, buildRecoverableAssetSummary, buildRecoveryActionSummary, buildRetryPromptFromRun, buildRouteSourceSummary, buildTimelineStepSections, buildVersionComparisonSummary, buildWorkflowNodeStates, findAgentLibraryDetailTask, findOutputSelectionTarget, getActiveOutputReviewSummary, getInlineReferenceAssetFromRecipe, getInputImageFromReferenceAsset, getLocalEditDraftCopy, getPlanOverrideState, getProjectVersionHistory, getRecipeSourceReferenceRole, getReviewIterationOutputReference, getReviewIterationRouteState, getRouteLifecycleCopy, getRunPrimaryOutput, getSelectedOutputOpenTarget, getStageVersionStripItems, loadServerOutputAsLocalImage, mergeAgentReferenceImages } from './AgentWorkflowView'
+import { appendReviewTagToNote, buildAgentReferencePayload, buildBranchInspectorSummary, buildCreativeReviewItems, buildDerivedRoutePlanInput, buildExecutionAssetActionNotice, buildExecutionControlSummary, buildHistoryAssetNextStepSummary, buildLocalEditDraftSummary, buildOutputActionSummary, buildOutputAssetActionNotice, buildOutputAssetActions, buildRecoverableAssetSummary, buildRecoveryActionSummary, buildRetryPromptFromRun, buildRouteSourceSummary, buildTimelineStepSections, buildVersionComparisonSummary, buildWorkflowNodeStates, findAgentLibraryDetailTask, findOutputSelectionTarget, getActiveOutputReviewSummary, getInlineReferenceAssetFromRecipe, getInputImageFromReferenceAsset, getLocalEditDraftCopy, getPlanOverrideState, getProjectVersionHistory, getRecipeSourceReferenceRole, getReviewIterationOutputReference, getReviewIterationRouteState, getRouteLifecycleCopy, getRunPrimaryOutput, getRunStatusCopy, getSelectedOutputOpenTarget, getStageVersionStripItems, loadServerOutputAsLocalImage, mergeAgentReferenceImages } from './AgentWorkflowView'
 import { storeImage } from '../lib/db'
 import type { AgentRun, AgentRunOutput, AgentStep } from '../lib/agentWorkflowApi'
 
@@ -134,6 +134,26 @@ describe('AgentWorkflowView creative review helpers', () => {
       selectedTaskId: 'task_review',
       selectedAt: null,
     })
+  })
+
+  it('shows completed review state in run status labels', () => {
+    const baseRun: AgentRun = {
+      id: 'run_status_label',
+      status: 'succeeded',
+      userPrompt: '保温杯推广图',
+      brief: {},
+      plan: {},
+      planVersion: 1,
+    }
+
+    expect(getRunStatusCopy({
+      ...baseRun,
+      metadata: { reviewStatus: 'accepted', review: { decision: 'accepted' } },
+    }).label).toBe('已验收')
+    expect(getRunStatusCopy({
+      ...baseRun,
+      metadata: { recipeSaved: true, reviewStatus: 'accepted' },
+    }).label).toBe('已沉淀')
   })
 
   it('describes local edit draft states', () => {
