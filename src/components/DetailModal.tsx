@@ -610,7 +610,7 @@ export default function DetailModal() {
   }, [authSessionToken, currentOutputImageId, currentServerOutput?.outputId, sharesByImageId])
 
   useEffect(() => {
-    if (!currentOutputImageId || !currentServerOutput?.outputId) return
+    if (!currentOutputImageId || !currentServerOutput?.outputId || inspirationEligibilityByImageId[currentOutputImageId]) return
     let cancelled = false
     setInspirationLoading(true)
     setInspirationError('')
@@ -631,7 +631,7 @@ export default function DetailModal() {
     return () => {
       cancelled = true
     }
-  }, [authSessionToken, currentOutputImageId, currentServerOutput?.outputId, detailTaskId])
+  }, [authSessionToken, currentOutputImageId, currentServerOutput?.outputId, detailTaskId, inspirationEligibilityByImageId])
 
   useEffect(() => {
     if (!currentOutputImageId || !currentServerOutput?.outputId) return
@@ -1091,9 +1091,9 @@ export default function DetailModal() {
 
         {/* 左侧：图片 */}
         <div className="md:w-1/2 w-full h-64 md:h-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center md:items-start flex-shrink-0 min-h-[16rem] md:pt-14 md:pb-4">
-          {task.status === 'done' && outputLen > 0 && currentOutputPreviewSrc && (
+          {task.status === 'done' && outputLen > 0 && (
             <div className="flex h-full w-full flex-col px-3 pb-3 md:px-4 md:pb-4">
-              <div className="relative flex min-h-0 flex-1 items-center justify-center">
+              <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden">
                 <div className="absolute right-0 top-[1px] z-20 flex items-center gap-1.5">
                   <div className="relative group flex">
                     <button
@@ -1133,30 +1133,37 @@ export default function DetailModal() {
                     </div>
                   )}
                 </div>
-                <img
-                  src={currentOutputPreviewSrc}
-                  data-image-id={currentOutputImageId}
-                  className="saveable-image max-h-full max-w-full cursor-pointer object-contain"
-                  onLoad={(e) => {
-                    const image = e.currentTarget
-                    if (currentOutputImageId && image.naturalWidth > 0 && image.naturalHeight > 0) {
-                      const nextRatio = formatImageRatio(image.naturalWidth, image.naturalHeight)
-                      const nextSize = `${image.naturalWidth}×${image.naturalHeight}`
-                      setImageRatios((prev) => prev[currentOutputImageId] === nextRatio ? prev : {
-                        ...prev,
-                        [currentOutputImageId]: nextRatio,
-                      })
-                      setImageSizes((prev) => prev[currentOutputImageId] === nextSize ? prev : {
-                        ...prev,
-                        [currentOutputImageId]: nextSize,
-                      })
+                {currentOutputPreviewSrc ? (
+                  <img
+                    src={currentOutputPreviewSrc}
+                    data-image-id={currentOutputImageId}
+                    className="saveable-image max-h-full max-w-full cursor-pointer object-contain"
+                    onLoad={(e) => {
+                      const image = e.currentTarget
+                      if (currentOutputImageId && image.naturalWidth > 0 && image.naturalHeight > 0) {
+                        const nextRatio = formatImageRatio(image.naturalWidth, image.naturalHeight)
+                        const nextSize = `${image.naturalWidth}×${image.naturalHeight}`
+                        setImageRatios((prev) => prev[currentOutputImageId] === nextRatio ? prev : {
+                          ...prev,
+                          [currentOutputImageId]: nextRatio,
+                        })
+                        setImageSizes((prev) => prev[currentOutputImageId] === nextSize ? prev : {
+                          ...prev,
+                          [currentOutputImageId]: nextSize,
+                        })
+                      }
+                    }}
+                    onClick={() =>
+                      setLightboxImageId(task.outputImages[imageIndex], task.outputImages)
                     }
-                  }}
-                  onClick={() =>
-                    setLightboxImageId(task.outputImages[imageIndex], task.outputImages)
-                  }
-                  alt=""
-                />
+                    alt=""
+                  />
+                ) : (
+                  <svg className="h-8 w-8 animate-spin text-gray-400 dark:text-gray-500" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                )}
                 <div data-selectable-text className="absolute left-0 top-[1px] flex items-center gap-1.5">
                   {currentImageRatio && currentImageSize ? (
                     <>
@@ -1210,7 +1217,7 @@ export default function DetailModal() {
                   </>
                 )}
               </div>
-              <div className="mt-3 w-full">
+              <div className="mt-3 w-full shrink-0 md:min-h-[12rem]">
                 <InspirationPublishPanel
                   hasServerOutput={Boolean(currentServerOutput?.outputId)}
                   loading={inspirationLoading}

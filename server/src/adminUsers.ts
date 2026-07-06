@@ -114,7 +114,7 @@ function serializeLedger(row: LedgerRow) {
   }
 }
 
-async function deleteUserWithDependencies(db: Db, userId: string, adminUserId: string) {
+async function deleteUserWithDependencies(db: Pool, userId: string, adminUserId: string) {
   return await withTransaction(db, async (tx) => {
     const before = (await tx.query<UserRow>(`
       SELECT u.id, u.email, u.display_name, u.status, u.email_verified_at::text, u.password_hash,
