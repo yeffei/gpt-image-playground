@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { appendReviewTagToNote, buildAgentReferencePayload, buildBranchInspectorSummary, buildCreativeReviewItems, buildDerivedRoutePlanInput, buildExecutionAssetActionNotice, buildExecutionControlSummary, buildHistoryAssetNextStepSummary, buildLocalEditDraftSummary, buildOutputActionSummary, buildOutputAssetActionNotice, buildOutputAssetActions, buildRecoverableAssetSummary, buildRecoveryActionSummary, buildRetryPromptFromRun, buildRouteSourceSummary, buildTimelineStepSections, buildVersionComparisonSummary, buildWorkflowNodeStates, findAgentLibraryDetailTask, findOutputSelectionTarget, getActiveOutputReviewSummary, getInlineReferenceAssetFromRecipe, getInputImageFromReferenceAsset, getLocalEditDraftCopy, getPlanOverrideState, getProjectVersionHistory, getRecipeSourceReferenceRole, getReviewIterationOutputReference, getReviewIterationRouteState, getRouteLifecycleCopy, getRunPrimaryOutput, getRunStatusCopy, getSelectedOutputOpenTarget, getStageVersionStripItems, loadServerOutputAsLocalImage, mergeAgentReferenceImages } from './AgentWorkflowView'
+import { appendReviewTagToNote, buildAgentReferencePayload, buildBranchInspectorSummary, buildCreativeReviewItems, buildDerivedRoutePlanInput, buildExecutionAssetActionNotice, buildExecutionControlSummary, buildHistoryAssetNextStepSummary, buildLocalEditDraftSummary, buildOutputActionSummary, buildOutputAssetActionNotice, buildOutputAssetActions, buildRecoverableAssetSummary, buildRecoveryActionSummary, buildRetryPromptFromRun, buildRouteSourceSummary, buildTimelineStepSections, buildVersionComparisonSummary, buildWorkflowNodeStates, filterAgentProjects, findAgentLibraryDetailTask, findOutputSelectionTarget, getActiveOutputReviewSummary, getInlineReferenceAssetFromRecipe, getInputImageFromReferenceAsset, getLocalEditDraftCopy, getPlanOverrideState, getProjectVersionHistory, getRecipeSourceReferenceRole, getReviewIterationOutputReference, getReviewIterationRouteState, getRouteLifecycleCopy, getRunPrimaryOutput, getRunStatusCopy, getSelectedOutputOpenTarget, getStageVersionStripItems, loadServerOutputAsLocalImage, mergeAgentReferenceImages } from './AgentWorkflowView'
 import { storeImage } from '../lib/db'
 import type { AgentRun, AgentRunOutput, AgentStep } from '../lib/agentWorkflowApi'
 
@@ -154,6 +154,38 @@ describe('AgentWorkflowView creative review helpers', () => {
       ...baseRun,
       metadata: { recipeSaved: true, reviewStatus: 'accepted' },
     }).label).toBe('已沉淀')
+  })
+
+  it('filters agent projects by project status and searchable fields', () => {
+    const runs: AgentRun[] = [
+      {
+        id: 'run_active',
+        status: 'planned',
+        projectStatus: 'active',
+        title: '冬季保温杯首发项目',
+        userPrompt: '做一张小红书推广图',
+        category: '品牌广告',
+        brief: {},
+        plan: {},
+        planVersion: 1,
+      },
+      {
+        id: 'run_archived',
+        status: 'succeeded',
+        projectStatus: 'archived',
+        title: '夏季耳机广告',
+        userPrompt: '耳机电商主图',
+        category: '产品静物',
+        brief: {},
+        plan: {},
+        planVersion: 1,
+      },
+    ]
+
+    expect(filterAgentProjects(runs).map((item) => item.id)).toEqual(['run_active'])
+    expect(filterAgentProjects(runs, { filter: 'archived' }).map((item) => item.id)).toEqual(['run_archived'])
+    expect(filterAgentProjects(runs, { filter: 'all', query: '耳机' }).map((item) => item.id)).toEqual(['run_archived'])
+    expect(filterAgentProjects(runs, { filter: 'active', query: '品牌广告' }).map((item) => item.id)).toEqual(['run_active'])
   })
 
   it('describes local edit draft states', () => {

@@ -37,6 +37,8 @@ type AgentRunRow = {
   entrypoint: string
   client_request_id?: string | null
   title?: string | null
+  project_status?: 'active' | 'archived' | null
+  archived_at?: string | null
   user_prompt: string
   normalized_prompt?: string | null
   category?: string | null
@@ -61,7 +63,6 @@ type AgentRunRow = {
   created_at: string
   updated_at: string
 }
-
 type AgentStepRow = {
   id: string
   run_id: string
@@ -284,7 +285,6 @@ async function assertValidRerunPlanReferences(db: Db, input: {
     taskId: sourceRun.generation_task_id ?? taskId,
   })
 }
-
 async function assertValidPlanOutputReferences(db: Db, input: {
   references: unknown[]
   userId: string
@@ -455,6 +455,10 @@ function normalizePlanVersion(value: unknown) {
 function normalizeReviewDecision(value: unknown): AgentRunReviewDecision {
   if (value === 'accepted' || value === 'needs_iteration') return value
   throw new ApiError(400, 'invalid_agent_review_decision', '请选择有效的评审结论')
+}
+
+function normalizeAgentProjectStatus(value: unknown): 'active' | 'archived' {
+  return value === 'archived' ? 'archived' : 'active'
 }
 
 function inferCategory(prompt: string, preference?: string | null) {
@@ -660,6 +664,8 @@ function serializeAgentRun(row: AgentRunRow) {
     entrypoint: row.entrypoint,
     clientRequestId: row.client_request_id ?? null,
     title: row.title ?? null,
+    projectStatus: row.project_status ?? 'active',
+    archivedAt: row.archived_at ?? null,
     userPrompt: row.user_prompt,
     normalizedPrompt: row.normalized_prompt ?? null,
     category: row.category ?? null,
@@ -939,7 +945,7 @@ function buildRecipeInputFromPayload(payload: Record<string, unknown>, sourceRun
 
 async function getOwnedRun(db: Db, runId: string, userId: string) {
   return (await db.query<AgentRunRow>(`
-    SELECT id, user_id, status, source_type, entrypoint, client_request_id, title, user_prompt, normalized_prompt,
+    SELECT id, user_id, status, source_type, entrypoint, client_request_id, title, project_status, archived_at::text, user_prompt, normalized_prompt,
       category, category_confidence::text, brief_json, plan_json, generation_request_json, reference_json, metadata_json,
       recommended_model_sku, recommended_output_count, estimated_points::text, confirmed_points::text,
       generation_task_id, plan_version, confirmed_at::text, started_at::text, finished_at::text, canceled_at::text,
@@ -952,7 +958,7 @@ async function getOwnedRun(db: Db, runId: string, userId: string) {
 
 async function lockOwnedRun(db: Db, runId: string, userId: string) {
   return (await db.query<AgentRunRow>(`
-    SELECT id, user_id, status, source_type, entrypoint, client_request_id, title, user_prompt, normalized_prompt,
+    SELECT id, user_id, status, source_type, entrypoint, client_request_id, title, project_status, archived_at::text, user_prompt, normalized_prompt,
       category, category_confidence::text, brief_json, plan_json, generation_request_json, reference_json, metadata_json,
       recommended_model_sku, recommended_output_count, estimated_points::text, confirmed_points::text,
       generation_task_id, plan_version, confirmed_at::text, started_at::text, finished_at::text, canceled_at::text,
@@ -1103,7 +1109,7 @@ async function saveAgentRunReview(db: Db, input: {
     WHERE id = $3
       AND user_id = $4
       AND status = 'succeeded'
-    RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, user_prompt, normalized_prompt,
+    RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, project_status, archived_at::text, user_prompt, normalized_prompt,
       category, category_confidence::text, brief_json, plan_json, generation_request_json, reference_json, metadata_json,
       recommended_model_sku, recommended_output_count, estimated_points::text, confirmed_points::text,
       generation_task_id, plan_version, confirmed_at::text, started_at::text, finished_at::text, canceled_at::text,
@@ -1150,7 +1156,7 @@ async function saveAgentRunPrimaryOutput(db: Db, input: {
     WHERE id = $3
       AND user_id = $4
       AND status = 'succeeded'
-    RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, user_prompt, normalized_prompt,
+    RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, project_status, archived_at::text, user_prompt, normalized_prompt,
       category, category_confidence::text, brief_json, plan_json, generation_request_json, reference_json, metadata_json,
       recommended_model_sku, recommended_output_count, estimated_points::text, confirmed_points::text,
       generation_task_id, plan_version, confirmed_at::text, started_at::text, finished_at::text, canceled_at::text,
@@ -1189,7 +1195,7 @@ async function markAgentRunRecipeSaved(db: Db, input: {
     WHERE id = $3
       AND user_id = $4
       AND status = 'succeeded'
-    RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, user_prompt, normalized_prompt,
+    RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, project_status, archived_at::text, user_prompt, normalized_prompt,
       category, category_confidence::text, brief_json, plan_json, generation_request_json, reference_json, metadata_json,
       recommended_model_sku, recommended_output_count, estimated_points::text, confirmed_points::text,
       generation_task_id, plan_version, confirmed_at::text, started_at::text, finished_at::text, canceled_at::text,
@@ -1205,7 +1211,7 @@ async function markAgentRunRecipeSaved(db: Db, input: {
 async function findRunByClientRequestId(db: Db, userId: string, clientRequestId: string | null) {
   if (!clientRequestId) return null
   return (await db.query<AgentRunRow>(`
-    SELECT id, user_id, status, source_type, entrypoint, client_request_id, title, user_prompt, normalized_prompt,
+    SELECT id, user_id, status, source_type, entrypoint, client_request_id, title, project_status, archived_at::text, user_prompt, normalized_prompt,
       category, category_confidence::text, brief_json, plan_json, generation_request_json, reference_json, metadata_json,
       recommended_model_sku, recommended_output_count, estimated_points::text, confirmed_points::text,
       generation_task_id, plan_version, confirmed_at::text, started_at::text, finished_at::text, canceled_at::text,
@@ -1325,15 +1331,15 @@ async function createPlannedRun(db: Pool, userId: string, prompt: string, source
     }
     const run = (await tx.query<AgentRunRow>(`
       INSERT INTO agent_runs (
-        id, user_id, status, source_type, entrypoint, client_request_id, title, user_prompt, normalized_prompt,
+        id, user_id, status, source_type, entrypoint, client_request_id, title, project_status, archived_at, user_prompt, normalized_prompt,
         category, category_confidence, brief_json, plan_json, generation_request_json, reference_json, metadata_json,
         recommended_model_sku, recommended_output_count, estimated_points, plan_version, created_at, updated_at
       ) VALUES (
-        $1, $2, 'planned', $3, 'agent_workflow', $4, $5, $6, $7,
+        $1, $2, 'planned', $3, 'agent_workflow', $4, $5, 'active', NULL, $6, $7,
         $8, $9, $10, $11, $12, $13, $14,
         $15, $16, $17, 1, $18, $18
       )
-      RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, user_prompt, normalized_prompt,
+      RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, project_status, archived_at::text, user_prompt, normalized_prompt,
         category, category_confidence::text, brief_json, plan_json, generation_request_json, reference_json, metadata_json,
         recommended_model_sku, recommended_output_count, estimated_points::text, confirmed_points::text,
         generation_task_id, plan_version, confirmed_at::text, started_at::text, finished_at::text, canceled_at::text,
@@ -1570,7 +1576,7 @@ async function syncRunWithGenerationTask(db: Db, run: AgentRunRow) {
       metadata_json = $5,
       updated_at = $2
     WHERE id = $6 AND user_id = $7
-    RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, user_prompt, normalized_prompt,
+    RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, project_status, archived_at::text, user_prompt, normalized_prompt,
       category, category_confidence::text, brief_json, plan_json, generation_request_json, reference_json, metadata_json,
       recommended_model_sku, recommended_output_count, estimated_points::text, confirmed_points::text,
       generation_task_id, plan_version, confirmed_at::text, started_at::text, finished_at::text, canceled_at::text,
@@ -1642,7 +1648,7 @@ async function reserveAgentRunStart(db: Db, input: { runId: string; userId: stri
       AND status = 'confirmed'
       AND plan_version = $4
       AND generation_task_id IS NULL
-    RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, user_prompt, normalized_prompt,
+    RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, project_status, archived_at::text, user_prompt, normalized_prompt,
       category, category_confidence::text, brief_json, plan_json, generation_request_json, reference_json, metadata_json,
       recommended_model_sku, recommended_output_count, estimated_points::text, confirmed_points::text,
       generation_task_id, plan_version, confirmed_at::text, started_at::text, finished_at::text, canceled_at::text,
@@ -1667,7 +1673,7 @@ async function attachGenerationTaskToRun(db: Db, input: {
     SET generation_task_id = $1,
       updated_at = $2
     WHERE id = $3 AND user_id = $4 AND status = 'running'
-    RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, user_prompt, normalized_prompt,
+    RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, project_status, archived_at::text, user_prompt, normalized_prompt,
       category, category_confidence::text, brief_json, plan_json, generation_request_json, reference_json, metadata_json,
       recommended_model_sku, recommended_output_count, estimated_points::text, confirmed_points::text,
       generation_task_id, plan_version, confirmed_at::text, started_at::text, finished_at::text, canceled_at::text,
@@ -1686,7 +1692,7 @@ async function restoreAgentRunAfterStartFailure(db: Db, run: AgentRunRow, error:
       generation_task_id = NULL,
       updated_at = $1
     WHERE id = $2 AND user_id = $3 AND status = 'running' AND generation_task_id IS NULL
-    RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, user_prompt, normalized_prompt,
+    RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, project_status, archived_at::text, user_prompt, normalized_prompt,
       category, category_confidence::text, brief_json, plan_json, generation_request_json, reference_json, metadata_json,
       recommended_model_sku, recommended_output_count, estimated_points::text, confirmed_points::text,
       generation_task_id, plan_version, confirmed_at::text, started_at::text, finished_at::text, canceled_at::text,
@@ -1841,7 +1847,7 @@ export function registerAgentWorkflowRoutes(app: FastifyInstance, db: Pool, env:
             confirmed_at = $1,
             updated_at = $1
           WHERE id = $10 AND user_id = $11
-          RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, user_prompt, normalized_prompt,
+          RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, project_status, archived_at::text, user_prompt, normalized_prompt,
             category, category_confidence::text, brief_json, plan_json, generation_request_json, reference_json, metadata_json,
             recommended_model_sku, recommended_output_count, estimated_points::text, confirmed_points::text,
             generation_task_id, plan_version, confirmed_at::text, started_at::text, finished_at::text, canceled_at::text,
@@ -1911,7 +1917,7 @@ export function registerAgentWorkflowRoutes(app: FastifyInstance, db: Pool, env:
             plan_version = plan_version + 1,
             updated_at = $1
           WHERE id = $10 AND user_id = $11 AND status = 'planned'
-          RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, user_prompt, normalized_prompt,
+          RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, project_status, archived_at::text, user_prompt, normalized_prompt,
             category, category_confidence::text, brief_json, plan_json, generation_request_json, reference_json, metadata_json,
             recommended_model_sku, recommended_output_count, estimated_points::text, confirmed_points::text,
             generation_task_id, plan_version, confirmed_at::text, started_at::text, finished_at::text, canceled_at::text,
@@ -2023,6 +2029,88 @@ export function registerAgentWorkflowRoutes(app: FastifyInstance, db: Pool, env:
     }
   })
 
+  app.patch('/api/agent-runs/:id/project', async (request, reply) => {
+    try {
+      const session = await requireUserSession(db, request.headers.authorization)
+      const params = isRecord(request.params) ? request.params : {}
+      const runId = typeof params.id === 'string' ? params.id.trim() : ''
+      if (!runId) throw new ApiError(400, 'missing_agent_run_id', '缺少创作流编号')
+      const payload = isRecord(request.body) ? request.body : {}
+      const title = normalizeRequiredText(payload.title, MAX_TITLE_LENGTH, 'invalid_agent_project_title', '请输入项目名称')
+      const updatedAt = nowIso()
+      const run = (await db.query<AgentRunRow>(`
+        UPDATE agent_runs
+        SET title = $1,
+          updated_at = $2
+        WHERE id = $3
+          AND user_id = $4
+        RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, project_status, archived_at::text, user_prompt, normalized_prompt,
+          category, category_confidence::text, brief_json, plan_json, generation_request_json, reference_json, metadata_json,
+          recommended_model_sku, recommended_output_count, estimated_points::text, confirmed_points::text,
+          generation_task_id, plan_version, confirmed_at::text, started_at::text, finished_at::text, canceled_at::text,
+          failure_kind, error_summary, created_at::text, updated_at::text
+      `, [title, updatedAt, runId, session.user_id])).rows[0]
+      if (!run) throw new ApiError(404, 'agent_run_not_found', '创作流不存在')
+      return reply.send(await buildRunDetailPayload(db, run, session.user_id))
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
+  app.post('/api/agent-runs/:id/archive', async (request, reply) => {
+    try {
+      const session = await requireUserSession(db, request.headers.authorization)
+      const params = isRecord(request.params) ? request.params : {}
+      const runId = typeof params.id === 'string' ? params.id.trim() : ''
+      if (!runId) throw new ApiError(400, 'missing_agent_run_id', '缺少创作流编号')
+      const archivedAt = nowIso()
+      const run = (await db.query<AgentRunRow>(`
+        UPDATE agent_runs
+        SET project_status = 'archived',
+          archived_at = $1,
+          updated_at = $1
+        WHERE id = $2
+          AND user_id = $3
+        RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, project_status, archived_at::text, user_prompt, normalized_prompt,
+          category, category_confidence::text, brief_json, plan_json, generation_request_json, reference_json, metadata_json,
+          recommended_model_sku, recommended_output_count, estimated_points::text, confirmed_points::text,
+          generation_task_id, plan_version, confirmed_at::text, started_at::text, finished_at::text, canceled_at::text,
+          failure_kind, error_summary, created_at::text, updated_at::text
+      `, [archivedAt, runId, session.user_id])).rows[0]
+      if (!run) throw new ApiError(404, 'agent_run_not_found', '创作流不存在')
+      return reply.send(await buildRunDetailPayload(db, run, session.user_id))
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
+  app.post('/api/agent-runs/:id/restore', async (request, reply) => {
+    try {
+      const session = await requireUserSession(db, request.headers.authorization)
+      const params = isRecord(request.params) ? request.params : {}
+      const runId = typeof params.id === 'string' ? params.id.trim() : ''
+      if (!runId) throw new ApiError(400, 'missing_agent_run_id', '缺少创作流编号')
+      const restoredAt = nowIso()
+      const run = (await db.query<AgentRunRow>(`
+        UPDATE agent_runs
+        SET project_status = 'active',
+          archived_at = NULL,
+          updated_at = $1
+        WHERE id = $2
+          AND user_id = $3
+        RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, project_status, archived_at::text, user_prompt, normalized_prompt,
+          category, category_confidence::text, brief_json, plan_json, generation_request_json, reference_json, metadata_json,
+          recommended_model_sku, recommended_output_count, estimated_points::text, confirmed_points::text,
+          generation_task_id, plan_version, confirmed_at::text, started_at::text, finished_at::text, canceled_at::text,
+          failure_kind, error_summary, created_at::text, updated_at::text
+      `, [restoredAt, runId, session.user_id])).rows[0]
+      if (!run) throw new ApiError(404, 'agent_run_not_found', '创作流不存在')
+      return reply.send(await buildRunDetailPayload(db, run, session.user_id))
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
   app.post('/api/agent-runs/:id/review', async (request, reply) => {
     try {
       const session = await requireUserSession(db, request.headers.authorization)
@@ -2105,7 +2193,7 @@ export function registerAgentWorkflowRoutes(app: FastifyInstance, db: Pool, env:
           finished_at = CASE WHEN $1 IN ('canceled', 'failed', 'succeeded') THEN $2 ELSE finished_at END,
           updated_at = $2
         WHERE id = $3 AND user_id = $4
-        RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, user_prompt, normalized_prompt,
+        RETURNING id, user_id, status, source_type, entrypoint, client_request_id, title, project_status, archived_at::text, user_prompt, normalized_prompt,
           category, category_confidence::text, brief_json, plan_json, generation_request_json, reference_json, metadata_json,
           recommended_model_sku, recommended_output_count, estimated_points::text, confirmed_points::text,
           generation_task_id, plan_version, confirmed_at::text, started_at::text, finished_at::text, canceled_at::text,
@@ -2172,29 +2260,38 @@ export function registerAgentWorkflowRoutes(app: FastifyInstance, db: Pool, env:
       const limit = normalizePaginationNumber(query.limit, 20, MAX_LIMIT)
       const offset = normalizePaginationNumber(query.offset, 0, 100000)
       const status = typeof query.status === 'string' ? query.status.trim() : ''
+      const projectStatus = normalizeAgentProjectStatus(query.projectStatus)
+      const search = normalizeOptionalText(query.search, 120)
       const allowedStatuses: AgentRunStatus[] = ['draft', 'planned', 'confirmed', 'running', 'succeeded', 'failed', 'canceled']
       const useStatus = allowedStatuses.includes(status as AgentRunStatus)
       const values: unknown[] = [session.user_id]
       const where = ['user_id = $1']
+      values.push(projectStatus)
+      where.push(`project_status = $${values.length}`)
       if (useStatus) {
         values.push(status)
         where.push(`status = $${values.length}`)
+      }
+      if (search) {
+        values.push(`%${search.toLowerCase()}%`)
+        where.push(`(lower(coalesce(title, '')) LIKE $${values.length} OR lower(user_prompt) LIKE $${values.length} OR lower(coalesce(category, '')) LIKE $${values.length})`)
       }
       values.push(limit)
       const limitIndex = values.length
       values.push(offset)
       const offsetIndex = values.length
       const whereSql = where.join(' AND ')
-      const total = (await db.query<{ total: string }>(`SELECT COUNT(*)::text AS total FROM agent_runs WHERE ${whereSql}`, values.slice(0, useStatus ? 2 : 1))).rows[0]
+      const countValues = values.slice(0, offsetIndex - 2)
+      const total = (await db.query<{ total: string }>(`SELECT COUNT(*)::text AS total FROM agent_runs WHERE ${whereSql}`, countValues)).rows[0]
       const rows = (await db.query<AgentRunRow>(`
-        SELECT id, user_id, status, source_type, entrypoint, client_request_id, title, user_prompt, normalized_prompt,
+        SELECT id, user_id, status, source_type, entrypoint, client_request_id, title, project_status, archived_at::text, user_prompt, normalized_prompt,
           category, category_confidence::text, brief_json, plan_json, generation_request_json, reference_json, metadata_json,
           recommended_model_sku, recommended_output_count, estimated_points::text, confirmed_points::text,
           generation_task_id, plan_version, confirmed_at::text, started_at::text, finished_at::text, canceled_at::text,
           failure_kind, error_summary, created_at::text, updated_at::text
         FROM agent_runs
         WHERE ${whereSql}
-        ORDER BY created_at DESC
+        ORDER BY updated_at DESC, created_at DESC
         LIMIT $${limitIndex} OFFSET $${offsetIndex}
       `, values)).rows
       const syncedRows = []

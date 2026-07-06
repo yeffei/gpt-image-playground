@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import {
   AgentWorkflowApiError,
+  archiveAgentRun,
   archiveImageRecipe,
   cancelAgentRun,
   confirmAgentRun,
@@ -12,9 +13,11 @@ import {
   replanAgentRun,
   reviewAgentRun,
   restoreImageRecipe,
+  restoreAgentRun,
   retryAgentRun,
   selectAgentRunPrimaryOutput,
   startAgentRun,
+  updateAgentRunProject,
   type ImageRecipe,
   type AgentRun,
   type AgentRunListPayload,
@@ -23,6 +26,7 @@ import {
   type AgentRunStartPayload,
   type AgentRunStatus,
   type AgentGenerationTaskSummary,
+  type AgentProjectStatus,
   type AgentStep,
   type PlanAgentRunInput,
 } from '../lib/agentWorkflowApi'
@@ -44,7 +48,7 @@ import {
 } from './icons'
 import './AgentWorkflowView.css'
 
-type BusyAction = 'plan' | 'replan' | 'variant' | 'localEdit' | 'layout' | 'upscaleRoute' | 'reviewIteration' | 'commerceRoute' | 'coverRoute' | 'posterRoute' | 'premiumRoute' | 'socialRoute' | 'confirm' | 'start' | 'refresh' | 'reference' | 'cancel' | 'history' | null
+type BusyAction = 'plan' | 'replan' | 'variant' | 'localEdit' | 'layout' | 'upscaleRoute' | 'reviewIteration' | 'commerceRoute' | 'coverRoute' | 'posterRoute' | 'premiumRoute' | 'socialRoute' | 'confirm' | 'start' | 'refresh' | 'reference' | 'cancel' | 'history' | 'project' | null
 type RecipeBusyAction = 'save' | 'list' | 'archive' | 'use' | null
 type ConversionMode = 'commerce' | 'cover' | 'poster'
 type DerivedRouteMode = 'layout' | 'upscale' | ConversionMode
@@ -250,6 +254,8 @@ type AssetActionNotice = {
   title: string
   detail: string
 }
+
+type ProjectListFilter = AgentProjectStatus | 'all'
 
 const CATEGORY_OPTIONS = ['自动判断', '品牌广告', '产品静物', '人像摄影', '空间氛围', 'UI / 社媒视觉', '角色设定', '信息图解', '海报插画']
 const ASPECT_RATIO_OPTIONS = ['自动', '1:1', '4:5', '3:4', '16:9', '9:16']
@@ -1391,6 +1397,27 @@ export function buildVersionComparisonSummary(
   }
 }
 
+export function filterAgentProjects(
+  runs: AgentRun[],
+  input: { query?: string; filter?: ProjectListFilter } = {},
+) {
+  const query = input.query?.trim().toLowerCase() ?? ''
+  const filter = input.filter ?? 'active'
+  return runs.filter((item) => {
+    const status = item.projectStatus ?? 'active'
+    if (filter !== 'all' && status !== filter) return false
+    if (!query) return true
+    const searchable = [
+      item.title,
+      item.userPrompt,
+      item.category,
+      getRunBranchInfo(item).label,
+      getRunStatusCopy(item).label,
+    ].filter(Boolean).join(' ').toLowerCase()
+    return searchable.includes(query)
+  })
+}
+
 export function getActiveOutputReviewSummary(input: {
   selectedImageId: string | null
   outputImageIds: string[]
@@ -2266,6 +2293,9 @@ export default function AgentWorkflowView() {
   const [busyAction, setBusyAction] = useState<BusyAction>(null)
   const [recipeBusyAction, setRecipeBusyAction] = useState<RecipeBusyAction>(null)
   const [error, setError] = useState('')
+  const [projectSearch, setProjectSearch] = useState('')
+  const [projectFilter, setProjectFilter] = useState<ProjectListFilter>('active')
+  const [projectTitleDraft, setProjectTitleDraft] = useState('')
   const [selectedOutputImageId, setSelectedOutputImageId] = useState<string | null>(null)
   const [serverGenerationTask, setServerGenerationTask] = useState<AgentGenerationTaskSummary | null>(null)
   const [serverOutputs, setServerOutputs] = useState<AgentRunOutput[]>([])
@@ -2412,7 +2442,12 @@ export default function AgentWorkflowView() {
     negativePromptDraft,
   }), [aspectRatio, category, negativePromptDraft, outputCount, outputSize, planPromptDraft, run])
   const versionHistory = useMemo(() => getProjectVersionHistory(history, run), [history, run])
-  const historyPreview = versionHistory.slice(0, 4)
+  const projectList = useMemo(() => filterAgentProjects(history, {
+    query: projectSearch,
+    filter: projectFilter,
+  }), [history, projectFilter, projectSearch])
+  const projectListPreview = projectList.slice(0, 6)
+  const historyPreview = versionHistory.filter((entry) => (entry.run.projectStatus ?? 'active') === 'active').slice(0, 4)
   const stageVersionStripItems = useMemo(() => getStageVersionStripItems(versionHistory, run), [run, versionHistory])
   const versionComparisonSummary = useMemo(() => buildVersionComparisonSummary(versionHistory, run), [run, versionHistory])
   const executionControlSummary = useMemo(() => buildExecutionControlSummary({
@@ -2453,6 +2488,10 @@ export default function AgentWorkflowView() {
   useEffect(() => {
     setReviewNote(review.note)
   }, [review.note])
+
+  useEffect(() => {
+    setProjectTitleDraft(run?.title || run?.userPrompt || '')
+  }, [run?.id, run?.title, run?.userPrompt])
 
   useEffect(() => {
     if (!selectedOutputImageId || outputImageIds.includes(selectedOutputImageId)) return
@@ -2517,8 +2556,13 @@ export default function AgentWorkflowView() {
     if (!authSessionToken) return
     if (!silent) setBusyAction('history')
     try {
-      const payload: AgentRunListPayload = await listAgentRuns({ limit: 8 }, authSessionToken)
-      setHistory(payload.runs)
+      const [activePayload, archivedPayload]: AgentRunListPayload[] = await Promise.all([
+        listAgentRuns({ projectStatus: 'active', limit: 12 }, authSessionToken),
+        listAgentRuns({ projectStatus: 'archived', limit: 12 }, authSessionToken),
+      ])
+      const merged = new Map<string, AgentRun>()
+      ;[...activePayload.runs, ...archivedPayload.runs].forEach((item) => merged.set(item.id, item))
+      setHistory(Array.from(merged.values()).sort((left, right) => getRunUpdatedTime(right) - getRunUpdatedTime(left)))
     } catch (err) {
       if (!silent) setError(getErrorMessage(err))
     } finally {
@@ -3703,6 +3747,81 @@ export default function AgentWorkflowView() {
     }
   }
 
+  const handleRenameProject = async (targetRun: AgentRun | null = run) => {
+    if (!authSessionToken || !targetRun) return
+    const nextTitle = projectTitleDraft.trim()
+    if (!nextTitle) {
+      showToast('请输入项目名称', 'error')
+      return
+    }
+    setBusyAction('project')
+    setError('')
+    try {
+      const payload = await updateAgentRunProject(targetRun.id, { title: nextTitle }, authSessionToken)
+      const updatedRun = applyPayload(payload)
+      setHistory((current) => current.map((item) => item.id === updatedRun.id ? updatedRun : item))
+      setAssetActionNotice({
+        target: 'Project Assets',
+        title: '项目名称已更新',
+        detail: nextTitle,
+      })
+      showToast('项目名称已更新', 'success')
+      void loadHistory(true)
+    } catch (err) {
+      setError(getErrorMessage(err))
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  const handleArchiveProject = async (targetRun: AgentRun) => {
+    if (!authSessionToken) return
+    setBusyAction('project')
+    setError('')
+    try {
+      const payload = await archiveAgentRun(targetRun.id, authSessionToken)
+      const updatedRun = payload.run
+      if (run?.id === updatedRun.id) applyPayload(payload)
+      setHistory((current) => current.map((item) => item.id === updatedRun.id ? updatedRun : item))
+      setProjectFilter('archived')
+      setAssetActionNotice({
+        target: 'Project Assets',
+        title: '项目已归档',
+        detail: updatedRun.title || updatedRun.userPrompt,
+      })
+      showToast('项目已归档，可在归档筛选中恢复', 'success')
+      void loadHistory(true)
+    } catch (err) {
+      setError(getErrorMessage(err))
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  const handleRestoreProject = async (targetRun: AgentRun) => {
+    if (!authSessionToken) return
+    setBusyAction('project')
+    setError('')
+    try {
+      const payload = await restoreAgentRun(targetRun.id, authSessionToken)
+      const updatedRun = payload.run
+      if (run?.id === updatedRun.id) applyPayload(payload)
+      setHistory((current) => current.map((item) => item.id === updatedRun.id ? updatedRun : item))
+      setProjectFilter('active')
+      setAssetActionNotice({
+        target: 'Project Assets',
+        title: '项目已恢复',
+        detail: updatedRun.title || updatedRun.userPrompt,
+      })
+      showToast('项目已恢复到当前项目列表', 'success')
+      void loadHistory(true)
+    } catch (err) {
+      setError(getErrorMessage(err))
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
   const jumpToLineageSource = async () => {
     if (!authSessionToken || !lineage.sourceRunId) return
     const sourceRun = history.find((item) => item.id === lineage.sourceRunId)
@@ -3794,6 +3913,23 @@ export default function AgentWorkflowView() {
         <div className="agent-project-title">
           <span className="agent-workflow-eyebrow">Agent 创作项目</span>
           <h1>{run?.title || '当前创作项目'}</h1>
+          {run ? (
+            <div className="agent-project-name-editor">
+              <input
+                value={projectTitleDraft}
+                onChange={(event) => setProjectTitleDraft(event.target.value)}
+                maxLength={120}
+                aria-label="项目名称"
+              />
+              <button
+                type="button"
+                onClick={() => void handleRenameProject()}
+                disabled={isBusy || !projectTitleDraft.trim() || projectTitleDraft.trim() === (run.title || run.userPrompt)}
+              >
+                保存
+              </button>
+            </div>
+          ) : null}
         </div>
         <div className="agent-project-meta" aria-label="项目状态">
           <span className={`agent-status-badge is-${statusCopy.tone}`}>{statusCopy.label}</span>
@@ -4788,21 +4924,44 @@ export default function AgentWorkflowView() {
           </div>
 
           <div className="agent-asset-column">
-            <h3>版本与最近项目</h3>
-            {versionHistory.length ? (
+            <div className="agent-project-list-head">
+              <h3>项目管理</h3>
+              <div className="agent-project-list-filters" aria-label="项目筛选">
+                <input
+                  value={projectSearch}
+                  onChange={(event) => setProjectSearch(event.target.value)}
+                  placeholder="搜索项目"
+                  aria-label="搜索项目"
+                />
+                <div>
+                  {(['active', 'archived', 'all'] as ProjectListFilter[]).map((filter) => (
+                    <button
+                      key={filter}
+                      type="button"
+                      className={projectFilter === filter ? 'active' : undefined}
+                      onClick={() => setProjectFilter(filter)}
+                    >
+                      {filter === 'active' ? '当前' : filter === 'archived' ? '归档' : '全部'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            {projectList.length ? (
               <div className="agent-asset-list">
-                {historyPreview.map((entry) => {
-                  const item = entry.run
+                {projectListPreview.map((item) => {
+                  const entry = versionHistory.find((versionItem) => versionItem.run.id === item.id)
                   const itemStatus = getRunStatusCopy(item)
                   const itemBranch = getRunBranchInfo(item)
                   const recoverySummary = buildRecoveryActionSummary(item)
                   const nextStepSummary = buildHistoryAssetNextStepSummary(item)
+                  const isArchived = (item.projectStatus ?? 'active') === 'archived'
                   return (
-                    <article key={item.id} className={run?.id === item.id ? 'active' : undefined}>
+                    <article key={item.id} className={`${run?.id === item.id ? 'active' : ''} ${isArchived ? 'is-archived' : ''}`.trim()}>
                       <button type="button" className="agent-asset-main" onClick={() => void selectHistoryRun(item)}>
                         <span className={`agent-status-badge is-${itemStatus.tone}`}>{itemStatus.label}</span>
                         <span className={`agent-branch-badge is-${itemBranch.key}`}>{itemBranch.shortLabel}</span>
-                        <span className={`agent-lineage-badge is-${entry.relation}`}>{entry.relationLabel}</span>
+                        <span className={`agent-lineage-badge is-${entry?.relation ?? 'recent'}`}>{isArchived ? '归档' : entry?.relationLabel ?? '最近'}</span>
                         <strong>{item.title || item.userPrompt}</strong>
                         <small>{formatTime(item.updatedAt)} · {displayPoints(item.confirmedPoints ?? item.estimatedPoints)} · {getLineageText(item)}</small>
                       </button>
@@ -4839,17 +4998,26 @@ export default function AgentWorkflowView() {
                             保存配方
                           </button>
                         ) : null}
+                        {isArchived ? (
+                          <button type="button" onClick={() => void handleRestoreProject(item)} disabled={isBusy}>
+                            恢复
+                          </button>
+                        ) : (
+                          <button type="button" onClick={() => void handleArchiveProject(item)} disabled={isBusy}>
+                            归档
+                          </button>
+                        )}
                       </div>
                     </article>
                   )
                 })}
-                {versionHistory.length > historyPreview.length ? (
-                  <div className="agent-asset-more">还有 {versionHistory.length - historyPreview.length} 个版本/最近项目</div>
+                {projectList.length > projectListPreview.length ? (
+                  <div className="agent-asset-more">还有 {projectList.length - projectListPreview.length} 个项目</div>
                 ) : null}
               </div>
             ) : (
               <div className="agent-empty-state">
-                {needsLogin ? '登录后可以查看最近智能创作流。' : '还没有历史项目。'}
+                {needsLogin ? '登录后可以查看最近智能创作流。' : projectSearch ? '没有匹配的项目。' : '还没有历史项目。'}
               </div>
             )}
           </div>

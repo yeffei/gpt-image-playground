@@ -1,6 +1,7 @@
 export type AgentRunStatus = 'draft' | 'planned' | 'confirmed' | 'running' | 'succeeded' | 'failed' | 'canceled'
 export type AgentSourceType = 'text' | 'reference_image' | 'recipe' | 'rerun'
 export type AgentStepStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'canceled'
+export type AgentProjectStatus = 'active' | 'archived'
 export type ImageRecipeStatus = 'active' | 'archived' | 'deleted'
 export type ImageRecipeVisibility = 'private' | 'shared'
 
@@ -22,6 +23,8 @@ export interface AgentRun {
   entrypoint?: string
   clientRequestId?: string | null
   title?: string | null
+  projectStatus?: AgentProjectStatus
+  archivedAt?: string | null
   userPrompt: string
   normalizedPrompt?: string | null
   category?: string | null
@@ -216,8 +219,14 @@ export interface SelectAgentRunPrimaryOutputInput {
 
 export interface ListAgentRunsInput {
   status?: AgentRunStatus
+  projectStatus?: AgentProjectStatus
+  search?: string | null
   limit?: number
   offset?: number
+}
+
+export interface UpdateAgentRunProjectInput {
+  title: string
 }
 
 export interface CreateImageRecipeInput {
@@ -288,7 +297,7 @@ function parseErrorPayload(value: unknown) {
 }
 
 async function requestAgentWorkflow<T>(path: string, options: {
-  method?: 'GET' | 'POST'
+  method?: 'GET' | 'POST' | 'PATCH'
   sessionToken?: string | null
   payload?: Record<string, unknown>
 } = {}): Promise<T> {
@@ -377,11 +386,39 @@ export async function getAgentRun(runId: string, sessionToken?: string | null): 
 export async function listAgentRuns(input: ListAgentRunsInput = {}, sessionToken?: string | null): Promise<AgentRunListPayload> {
   const search = new URLSearchParams()
   if (input.status) search.set('status', input.status)
+  if (input.projectStatus) search.set('projectStatus', input.projectStatus)
+  if (input.search?.trim()) search.set('search', input.search.trim())
   if (typeof input.limit === 'number') search.set('limit', String(input.limit))
   if (typeof input.offset === 'number') search.set('offset', String(input.offset))
   const query = search.toString()
   return requestAgentWorkflow<AgentRunListPayload>(`/api/agent-runs${query ? `?${query}` : ''}`, {
     sessionToken,
+  })
+}
+
+export async function updateAgentRunProject(runId: string, input: UpdateAgentRunProjectInput, sessionToken?: string | null): Promise<AgentRunPayload> {
+  return requestAgentWorkflow<AgentRunPayload>(`/api/agent-runs/${encodeURIComponent(runId)}/project`, {
+    method: 'PATCH',
+    sessionToken,
+    payload: {
+      title: input.title,
+    },
+  })
+}
+
+export async function archiveAgentRun(runId: string, sessionToken?: string | null): Promise<AgentRunPayload> {
+  return requestAgentWorkflow<AgentRunPayload>(`/api/agent-runs/${encodeURIComponent(runId)}/archive`, {
+    method: 'POST',
+    sessionToken,
+    payload: { reason: 'user_archive' },
+  })
+}
+
+export async function restoreAgentRun(runId: string, sessionToken?: string | null): Promise<AgentRunPayload> {
+  return requestAgentWorkflow<AgentRunPayload>(`/api/agent-runs/${encodeURIComponent(runId)}/restore`, {
+    method: 'POST',
+    sessionToken,
+    payload: { reason: 'user_restore' },
   })
 }
 

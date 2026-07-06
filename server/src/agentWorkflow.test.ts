@@ -14,6 +14,8 @@ type StoredRun = {
   entrypoint: string
   client_request_id?: string | null
   title?: string | null
+  project_status?: 'active' | 'archived' | null
+  archived_at?: string | null
   user_prompt: string
   normalized_prompt?: string | null
   category?: string | null
@@ -342,6 +344,8 @@ function createAgentWorkflowDb() {
         entrypoint: 'agent_workflow',
         client_request_id: values[3] as string | null,
         title: values[4] as string,
+        project_status: 'active',
+        archived_at: null,
         user_prompt: values[5] as string,
         normalized_prompt: values[6] as string,
         category: values[7] as string,
@@ -490,6 +494,32 @@ function createAgentWorkflowDb() {
       return { rows: [run], rowCount: 1 }
     }
 
+    if (text.includes('UPDATE agent_runs') && text.includes('SET title = $1')) {
+      const run = runs.find((item) => item.id === values[2] && item.user_id === values[3])
+      if (!run) return { rows: [], rowCount: 0 }
+      run.title = values[0] as string
+      run.updated_at = values[1] as string
+      return { rows: [run], rowCount: 1 }
+    }
+
+    if (text.includes('UPDATE agent_runs') && text.includes("project_status = 'archived'")) {
+      const run = runs.find((item) => item.id === values[1] && item.user_id === values[2])
+      if (!run) return { rows: [], rowCount: 0 }
+      run.project_status = 'archived'
+      run.archived_at = values[0] as string
+      run.updated_at = values[0] as string
+      return { rows: [run], rowCount: 1 }
+    }
+
+    if (text.includes('UPDATE agent_runs') && text.includes("project_status = 'active'")) {
+      const run = runs.find((item) => item.id === values[1] && item.user_id === values[2])
+      if (!run) return { rows: [], rowCount: 0 }
+      run.project_status = 'active'
+      run.archived_at = null
+      run.updated_at = values[0] as string
+      return { rows: [run], rowCount: 1 }
+    }
+
     if (text.includes('UPDATE agent_runs') && text.includes('SET metadata_json = $1')) {
       const run = runs.find((item) => item.id === values[2] && item.user_id === values[3] && item.status === 'succeeded')
       if (!run) return { rows: [], rowCount: 0 }
@@ -530,20 +560,39 @@ function createAgentWorkflowDb() {
     }
 
     if (text.includes('COUNT(*)::text AS total FROM agent_runs')) {
-      const status = values.length > 1 ? values[1] : null
-      const total = runs.filter((run) => run.user_id === values[0] && (!status || run.status === status)).length
+      const projectStatus = text.includes('project_status') ? values[1] : null
+      const hasRunStatusFilter = text.includes(' AND status =')
+      const status = hasRunStatusFilter ? values[2] : null
+      const search = text.includes('LIKE') ? String(values[values.length - 1]).replace(/%/g, '').toLowerCase() : ''
+      const total = runs.filter((run) => {
+        if (run.user_id !== values[0]) return false
+        if (projectStatus && (run.project_status ?? 'active') !== projectStatus) return false
+        if (status && run.status !== status) return false
+        if (!search) return true
+        return [run.title, run.user_prompt, run.category].filter(Boolean).join(' ').toLowerCase().includes(search)
+      }).length
       return { rows: [{ total: String(total) }], rowCount: 1 }
     }
 
-    if (text.includes('FROM agent_runs') && text.includes('ORDER BY created_at DESC')) {
-      const status = values.length > 3 ? values[1] : null
+    if (text.includes('FROM agent_runs') && (text.includes('ORDER BY created_at DESC') || text.includes('ORDER BY updated_at DESC'))) {
+      const projectStatus = text.includes('project_status') ? values[1] : null
+      const hasRunStatusFilter = text.includes(' AND status =')
+      const status = hasRunStatusFilter ? values[2] : null
+      const search = text.includes('LIKE') ? String(values[values.length - 3]).replace(/%/g, '').toLowerCase() : ''
       const limit = values[values.length - 2] as number
       const offset = values[values.length - 1] as number
+      const filtered = runs
+        .filter((run) => {
+          if (run.user_id !== values[0]) return false
+          if (projectStatus && (run.project_status ?? 'active') !== projectStatus) return false
+          if (status && run.status !== status) return false
+          if (!search) return true
+          return [run.title, run.user_prompt, run.category].filter(Boolean).join(' ').toLowerCase().includes(search)
+        })
+        .sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at))
       return {
-        rows: runs
-          .filter((run) => run.user_id === values[0] && (!status || run.status === status))
-          .slice(offset, offset + limit),
-        rowCount: runs.length,
+        rows: filtered.slice(offset, offset + limit),
+        rowCount: filtered.length,
       }
     }
 
@@ -2959,6 +3008,90 @@ describe('agent workflow routes', () => {
       )
       expect(db.recipes.find((recipe) => recipe.id === recipeId)?.use_count).toBe(1)
       expect(db.generationTasks).toHaveLength(1)
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('renames, searches, archives, and restores agent projects without changing run execution state', async () => {
+    const db = createAgentWorkflowDb()
+    const app = buildApp(db, testEnv())
+    try {
+      const planned = await app.inject({
+        method: 'POST',
+        url: '/api/agent-runs/plan',
+        headers: { authorization: 'Bearer test-token' },
+        payload: {
+          prompt: '为高端保温杯生成一张冬季小红书推广图',
+          clientRequestId: 'project-management-run',
+          preferences: { outputCount: 1 },
+        },
+      })
+      const runId = planned.json().run.id
+
+      const renamed = await app.inject({
+        method: 'PATCH',
+        url: `/api/agent-runs/${runId}/project`,
+        headers: { authorization: 'Bearer test-token' },
+        payload: { title: '冬季保温杯首发项目' },
+      })
+      expect(renamed.statusCode).toBe(200)
+      expect(renamed.json().run).toMatchObject({
+        id: runId,
+        status: 'planned',
+        title: '冬季保温杯首发项目',
+        projectStatus: 'active',
+      })
+
+      const searched = await app.inject({
+        method: 'GET',
+        url: '/api/agent-runs?projectStatus=active&search=%E9%A6%96%E5%8F%91',
+        headers: { authorization: 'Bearer test-token' },
+      })
+      expect(searched.statusCode).toBe(200)
+      expect(searched.json()).toMatchObject({ total: 1 })
+      expect(searched.json().runs[0]).toMatchObject({ id: runId, title: '冬季保温杯首发项目' })
+
+      const archived = await app.inject({
+        method: 'POST',
+        url: `/api/agent-runs/${runId}/archive`,
+        headers: { authorization: 'Bearer test-token' },
+      })
+      expect(archived.statusCode).toBe(200)
+      expect(archived.json().run).toMatchObject({
+        id: runId,
+        status: 'planned',
+        projectStatus: 'archived',
+      })
+      expect(archived.json().run.archivedAt).toEqual(expect.any(String))
+
+      const activeList = await app.inject({
+        method: 'GET',
+        url: '/api/agent-runs?projectStatus=active',
+        headers: { authorization: 'Bearer test-token' },
+      })
+      expect(activeList.json()).toMatchObject({ total: 0 })
+
+      const archivedList = await app.inject({
+        method: 'GET',
+        url: '/api/agent-runs?projectStatus=archived',
+        headers: { authorization: 'Bearer test-token' },
+      })
+      expect(archivedList.json()).toMatchObject({ total: 1 })
+      expect(archivedList.json().runs[0]).toMatchObject({ id: runId, projectStatus: 'archived' })
+
+      const restored = await app.inject({
+        method: 'POST',
+        url: `/api/agent-runs/${runId}/restore`,
+        headers: { authorization: 'Bearer test-token' },
+      })
+      expect(restored.statusCode).toBe(200)
+      expect(restored.json().run).toMatchObject({
+        id: runId,
+        status: 'planned',
+        projectStatus: 'active',
+        archivedAt: null,
+      })
     } finally {
       await app.close()
     }

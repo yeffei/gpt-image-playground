@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   AgentWorkflowApiError,
+  archiveAgentRun,
   archiveImageRecipe,
   cancelAgentRun,
   confirmAgentRun,
@@ -12,9 +13,11 @@ import {
   replanAgentRun,
   reviewAgentRun,
   restoreImageRecipe,
+  restoreAgentRun,
   retryAgentRun,
   selectAgentRunPrimaryOutput,
   startAgentRun,
+  updateAgentRunProject,
 } from './agentWorkflowApi'
 
 describe('agentWorkflowApi', () => {
@@ -112,7 +115,10 @@ describe('agentWorkflowApi', () => {
     await replanAgentRun('agent/run 1', { planVersion: 1, overrides: { outputSize: '1k' } }, 'session-token')
     await startAgentRun('agent/run 1', { planVersion: 1 }, 'session-token')
     await getAgentRun('agent/run 1', 'session-token')
-    await listAgentRuns({ status: 'planned', limit: 10, offset: 5 }, 'session-token')
+    await listAgentRuns({ status: 'planned', projectStatus: 'archived', search: '保温杯', limit: 10, offset: 5 }, 'session-token')
+    await updateAgentRunProject('agent/run 1', { title: '保温杯首发项目' }, 'session-token')
+    await archiveAgentRun('agent/run 1', 'session-token')
+    await restoreAgentRun('agent/run 1', 'session-token')
     await cancelAgentRun('agent/run 1', 'session-token')
     await retryAgentRun('agent/run 1', {
       prompt: '重新规划',
@@ -134,7 +140,10 @@ describe('agentWorkflowApi', () => {
       '/api/agent-runs/agent%2Frun%201/replan',
       '/api/agent-runs/agent%2Frun%201/start',
       '/api/agent-runs/agent%2Frun%201',
-      '/api/agent-runs?status=planned&limit=10&offset=5',
+      '/api/agent-runs?status=planned&projectStatus=archived&search=%E4%BF%9D%E6%B8%A9%E6%9D%AF&limit=10&offset=5',
+      '/api/agent-runs/agent%2Frun%201/project',
+      '/api/agent-runs/agent%2Frun%201/archive',
+      '/api/agent-runs/agent%2Frun%201/restore',
       '/api/agent-runs/agent%2Frun%201/cancel',
       '/api/agent-runs/agent%2Frun%201/retry',
       '/api/agent-runs/agent%2Frun%201/review',
@@ -151,6 +160,13 @@ describe('agentWorkflowApi', () => {
       body: JSON.stringify({
         planVersion: 1,
         overrides: { outputSize: '1k' },
+      }),
+    }))
+    const projectCall = fetchMock.mock.calls.find((call) => call[0] === '/api/agent-runs/agent%2Frun%201/project')
+    expect(projectCall?.[1]).toEqual(expect.objectContaining({
+      method: 'PATCH',
+      body: JSON.stringify({
+        title: '保温杯首发项目',
       }),
     }))
     const retryCall = fetchMock.mock.calls.find((call) => call[0] === '/api/agent-runs/agent%2Frun%201/retry')
