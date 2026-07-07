@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { LIBRARY_ACTIVE_OUTPUT_LIMIT, LIBRARY_TRASH_RETENTION_DAYS, buildUpstreamPromptFields, deleteCompletedGenerationTasksForUser, deriveFailureResultFields, enforceLibraryActiveOutputLimit, filterRoutesForRequestedSize, finalizeFailure, isClientDisconnected, normalizeRequestedParamsForModel, resolveFinalDeliveryPlan, resolveRequestedModelSku, restoreGenerationOutput } from './imageGateway'
+import { LIBRARY_ACTIVE_OUTPUT_LIMIT, LIBRARY_TRASH_RETENTION_DAYS, buildUpstreamPromptFields, deleteCompletedGenerationTasksForUser, deriveFailureResultFields, enforceLibraryActiveOutputLimit, extractRequiredModelAlias, filterRoutesForRequestedSize, finalizeFailure, getUpstreamModelCandidatesForRoute, isClientDisconnected, normalizeRequestedParamsForModel, prioritizeSizeSpecificModelAliases, resolveFinalDeliveryPlan, resolveRequestedModelSku, restoreGenerationOutput } from './imageGateway'
 
 function classifyGatewayFailure(error: unknown) {
   if (error && typeof error === 'object' && 'failureKind' in error && typeof (error as { failureKind?: unknown }).failureKind === 'string') {
@@ -66,6 +66,34 @@ describe('server image gateway compatibility fallback', () => {
   it('drops quality when upstream rejects quality', () => {
     const patch = getUpstreamCompatibilityPatch(new Error('unsupported parameter: quality'))
     expect(patch).toEqual({ omitQuality: true })
+  })
+})
+
+describe('server image gateway upstream model aliases', () => {
+  it('tries binding alias, route default, platform model and system default without duplicates', () => {
+    expect(getUpstreamModelCandidatesForRoute({
+      upstream_model: 'relay-gpt-image',
+      default_upstream_model: 'gpt-image-2',
+      model_name: 'gpt-image-2-fast',
+    })).toEqual(['relay-gpt-image', 'gpt-image-2', 'gpt-image-2-fast'])
+  })
+
+  it('falls back to platform model and system default when no alias is configured', () => {
+    expect(getUpstreamModelCandidatesForRoute({
+      upstream_model: null,
+      default_upstream_model: null,
+      model_name: 'vendor-gpt-image',
+    })).toEqual(['vendor-gpt-image', 'gpt-image-2'])
+  })
+
+  it('extracts model aliases required by relay size errors', () => {
+    expect(extractRequiredModelAlias(new Error('size 2560x1440 requires model gpt-image-2-2K'))).toBe('gpt-image-2-2K')
+  })
+
+  it('prioritizes size-specific aliases for GPT Image 2 high-resolution requests', () => {
+    expect(prioritizeSizeSpecificModelAliases(['gpt-image-2'], '2560x1440', { allowRelayAlias: true })).toEqual(['gpt-image-2-2k', 'gpt-image-2'])
+    expect(prioritizeSizeSpecificModelAliases(['gpt-image-2'], '3840x2160', { allowRelayAlias: true })).toEqual(['gpt-image-2-4k', 'gpt-image-2'])
+    expect(prioritizeSizeSpecificModelAliases(['gpt-image-2'], '3840x2160', { allowRelayAlias: false })).toEqual(['gpt-image-2'])
   })
 })
 

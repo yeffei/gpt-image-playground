@@ -1,5 +1,6 @@
 const HIGH_RES_PROBE_SIZES = ['1024x1024', '2560x1440', '3840x2160'] as const
 const HIGH_RES_PROBE_TIMEOUT_MS = 120_000
+const HIGH_RES_PROBE_4K_TIMEOUT_MS = 240_000
 type HighResProbeSize = typeof HIGH_RES_PROBE_SIZES[number]
 type FetchInput = Parameters<typeof fetch>[0]
 
@@ -10,6 +11,7 @@ type ProbeRoute = {
   apiKeyRef: string
   defaultUpstreamModel?: string | null
   compatibilityStrategy?: 'openai_standard' | 'relay_extended' | null
+  isOfficial?: boolean
 }
 
 type ProbeResult = {
@@ -25,6 +27,8 @@ export type ProbeTestResult = {
   actualSize: string | null
   actualWidth: number | null
   actualHeight: number | null
+  upstreamModel: string
+  attemptedModels: string[]
   shrunk: boolean
   returnedImage: boolean
   statusCode: number | null
@@ -73,6 +77,12 @@ function getMaxSupportedLongEdge(tests: ProbeTestResult[]) {
     maxEdge = Math.max(maxEdge, test.actualWidth, test.actualHeight)
   }
   return maxEdge > 0 ? maxEdge : null
+}
+
+function extractRequiredModelAlias(message: string) {
+  const match = message.match(/\brequires\s+model\s+([A-Za-z0-9._:-]+)/i)
+    ?? message.match(/需要(?:使用)?模型\s*([A-Za-z0-9._:-]+)/i)
+  return match?.[1]?.trim() || ''
 }
 
 async function readGatewayError(response: Response) {
@@ -141,6 +151,21 @@ function parseRequestedSize(size: string) {
     width: Number(match[1]),
     height: Number(match[2]),
   }
+}
+
+function parseRequestedLongestEdge(size?: string | null) {
+  const parsed = size ? parseRequestedSize(size) : null
+  return parsed ? Math.max(parsed.width, parsed.height) : 0
+}
+
+function getSizeSpecificModelAlias(model: string, size?: string | null, options: { allowRelayAlias?: boolean } = {}) {
+  if (!options.allowRelayAlias) return ''
+  const normalizedModel = model.trim().toLowerCase()
+  if (normalizedModel !== 'gpt-image-2') return ''
+  const longestEdge = parseRequestedLongestEdge(size)
+  if (longestEdge >= 3840) return 'gpt-image-2-4k'
+  if (longestEdge >= 2560) return 'gpt-image-2-2k'
+  return ''
 }
 
 function getPngDimensions(bytes: Buffer) {
@@ -218,42 +243,66 @@ function getImageDimensionsFromDataUrl(dataUrl: string) {
 }
 
 export async function probeGatewayRoute(route: ProbeRoute, sizes: readonly HighResProbeSize[] = HIGH_RES_PROBE_SIZES): Promise<ProbeResult> {
-  const upstreamModel = route.defaultUpstreamModel?.trim() || 'gpt-image-2'
+  const initialUpstreamModel = route.defaultUpstreamModel?.trim() || 'gpt-image-2'
   const compatibilityStrategy = normalizeCompatibilityStrategy(route.compatibilityStrategy)
   const promptFields = buildPromptFields(compatibilityStrategy)
   const tests: ProbeTestResult[] = []
+  let upstreamModel = initialUpstreamModel
 
   for (const requestedSize of sizes.length ? sizes : HIGH_RES_PROBE_SIZES) {
     const startedAt = Date.now()
+    const attemptedModels: string[] = []
     try {
-      const body: Record<string, unknown> = {
-        model: upstreamModel,
-        size: requestedSize,
-        quality: 'high',
-        output_format: 'png',
-        moderation: 'low',
-        ...promptFields,
+      const sizeAlias = getSizeSpecificModelAlias(upstreamModel, requestedSize, { allowRelayAlias: route.isOfficial !== true })
+      const modelsToTry = sizeAlias ? [sizeAlias, upstreamModel] : [upstreamModel]
+      const timeoutMs = requestedSize === '3840x2160' ? HIGH_RES_PROBE_4K_TIMEOUT_MS : HIGH_RES_PROBE_TIMEOUT_MS
+      let response: Response | null = null
+      let errorSummary = ''
+      for (let index = 0; index < modelsToTry.length; index += 1) {
+        const candidateModel = modelsToTry[index]
+        attemptedModels.push(candidateModel)
+        const body: Record<string, unknown> = {
+          model: candidateModel,
+          size: requestedSize,
+          quality: 'high',
+          output_format: 'png',
+          moderation: 'low',
+          ...promptFields,
+        }
+        response = await fetchWithTimeout(appendPath(route.baseUrl, 'images/generations'), {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${resolveApiKey(route.apiKeyRef)}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        }, timeoutMs)
+        if (response.ok) {
+          upstreamModel = candidateModel
+          break
+        }
+        errorSummary = await readGatewayError(response)
+        const requiredModel = extractRequiredModelAlias(errorSummary)
+        if (requiredModel && !modelsToTry.includes(requiredModel)) {
+          modelsToTry.push(requiredModel)
+          continue
+        }
+        break
       }
-      const response = await fetchWithTimeout(appendPath(route.baseUrl, 'images/generations'), {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${resolveApiKey(route.apiKeyRef)}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
-      })
 
-      if (!response.ok) {
+      if (!response || !response.ok) {
         tests.push({
           requestedSize,
           actualSize: null,
           actualWidth: null,
           actualHeight: null,
+          upstreamModel: attemptedModels.at(-1) ?? upstreamModel,
+          attemptedModels,
           shrunk: false,
           returnedImage: false,
-          statusCode: response.status,
+          statusCode: response?.status ?? null,
           latencyMs: Date.now() - startedAt,
-          errorSummary: await readGatewayError(response),
+          errorSummary,
         })
         continue
       }
@@ -267,6 +316,8 @@ export async function probeGatewayRoute(route: ProbeRoute, sizes: readonly HighR
         actualSize: actual ? `${actual.width}x${actual.height}` : null,
         actualWidth: actual?.width ?? null,
         actualHeight: actual?.height ?? null,
+        upstreamModel,
+        attemptedModels,
         shrunk,
         returnedImage: true,
         statusCode: response.status,
@@ -279,6 +330,8 @@ export async function probeGatewayRoute(route: ProbeRoute, sizes: readonly HighR
         actualSize: null,
         actualWidth: null,
         actualHeight: null,
+        upstreamModel: attemptedModels.at(-1) ?? upstreamModel,
+        attemptedModels: attemptedModels.length ? attemptedModels : [upstreamModel],
         shrunk: false,
         returnedImage: false,
         statusCode: null,

@@ -843,8 +843,14 @@ function formatProbeTestLine(test: GatewayRouteProbeResult['tests'][number]) {
   const tier = test.requestedSize === '3840x2160' ? '4K' : test.requestedSize === '2560x1440' ? '2K' : '1K'
   const actual = test.actualSize ?? '无图'
   const http = test.statusCode == null ? 'HTTP -' : `HTTP ${test.statusCode}`
+  const models = Array.isArray(test.attemptedModels) && test.attemptedModels.length
+    ? test.attemptedModels.join(' -> ')
+    : test.upstreamModel
+      ? test.upstreamModel
+      : ''
+  const modelText = models ? ` · 模型 ${models}` : ''
   const extra = test.errorSummary ? ` · ${test.errorSummary}` : ''
-  return `${tier} ${test.requestedSize} -> ${actual} · ${status} · ${http} · ${test.latencyMs}ms${extra}`
+  return `${tier} ${test.requestedSize} -> ${actual} · ${status} · ${http} · ${test.latencyMs}ms${modelText}${extra}`
 }
 
 function formatPreflightProbeLine(label: string, probe: GatewayRoutePreflightResult['baseProbe']) {

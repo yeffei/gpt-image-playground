@@ -421,6 +421,11 @@ function displayTaskPoints(value: unknown) {
   return '未冻结'
 }
 
+function getOutputSizeLabel(value: unknown) {
+  const normalized = normalizeOutputSizeValue(value)
+  return OUTPUT_SIZE_OPTIONS.find((option) => option.value === normalized)?.label ?? displayValue(value, '1K')
+}
+
 function formatTime(value?: string | number | null) {
   if (!value) return ''
   const time = typeof value === 'number' ? value : Date.parse(value)
@@ -431,6 +436,53 @@ function formatTime(value?: string | number | null) {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+const FAILURE_KIND_LABELS: Record<string, string> = {
+  upstream_timeout: '上游超时',
+  upstream_server_error: '上游错误',
+  route_exhausted: '线路额度不足',
+  no_route: '无可用线路',
+  billing_unavailable: '计费不可用',
+  billing_insufficient: '余额不足',
+}
+
+function parseJsonStringLiteral(value: string) {
+  try {
+    return JSON.parse(`"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`) as string
+  } catch {
+    return value
+  }
+}
+
+export function summarizeAgentWorkflowErrorText(value?: string | null) {
+  const raw = value?.trim()
+  if (!raw) return ''
+  const compact = raw.replace(/\s+/g, ' ')
+  const looksStructured = compact.startsWith('{') || compact.startsWith('[') || compact.includes('"attempts"') || compact.includes('"failureKind"')
+  if (!looksStructured && compact.length <= 180) return raw
+
+  const messageMatch = compact.match(/"message"\s*:\s*"((?:\\.|[^"\\])*)"/)
+  const parsedMessage = messageMatch ? parseJsonStringLiteral(messageMatch[1]) : ''
+  const message = parsedMessage.includes('Billing service temporarily unavailable')
+    ? '计费服务暂不可用，请稍后重试'
+    : parsedMessage || (compact.includes('Billing service temporarily unavailable') ? '计费服务暂不可用，请稍后重试' : '智能创作流请求失败')
+  const attempts = compact.match(/"index"\s*:/g)?.length ?? 0
+  const failureKinds = Array.from(compact.matchAll(/"failureKind"\s*:\s*"([^"]+)"/g))
+    .map((match) => FAILURE_KIND_LABELS[match[1]] ?? match[1])
+  const uniqueFailureKinds = Array.from(new Set(failureKinds)).slice(0, 3)
+  const requestId = compact.match(/request id[:：]\s*([a-z0-9_-]+)/i)?.[1] ?? compact.match(/"requestId"\s*:\s*"([^"]+)"/)?.[1]
+  return [
+    message,
+    attempts > 0 ? `已自动尝试 ${attempts} 条线路` : '',
+    uniqueFailureKinds.length ? `失败类型：${uniqueFailureKinds.join('、')}` : '',
+    requestId ? `请求 ${compactId(requestId)}` : '',
+  ].filter(Boolean).join(' · ')
+}
+
+function getFailureDisplayText(...values: Array<string | null | undefined>) {
+  const value = values.find((item) => item?.trim())
+  return summarizeAgentWorkflowErrorText(value) || '可以从失败记录重新规划一条路线。'
 }
 
 function formatDuration(startedAt?: string | null, finishedAt?: string | null) {
@@ -446,8 +498,8 @@ function formatDuration(startedAt?: string | null, finishedAt?: string | null) {
 }
 
 function getErrorMessage(error: unknown) {
-  if (error instanceof AgentWorkflowApiError) return error.message
-  if (error instanceof Error) return error.message
+  if (error instanceof AgentWorkflowApiError) return summarizeAgentWorkflowErrorText(error.message)
+  if (error instanceof Error) return summarizeAgentWorkflowErrorText(error.message)
   return '智能创作流请求失败，请稍后重试'
 }
 
@@ -646,7 +698,7 @@ export function buildRecoverableAssetSummary(run: AgentRun | null, steps: AgentS
   }
   const failedStep = steps.find((step) => step.status === 'failed' || step.status === 'canceled' || step.errorSummary || step.errorKind)
   const stepLabel = failedStep ? STEP_LABELS[failedStep.stepKey] ?? failedStep.stepKey : ''
-  const reason = failedStep?.errorSummary || failedStep?.errorKind || run.errorSummary || run.failureKind || '未记录明确原因'
+  const reason = getFailureDisplayText(failedStep?.errorSummary, failedStep?.errorKind, run.errorSummary, run.failureKind)
   return {
     recoverable: true,
     title: run.status === 'failed' ? '可恢复失败路线' : '可恢复取消路线',
@@ -669,7 +721,7 @@ export function buildRecoveryActionSummary(run: AgentRun | null, step?: AgentSte
     }
   }
   const stepLabel = step ? STEP_LABELS[step.stepKey] ?? step.stepKey : ''
-  const reason = step?.errorSummary || step?.errorKind || run.errorSummary || run.failureKind || '未记录明确原因'
+  const reason = getFailureDisplayText(step?.errorSummary, step?.errorKind, run.errorSummary, run.failureKind)
   return {
     ...summary,
     detail: stepLabel ? `${stepLabel} · ${reason}` : summary.detail,
@@ -1864,7 +1916,7 @@ export function getRouteLifecycleCopy(run: AgentRun | null, planSummary: ReturnT
   if (run.status === 'failed' || run.status === 'canceled') {
     return {
       title: run.status === 'failed' ? '流程失败' : '流程已取消',
-      detail: run.errorSummary || run.failureKind || '可以载入本次配置后重新规划。',
+      detail: getFailureDisplayText(run.errorSummary, run.failureKind),
       primaryActionLabel: '恢复路线',
     }
   }
@@ -1978,7 +2030,7 @@ export function buildExecutionControlSummary(input: {
   if (run.status === 'failed' || run.status === 'canceled') {
     return {
       title: run.status === 'failed' ? '流程失败，可恢复' : '流程已取消，可恢复',
-      detail: run.errorSummary || run.failureKind || '可以从失败/取消记录重新规划一条待确认路线。',
+      detail: getFailureDisplayText(run.errorSummary, run.failureKind),
       chips: [run.status === 'failed' ? '失败' : '已取消', run.failureKind ?? '', '可恢复'].filter(Boolean),
       tone: 'danger',
     }
@@ -2369,11 +2421,15 @@ export default function AgentWorkflowView() {
   const briefRecord = asRecord(run?.brief)
   const warnings = getStringList(planRecord.warnings, briefRecord.warnings, run?.metadata?.warnings)
   const riskList = warnings.length ? warnings : DEFAULT_RISKS
+  const visibleAspectRatio = aspectRatio === '自动' ? planSummary.aspectRatio : aspectRatio
+  const visibleOutputSize = getOutputSizeLabel(outputSize)
+  const visibleOutputCount = String(outputCount)
+  const visibleCategory = category === '自动判断' ? planSummary.category : category
   const constraintChips = [
-    aspectRatio === '自动' ? `比例 ${planSummary.aspectRatio}` : aspectRatio,
-    planSummary.outputSize,
-    `${planSummary.outputCount} 张`,
-    category === '自动判断' ? planSummary.category : category,
+    aspectRatio === '自动' ? `比例 ${visibleAspectRatio}` : visibleAspectRatio,
+    visibleOutputSize,
+    `${visibleOutputCount} 张`,
+    visibleCategory,
   ]
   const agentReferenceImages = inputImages.slice(0, 4)
   const runReferenceAssets = useMemo(() => getRunReferenceAssets(run), [run])
@@ -2466,11 +2522,24 @@ export default function AgentWorkflowView() {
     planPromptDraft,
     negativePromptDraft,
   }), [aspectRatio, category, negativePromptDraft, outputCount, outputSize, planPromptDraft, run])
+  const visiblePlanSummary = {
+    ...planSummary,
+    category: visibleCategory,
+    aspectRatio: visibleAspectRatio,
+    outputSize: visibleOutputSize,
+    outputCount: visibleOutputCount,
+    estimatedPoints: planOverrideState.hasChanges ? '待重新估算' : planSummary.estimatedPoints,
+  }
   const versionHistory = useMemo(() => getProjectVersionHistory(history, run), [history, run])
   const projectList = useMemo(() => filterAgentProjects(history, {
     query: projectSearch,
     filter: projectFilter,
   }), [history, projectFilter, projectSearch])
+  const projectListStatusLabel = projectFilter === 'active'
+    ? '当前项目'
+    : projectFilter === 'archived'
+      ? '归档项目'
+      : '全部项目'
   const projectListPreview = projectList.slice(0, 6)
   const historyPreview = versionHistory.filter((entry) => (entry.run.projectStatus ?? 'active') === 'active').slice(0, 4)
   const stageVersionStripItems = useMemo(() => getStageVersionStripItems(versionHistory, run), [run, versionHistory])
@@ -2480,7 +2549,7 @@ export default function AgentWorkflowView() {
     generationTask: serverGenerationTask,
     outputProgressText: serverTaskProgressText,
   }), [run, serverGenerationTask, serverTaskProgressText])
-  const routeLifecycleCopy = useMemo(() => getRouteLifecycleCopy(run, planSummary), [planSummary, run])
+  const routeLifecycleCopy = useMemo(() => getRouteLifecycleCopy(run, visiblePlanSummary), [run, visiblePlanSummary])
   const activeRecipes = useMemo(() => recipes.filter((recipe) => recipe.status === 'active'), [recipes])
   const archivedRecipes = useMemo(() => recipes.filter((recipe) => recipe.status === 'archived'), [recipes])
   const recipePreview = activeRecipes.slice(0, 3)
@@ -2519,7 +2588,7 @@ export default function AgentWorkflowView() {
     {
       key: 'cost',
       label: '点数',
-      value: planSummary.estimatedPoints,
+      value: visiblePlanSummary.estimatedPoints,
       detail: canConfirm(run) ? '确认后锁定' : run?.confirmedPoints ? '已确认' : '未扣点',
     },
     {
@@ -3925,7 +3994,7 @@ export default function AgentWorkflowView() {
       return (
         <button type="button" className="agent-project-primary" onClick={handleConfirm} disabled={isBusy}>
           <FavoriteIcon className="agent-workflow-icon" aria-hidden="true" />
-          <span>{busyAction === 'confirm' ? '正在确认路线' : planOverrideState.hasChanges ? `确认并应用修改 ${planSummary.estimatedPoints}` : `确认路线 ${planSummary.estimatedPoints}`}</span>
+          <span>{busyAction === 'confirm' ? '正在确认路线' : planOverrideState.hasChanges ? '确认并应用修改' : `确认路线 ${visiblePlanSummary.estimatedPoints}`}</span>
         </button>
       )
     }
@@ -3987,7 +4056,7 @@ export default function AgentWorkflowView() {
         </div>
         <div className="agent-project-meta" aria-label="项目状态">
           <span className={`agent-status-badge is-${statusCopy.tone}`}>{statusCopy.label}</span>
-          <span>{planSummary.estimatedPoints}</span>
+          <span>{visiblePlanSummary.estimatedPoints}</span>
           <span>{needsLogin ? '需要登录' : `余额 ${account.balance} 点`}</span>
           {run?.generationTaskId ? <span className="agent-task-chip">Task {run.generationTaskId}</span> : null}
         </div>
@@ -4256,6 +4325,66 @@ export default function AgentWorkflowView() {
               ))}
             </div>
           </details>
+
+          <aside className="agent-mission-context" aria-label="项目脉络">
+            <div className="agent-mission-context-head">
+              <div>
+                <span>项目脉络</span>
+                <strong>{versionComparisonSummary.title}</strong>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setAssetDockTab('projects')
+                  document.getElementById('agent-assets-title')?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+                }}
+              >
+                管理
+              </button>
+            </div>
+            <p>{versionComparisonSummary.detail}</p>
+
+            <div className="agent-mission-context-metrics" aria-label="资产摘要">
+              {assetSummaryItems.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => {
+                    setAssetDockTab(item.key)
+                    document.getElementById('agent-assets-title')?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+                  }}
+                >
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                </button>
+              ))}
+            </div>
+
+            {historyPreview.length ? (
+              <div className="agent-mission-context-list">
+                {historyPreview.slice(0, 3).map((entry) => {
+                  const itemStatus = getRunStatusCopy(entry.run)
+                  const itemBranch = getRunBranchInfo(entry.run)
+                  return (
+                    <button
+                      key={entry.run.id}
+                      type="button"
+                      className={run?.id === entry.run.id ? 'active' : undefined}
+                      onClick={() => void selectHistoryRun(entry.run)}
+                    >
+                      <span className={`agent-lineage-badge is-${entry.relation}`}>{entry.relationLabel}</span>
+                      <strong>{entry.run.title || entry.run.userPrompt}</strong>
+                      <small>{itemBranch.shortLabel} · {itemStatus.label} · {formatTime(entry.run.updatedAt)}</small>
+                    </button>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="agent-mission-context-empty">
+                生成后会记录版本和项目来源。
+              </div>
+            )}
+          </aside>
         </section>
 
         <section className={`agent-panel agent-result-stage is-${run?.status ?? 'draft'}`} aria-labelledby="agent-result-title">
@@ -4308,7 +4437,7 @@ export default function AgentWorkflowView() {
                     <div className="agent-stage-state">
                       <HistoryIcon className="agent-stage-large-icon" aria-hidden="true" />
                       <strong>{run.status === 'failed' ? '流程失败' : '流程已取消'}</strong>
-                      <p>{run.errorSummary || run.failureKind || '可以载入本次配置后重新规划。'}</p>
+                      <p>{getFailureDisplayText(run.errorSummary, run.failureKind)}</p>
                       {productionNudge ? (
                         <div className={`agent-production-nudge is-${productionNudge.tone}`}>
                           <span>{productionNudge.title}</span>
@@ -4335,9 +4464,9 @@ export default function AgentWorkflowView() {
                       <strong>{routeLifecycleCopy.title}</strong>
                       <p>{routeLifecycleCopy.detail}</p>
                       <div className="agent-stage-task-metrics" aria-label="路线状态">
-                        <span>{planSummary.outputCount} 张</span>
-                        <span>{planSummary.outputSize}</span>
-                        <span>{planSummary.estimatedPoints}</span>
+                        <span>{visiblePlanSummary.outputCount} 张</span>
+                        <span>{visiblePlanSummary.outputSize}</span>
+                        <span>{visiblePlanSummary.estimatedPoints}</span>
                       </div>
                     </div>
                   ) : (
@@ -4419,6 +4548,23 @@ export default function AgentWorkflowView() {
                       <span key={slot} className={index === 2 ? 'is-primary-slot' : undefined}>{slot}</span>
                     ))
                   )}
+                </div>
+                <div className="agent-stage-context-grid" aria-label="当前执行上下文">
+                  <div>
+                    <span>当前参数</span>
+                    <strong>{visiblePlanSummary.outputSize} · {visiblePlanSummary.outputCount} 张 · {visiblePlanSummary.aspectRatio}</strong>
+                    <small>{planOverrideState.hasChanges ? `待应用：${planOverrideState.changes.join('、')}` : visiblePlanSummary.category}</small>
+                  </div>
+                  <div>
+                    <span>线路策略</span>
+                    <strong>服务端自动切换</strong>
+                    <small>按模型绑定线路依次尝试，失败会记录 attempts。</small>
+                  </div>
+                  <div>
+                    <span>下一步</span>
+                    <strong>{routeLifecycleCopy.primaryActionLabel}</strong>
+                    <small>{executionControlSummary.title}</small>
+                  </div>
                 </div>
               </div>
             </div>
@@ -4565,7 +4711,7 @@ export default function AgentWorkflowView() {
           <div className="agent-panel-head">
             <div>
               <h2 id="agent-routes-title">Agent Routes</h2>
-              <p>选择创作路线，而不是确认参数表。</p>
+              <p>选择创作方向；生成时由服务端按绑定线路自动尝试。</p>
             </div>
             <span className="agent-panel-kicker">v{run?.planVersion ?? 1}</span>
           </div>
@@ -4587,14 +4733,15 @@ export default function AgentWorkflowView() {
             <article className={`agent-route-card is-recommended ${routeReady ? 'is-ready' : ''}`}>
               <div className="agent-route-topline">
                 <span>推荐路线</span>
-                <strong>{planSummary.estimatedPoints}</strong>
+                <strong>{visiblePlanSummary.estimatedPoints}</strong>
               </div>
               <h3>{routeReady ? '稳妥商业转化' : '等待 Agent 建立路线'}</h3>
               <p>{routeReady ? planSummary.prompt : routeLifecycleCopy.detail}</p>
               <ul>
-                <li>规格 {planSummary.outputSize}</li>
-                <li>比例 {planSummary.aspectRatio}</li>
-                <li>输出 {planSummary.outputCount} 张</li>
+                <li>规格 {visiblePlanSummary.outputSize}</li>
+                <li>比例 {visiblePlanSummary.aspectRatio}</li>
+                <li>输出 {visiblePlanSummary.outputCount} 张</li>
+                {planOverrideState.hasChanges ? <li>待应用</li> : null}
               </ul>
               {canConfirm(run) ? (
                 <button type="button" onClick={handleConfirm} disabled={isBusy}>
@@ -4729,7 +4876,7 @@ export default function AgentWorkflowView() {
               {serverGenerationTask?.failureKind || serverGenerationTask?.errorSummary ? (
                 <div>
                   <span>任务错误</span>
-                  <p>{serverGenerationTask.errorSummary || serverGenerationTask.failureKind}</p>
+                  <p>{getFailureDisplayText(serverGenerationTask.errorSummary, serverGenerationTask.failureKind)}</p>
                 </div>
               ) : null}
               </div>
@@ -5048,7 +5195,10 @@ export default function AgentWorkflowView() {
           {assetDockTab === 'projects' ? (
           <div className="agent-asset-column agent-asset-project-column">
             <div className="agent-project-list-head">
-              <h3>项目管理</h3>
+              <div>
+                <h3>项目管理</h3>
+                <p>{projectListStatusLabel} · 当前显示最近 {projectListPreview.length}/{projectList.length} 个</p>
+              </div>
               <div className="agent-project-list-filters" aria-label="项目筛选">
                 <input
                   value={projectSearch}
@@ -5069,6 +5219,12 @@ export default function AgentWorkflowView() {
                   ))}
                 </div>
               </div>
+            </div>
+            <div className="agent-project-management-note" aria-label="项目资产管理方式">
+              <span>当前</span>
+              <span>归档</span>
+              <span>全部会混合展示当前和归档项目，并用状态标识区分。</span>
+              <span>删除需后端硬删除与审计接口。</span>
             </div>
             {projectList.length ? (
               <div className="agent-asset-list">
@@ -5099,7 +5255,7 @@ export default function AgentWorkflowView() {
                           ))}
                         </div>
                       </div>
-                      <div className="agent-asset-actions">
+                      <div className="agent-asset-actions agent-project-actions-row">
                         <button type="button" onClick={() => void selectHistoryRun(item)}>
                           {getRouteLifecycleCopy(item, getPlanSummary(item)).primaryActionLabel}
                         </button>
@@ -5130,6 +5286,14 @@ export default function AgentWorkflowView() {
                             归档
                           </button>
                         )}
+                        <button
+                          type="button"
+                          className="agent-asset-delete-disabled"
+                          disabled
+                          title="当前版本未提供不可逆删除接口，先使用归档管理项目。"
+                        >
+                          删除
+                        </button>
                       </div>
                     </article>
                   )

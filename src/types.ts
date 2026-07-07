@@ -88,6 +88,8 @@ export interface GatewayRouteProbeTest {
   actualSize: string | null
   actualWidth: number | null
   actualHeight: number | null
+  upstreamModel?: string | null
+  attemptedModels?: string[]
   shrunk: boolean
   returnedImage: boolean
   statusCode: number | null

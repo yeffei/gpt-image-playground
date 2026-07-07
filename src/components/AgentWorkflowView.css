@@ -362,6 +362,7 @@
   font-size: 13px;
   font-weight: 680;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .agent-workbench-grid {
@@ -515,6 +516,170 @@
   font-size: 11px;
   font-weight: 840;
   white-space: nowrap;
+}
+
+.agent-mission-context {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  border: 1px solid rgba(22, 32, 31, 0.08);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.66), rgba(250, 249, 244, 0.54)),
+    rgba(255, 255, 255, 0.48);
+  padding: 11px;
+}
+
+.agent-mission-context-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.agent-mission-context-head > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.agent-mission-context-head span {
+  color: var(--agent-soft);
+  font-size: 10.5px;
+  font-weight: 840;
+  line-height: 1;
+}
+
+.agent-mission-context-head strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--agent-ink);
+  font-size: 13px;
+  font-weight: 860;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-mission-context-head button,
+.agent-mission-context-metrics button,
+.agent-mission-context-list button {
+  border: 1px solid var(--agent-line);
+  background: rgba(255, 255, 255, 0.68);
+  color: var(--agent-muted);
+}
+
+.agent-mission-context-head button {
+  min-height: 28px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 820;
+}
+
+.agent-mission-context > p {
+  margin: 0;
+  color: var(--agent-muted);
+  font-size: 11.5px;
+  font-weight: 680;
+  line-height: 1.45;
+}
+
+.agent-mission-context-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.agent-mission-context-metrics button {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  min-height: 48px;
+  border-radius: 10px;
+  padding: 8px;
+  text-align: left;
+}
+
+.agent-mission-context-metrics button:hover,
+.agent-mission-context-head button:hover,
+.agent-mission-context-list button:hover {
+  border-color: rgba(15, 118, 110, 0.2);
+  background: rgba(240, 253, 250, 0.62);
+  color: var(--agent-accent-ink);
+}
+
+.agent-mission-context-metrics span,
+.agent-mission-context-metrics strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-mission-context-metrics span {
+  font-size: 10.5px;
+  font-weight: 820;
+}
+
+.agent-mission-context-metrics strong {
+  color: inherit;
+  font-size: 12px;
+  font-weight: 860;
+}
+
+.agent-mission-context-list {
+  display: grid;
+  gap: 7px;
+}
+
+.agent-mission-context-list button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 8px;
+  min-width: 0;
+  border-radius: 10px;
+  padding: 8px;
+  text-align: left;
+}
+
+.agent-mission-context-list button.active {
+  border-color: rgba(15, 118, 110, 0.24);
+  background: rgba(240, 253, 250, 0.72);
+}
+
+.agent-mission-context-list .agent-lineage-badge {
+  grid-row: span 2;
+  align-self: start;
+}
+
+.agent-mission-context-list strong,
+.agent-mission-context-list small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-mission-context-list strong {
+  color: var(--agent-ink);
+  font-size: 12px;
+  font-weight: 840;
+}
+
+.agent-mission-context-list small,
+.agent-mission-context-empty {
+  color: var(--agent-soft);
+  font-size: 11px;
+  font-weight: 720;
+}
+
+.agent-mission-context-empty {
+  border: 1px dashed rgba(22, 32, 31, 0.12);
+  border-radius: 10px;
+  padding: 12px;
+  text-align: center;
 }
 
 .agent-brief-checks > summary strong {
@@ -981,7 +1146,9 @@
 
 .agent-stage-frame {
   display: grid;
-  min-height: clamp(340px, 48vh, 520px);
+  align-content: center;
+  gap: 12px;
+  min-height: clamp(360px, 48vh, 520px);
   border: 1px solid var(--agent-line-strong);
   border-radius: 12px;
   background:
@@ -997,9 +1164,52 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) 108px;
   gap: 12px;
-  width: min(100%, 720px);
+  width: min(100%, 760px);
   align-self: center;
   justify-self: center;
+}
+
+.agent-stage-context-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  width: min(100%, 760px);
+  justify-self: center;
+}
+
+.agent-stage-context-grid > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  border: 1px solid rgba(22, 32, 31, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.56);
+  padding: 8px 9px;
+}
+
+.agent-stage-context-grid span {
+  color: var(--agent-soft);
+  font-size: 10.5px;
+  font-weight: 820;
+}
+
+.agent-stage-context-grid strong,
+.agent-stage-context-grid small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-stage-context-grid strong {
+  color: var(--agent-ink);
+  font-size: 12px;
+  font-weight: 840;
+}
+
+.agent-stage-context-grid small {
+  color: var(--agent-muted);
+  font-size: 10.5px;
 }
 
 .agent-stage-main-preview {
@@ -2787,6 +2997,20 @@
   gap: 12px;
 }
 
+.agent-project-list-head > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.agent-project-list-head p {
+  margin: 0;
+  color: var(--agent-soft);
+  font-size: 11px;
+  font-weight: 740;
+  line-height: 1.3;
+}
+
 .agent-project-list-filters {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) minmax(180px, 0.8fr);
@@ -2814,6 +3038,37 @@
 .agent-project-list-filters button.active {
   border-color: rgba(15, 118, 110, 0.22);
   background: rgba(15, 118, 110, 0.09);
+  color: var(--agent-accent-ink);
+}
+
+.agent-project-management-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  border: 1px solid rgba(22, 32, 31, 0.08);
+  border-radius: 10px;
+  background: rgba(247, 249, 247, 0.56);
+  padding: 8px 9px;
+}
+
+.agent-project-management-note span {
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.68);
+  color: var(--agent-muted);
+  padding: 4px 7px;
+  font-size: 10.5px;
+  font-weight: 780;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-project-management-note span:first-child,
+.agent-project-management-note span:nth-child(2) {
+  border: 1px solid rgba(15, 118, 110, 0.12);
   color: var(--agent-accent-ink);
 }
 
@@ -3381,6 +3636,21 @@
   display: none;
 }
 
+.agent-project-actions-row button,
+.agent-project-actions-row button:not(:first-child) {
+  display: inline-flex;
+}
+
+.agent-project-actions-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.agent-project-actions-row .agent-asset-delete-disabled {
+  border-color: rgba(180, 35, 24, 0.14) !important;
+  color: rgba(180, 35, 24, 0.72);
+}
+
 .agent-recipe-card .agent-asset-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3684,6 +3954,11 @@
   }
 
   .agent-stage-output-map {
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+
+  .agent-stage-context-grid {
     grid-template-columns: 1fr;
     width: 100%;
   }

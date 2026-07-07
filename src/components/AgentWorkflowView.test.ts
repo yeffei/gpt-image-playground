@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { appendReviewTagToNote, buildAgentReferencePayload, buildBranchInspectorSummary, buildCreativeReviewItems, buildDerivedRoutePlanInput, buildExecutionAssetActionNotice, buildExecutionControlSummary, buildHistoryAssetNextStepSummary, buildLocalEditDraftSummary, buildOutputActionSummary, buildOutputAssetActionNotice, buildOutputAssetActions, buildRecoverableAssetSummary, buildRecoveryActionSummary, buildRetryPromptFromRun, buildRouteSourceSummary, buildTimelineStepSections, buildVersionComparisonSummary, buildWorkflowNodeStates, filterAgentProjects, findAgentLibraryDetailTask, findOutputSelectionTarget, getActiveOutputReviewSummary, getInlineReferenceAssetFromRecipe, getInputImageFromReferenceAsset, getLocalEditDraftCopy, getPlanOverrideState, getProjectVersionHistory, getRecipeSourceReferenceRole, getReviewIterationOutputReference, getReviewIterationRouteState, getRouteLifecycleCopy, getRunPrimaryOutput, getRunStatusCopy, getSelectedOutputOpenTarget, getStageVersionStripItems, loadServerOutputAsLocalImage, mergeAgentReferenceImages } from './AgentWorkflowView'
+import { appendReviewTagToNote, buildAgentReferencePayload, buildBranchInspectorSummary, buildCreativeReviewItems, buildDerivedRoutePlanInput, buildExecutionAssetActionNotice, buildExecutionControlSummary, buildHistoryAssetNextStepSummary, buildLocalEditDraftSummary, buildOutputActionSummary, buildOutputAssetActionNotice, buildOutputAssetActions, buildRecoverableAssetSummary, buildRecoveryActionSummary, buildRetryPromptFromRun, buildRouteSourceSummary, buildTimelineStepSections, buildVersionComparisonSummary, buildWorkflowNodeStates, filterAgentProjects, findAgentLibraryDetailTask, findOutputSelectionTarget, getActiveOutputReviewSummary, getInlineReferenceAssetFromRecipe, getInputImageFromReferenceAsset, getLocalEditDraftCopy, getPlanOverrideState, getProjectVersionHistory, getRecipeSourceReferenceRole, getReviewIterationOutputReference, getReviewIterationRouteState, getRouteLifecycleCopy, getRunPrimaryOutput, getRunStatusCopy, getSelectedOutputOpenTarget, getStageVersionStripItems, loadServerOutputAsLocalImage, mergeAgentReferenceImages, summarizeAgentWorkflowErrorText } from './AgentWorkflowView'
 import { storeImage } from '../lib/db'
 import type { AgentRun, AgentRunOutput, AgentStep } from '../lib/agentWorkflowApi'
 
@@ -186,6 +186,21 @@ describe('AgentWorkflowView creative review helpers', () => {
     expect(filterAgentProjects(runs, { filter: 'archived' }).map((item) => item.id)).toEqual(['run_archived'])
     expect(filterAgentProjects(runs, { filter: 'all', query: '耳机' }).map((item) => item.id)).toEqual(['run_archived'])
     expect(filterAgentProjects(runs, { filter: 'active', query: '品牌广告' }).map((item) => item.id)).toEqual(['run_active'])
+  })
+
+  it('summarizes raw gateway attempts instead of exposing the full JSON error', () => {
+    const summary = summarizeAgentWorkflowErrorText(JSON.stringify({
+      message: 'Billing service temporarily unavailable. Please retry later.',
+      attempts: [
+        { index: 1, routeId: 'route_a', failureKind: 'upstream_timeout' },
+        { index: 2, routeId: 'route_b', failureKind: 'route_exhausted' },
+      ],
+    }))
+
+    expect(summary).toContain('计费服务暂不可用')
+    expect(summary).toContain('已自动尝试 2 条线路')
+    expect(summary).toContain('上游超时')
+    expect(summary).not.toContain('route_a')
   })
 
   it('describes local edit draft states', () => {

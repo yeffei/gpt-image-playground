@@ -84,6 +84,7 @@ type RuntimeRouteRow = {
   compatibility_strategy?: 'openai_standard' | 'relay_extended' | null
   default_upstream_model?: string | null
   upstream_model?: string | null
+  is_official?: boolean
   max_supported_long_edge?: number | null
   priority: number
   weight: number
@@ -268,6 +269,44 @@ export function resolveFinalDeliveryPlan(input: {
 
 function getUpstreamModelForRoute(route: RuntimeRouteRow) {
   return route.upstream_model || route.default_upstream_model || route.model_name || DEFAULT_UPSTREAM_MODEL
+}
+
+export function getUpstreamModelCandidatesForRoute(route: Pick<RuntimeRouteRow, 'upstream_model' | 'default_upstream_model' | 'model_name'>) {
+  return Array.from(new Set([
+    route.upstream_model,
+    route.default_upstream_model,
+    route.model_name,
+    DEFAULT_UPSTREAM_MODEL,
+  ]
+    .map((value) => typeof value === 'string' ? value.trim() : '')
+    .filter(Boolean)))
+}
+
+export function extractRequiredModelAlias(error: unknown) {
+  const message = getErrorMessage(error)
+  const match = message.match(/\brequires\s+model\s+([A-Za-z0-9._:-]+)/i)
+    ?? message.match(/需要(?:使用)?模型\s*([A-Za-z0-9._:-]+)/i)
+  return match?.[1]?.trim() || ''
+}
+
+function getSizeSpecificModelAlias(model: string, size?: string | null, options: { allowRelayAlias?: boolean } = {}) {
+  if (!options.allowRelayAlias) return ''
+  const normalizedModel = model.trim().toLowerCase()
+  if (normalizedModel !== 'gpt-image-2') return ''
+  const longestEdge = parseRequestedLongestEdge(size)
+  if (longestEdge >= 3840) return 'gpt-image-2-4k'
+  if (longestEdge >= 2560) return 'gpt-image-2-2k'
+  return ''
+}
+
+export function prioritizeSizeSpecificModelAliases(models: string[], size?: string | null, options: { allowRelayAlias?: boolean } = {}) {
+  const output: string[] = []
+  for (const model of models) {
+    const alias = getSizeSpecificModelAlias(model, size, options)
+    if (alias && !output.includes(alias)) output.push(alias)
+    if (model && !output.includes(model)) output.push(model)
+  }
+  return output
 }
 
 function normalizeRouteMaxSupportedLongEdge(route: RuntimeRouteRow) {
@@ -926,7 +965,7 @@ async function loadRoutesForModel(db: Db, modelSkuId: string) {
   const rows = await db.query<RuntimeRouteRow>(`
     SELECT r.id AS route_id, r.name AS route_name, m.name AS model_name, r.provider, r.base_url, r.api_key_ref,
       r.compatibility_strategy,
-      r.default_upstream_model, r.max_supported_long_edge, b.upstream_model, b.priority, b.weight, b.timeout_seconds,
+      r.default_upstream_model, r.is_official, r.max_supported_long_edge, b.upstream_model, b.priority, b.weight, b.timeout_seconds,
       COALESCE(h.consecutive_failures, 0) AS consecutive_failures,
       h.cooldown_until::text
     FROM model_route_bindings b
@@ -1129,7 +1168,11 @@ async function callUpstream(route: RuntimeRouteRow, input: GatewayRequest, exter
     n: UPSTREAM_OUTPUT_COUNT_PER_REQUEST,
   })
   const inputImages = Array.isArray(input.inputImageDataUrls) ? input.inputImageDataUrls.filter(Boolean) : []
-  const upstreamModel = route.upstream_model || route.default_upstream_model || route.model_name || DEFAULT_UPSTREAM_MODEL
+  const upstreamModelCandidates = prioritizeSizeSpecificModelAliases(
+    getUpstreamModelCandidatesForRoute(route),
+    input.params?.size,
+    { allowRelayAlias: route.is_official !== true },
+  )
   const compatibilityStrategy = normalizeCompatibilityStrategy(route.compatibility_strategy)
   const promptFields = buildUpstreamPromptFields(compatibilityStrategy, input)
   const controller = new AbortController()
@@ -1147,6 +1190,7 @@ async function callUpstream(route: RuntimeRouteRow, input: GatewayRequest, exter
 
   try {
     const requestOnce = async (
+      upstreamModel: string,
       effectiveParams: TaskParams,
       compatibilityPatch: UpstreamRequestCompatibilityPatch | null = null,
     ) => {
@@ -1260,17 +1304,35 @@ async function callUpstream(route: RuntimeRouteRow, input: GatewayRequest, exter
 
     let compatibilityPatch: UpstreamRequestCompatibilityPatch | null = null
     let lastError: unknown
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const effectiveParams = normalizeUpstreamParams(params, compatibilityPatch ?? {})
-      try {
-        return await requestOnce(effectiveParams, compatibilityPatch)
-      } catch (error) {
-        lastError = error
-        const nextPatch = getUpstreamCompatibilityPatch(error)
-        if (!nextPatch) throw error
-        const mergedPatch = mergeCompatibilityPatch(compatibilityPatch, nextPatch)
-        if (JSON.stringify(mergedPatch) === JSON.stringify(compatibilityPatch)) throw error
-        compatibilityPatch = mergedPatch
+    const pendingModels = [...upstreamModelCandidates]
+    const triedModels = new Set<string>()
+    for (let modelIndex = 0; modelIndex < pendingModels.length; modelIndex += 1) {
+      const upstreamModel = pendingModels[modelIndex]
+      if (!upstreamModel || triedModels.has(upstreamModel)) continue
+      triedModels.add(upstreamModel)
+      compatibilityPatch = null
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const effectiveParams = normalizeUpstreamParams(params, compatibilityPatch ?? {})
+        try {
+          return await requestOnce(upstreamModel, effectiveParams, compatibilityPatch)
+        } catch (error) {
+          lastError = error
+          const failureKind = classifyGatewayFailure(error)
+          const nextPatch = getUpstreamCompatibilityPatch(error)
+          if (nextPatch) {
+            const mergedPatch = mergeCompatibilityPatch(compatibilityPatch, nextPatch)
+            if (JSON.stringify(mergedPatch) === JSON.stringify(compatibilityPatch)) throw error
+            compatibilityPatch = mergedPatch
+            continue
+          }
+          const requiredModelAlias = extractRequiredModelAlias(error)
+          if (requiredModelAlias && !triedModels.has(requiredModelAlias) && !pendingModels.includes(requiredModelAlias)) {
+            pendingModels.splice(modelIndex + 1, 0, requiredModelAlias)
+            break
+          }
+          if (failureKind === 'unsupported_model') break
+          throw error
+        }
       }
     }
 

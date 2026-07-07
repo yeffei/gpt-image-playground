@@ -438,6 +438,7 @@ function toProbeRoute(row: ProbeRouteRow) {
     apiKeyRef: row.api_key_ref,
     defaultUpstreamModel: row.default_upstream_model ?? null,
     compatibilityStrategy: row.compatibility_strategy ?? null,
+    isOfficial: row.is_official,
   }
 }
 
