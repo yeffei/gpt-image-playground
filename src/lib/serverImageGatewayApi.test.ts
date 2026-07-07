@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PARAMS } from '../types'
-import { callServerImageGateway } from './serverImageGatewayApi'
+import { callServerImageGateway, deleteAllCompletedServerImageTasks, deleteServerImageTask, listServerImageTasks } from './serverImageGatewayApi'
 
 describe('serverImageGatewayApi', () => {
   beforeEach(() => {
@@ -42,5 +42,165 @@ describe('serverImageGatewayApi', () => {
       routeId: 'route-1',
       rawImageUrls: [rawUrl],
     })
+  })
+
+  it('submits a server task and polls until it succeeds', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ok: true,
+        taskId: 'task-server-1',
+        status: 'queued',
+      }), {
+        status: 202,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ok: true,
+        taskId: 'task-server-1',
+        status: 'succeeded',
+        images: ['/api/generated-images/task-server-1/output-1.jpg'],
+        actualParams: { n: 1 },
+        revisedPrompts: [],
+        rawImageUrls: [],
+        modelSku: 'gpt-image-2-fast',
+        routeId: 'route-1',
+        upstreamModel: 'gpt-image-2',
+        attempts: [],
+        billing: { outputCount: 1, chargedPoints: 1, ledgerId: 'ledger-1' },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+
+    const onServerTaskSubmitted = vi.fn()
+    await expect(callServerImageGateway({
+      modelSku: 'gpt-image-2-fast',
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [],
+      onServerTaskSubmitted,
+    })).resolves.toMatchObject({
+      taskId: 'task-server-1',
+      images: ['/api/generated-images/task-server-1/output-1.jpg'],
+      billing: { chargedPoints: 1 },
+    })
+    expect(onServerTaskSubmitted).toHaveBeenCalledWith({ taskId: 'task-server-1' })
+  })
+
+  it('throws the task failure message after polling a failed server task', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ok: true,
+        taskId: 'task-server-failed',
+        status: 'queued',
+        requestId: 'imggw-task-failed',
+      }), {
+        status: 202,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ok: true,
+        taskId: 'task-server-failed',
+        status: 'failed',
+        images: [],
+        modelSku: 'gpt-image-2-fast',
+        routeId: '',
+        upstreamModel: 'gpt-image-2',
+        attempts: [],
+        billing: { outputCount: 0, chargedPoints: 0, ledgerId: null },
+        error: {
+          message: '生图线路请求失败',
+          requestId: 'imggw-task-failed',
+          failureKind: 'upstream_timeout',
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+
+    await expect(callServerImageGateway({
+      modelSku: 'gpt-image-2-fast',
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [],
+    })).rejects.toMatchObject({
+      message: '生图线路请求失败',
+      requestId: 'imggw-task-failed',
+      failureKind: 'upstream_timeout',
+    })
+  })
+
+  it('lists server image tasks with the current session token', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(JSON.stringify({
+      ok: true,
+      tasks: [{
+        ok: true,
+        taskId: 'task-server-history',
+        status: 'succeeded',
+        mode: 'generate',
+        prompt: 'history prompt',
+        images: ['/api/generated-images/task-server-history/output-1.jpg'],
+        persistedImages: [],
+      }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+
+    await expect(listServerImageTasks('session-token', { limit: 25 })).resolves.toEqual([
+      expect.objectContaining({
+        taskId: 'task-server-history',
+        prompt: 'history prompt',
+      }),
+    ])
+    expect(fetchMock).toHaveBeenCalledWith('/api/image/tasks?limit=25', expect.objectContaining({
+      method: 'GET',
+      headers: { Authorization: 'Bearer session-token' },
+      cache: 'no-store',
+    }))
+  })
+
+  it('deletes a server image task with the current session token', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(JSON.stringify({
+      ok: true,
+      taskId: 'task-server-delete',
+      deleted: true,
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+
+    await expect(deleteServerImageTask('task-server-delete', 'session-token')).resolves.toEqual({
+      ok: true,
+      taskId: 'task-server-delete',
+      deleted: true,
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/image/tasks/task-server-delete', expect.objectContaining({
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer session-token' },
+      cache: 'no-store',
+    }))
+  })
+
+  it('deletes all completed server image tasks with the current session token', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(JSON.stringify({
+      ok: true,
+      deletedCount: 4,
+      skippedRunningCount: 1,
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+
+    await expect(deleteAllCompletedServerImageTasks('session-token')).resolves.toEqual({
+      ok: true,
+      deletedCount: 4,
+      skippedRunningCount: 1,
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/image/tasks', expect.objectContaining({
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer session-token' },
+      cache: 'no-store',
+    }))
   })
 })

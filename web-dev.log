@@ -1,0 +1,21 @@
+
+> gpt-image-playground@0.4.8 desktop:web:dev
+> vite --mode desktop --host 127.0.0.1 --port 4175
+
+
+  [32m[1mVITE[22m v6.4.3[39m  [42m [1mdesktop[22m [49m  [2mready in [0m[1m777[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://127.0.0.1:[1m4175[22m/[39m
+[2m[32m  ➜[39m[22m[2m  press [22m[1mh + enter[22m[2m to show help[22m
+[2m17:45:28[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.tsx, /src/index.css[22m
+[2m17:45:28[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.tsx, /src/index.css, /src/components/Toast.tsx, /src/components/ConfirmDialog.tsx, /src/components/Header.tsx, /src/components/InputBar.tsx, /src/components/SearchBar.tsx, /src/components/CuratedShelf.tsx, /src/components/InspirationView.tsx, /src/components/AuthView.tsx, /src/components/TaskGrid.tsx, /src/components/TaskCard.tsx, /src/components/LibraryView.tsx, /src/components/InspirationPostView.tsx, /src/components/PromptLibraryView.tsx, /src/components/ImageContextMenu.tsx, /src/components/SupportPromptModal.tsx, /src/components/SettingsModal.tsx[22m
+[2m17:45:28[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/SupportPromptModal.tsx, /src/index.css[22m
+[2m17:45:29[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [33mhmr invalidate [39m[2m/src/components/InspirationView.tsx[22m Could not Fast Refresh ("filterInspirationCardsByCategory" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m17:45:29[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.tsx, /src/index.css[22m
+[2m17:45:29[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [33mhmr invalidate [39m[2m/src/components/TaskCard.tsx[22m Could not Fast Refresh ("getTaskCardCoverBadge" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m17:45:29[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/components/TaskGrid.tsx[22m
+[2m17:46:01[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.tsx, /src/index.css, /src/components/Toast.tsx, /src/components/ConfirmDialog.tsx, /src/components/Header.tsx, /src/components/InputBar.tsx, /src/components/SearchBar.tsx, /src/components/CuratedShelf.tsx, /src/components/InspirationView.tsx, /src/components/AuthView.tsx, /src/components/TaskGrid.tsx, /src/components/TaskCard.tsx, /src/components/LibraryView.tsx, /src/components/InspirationPostView.tsx, /src/components/PromptLibraryView.tsx, /src/components/ImageContextMenu.tsx, /src/components/SettingsModal.tsx[22m
+[2m17:46:02[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [33mhmr invalidate [39m[2m/src/components/InspirationView.tsx[22m Could not Fast Refresh ("filterInspirationCardsByCategory" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m17:46:02[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.tsx, /src/index.css[22m
+[2m17:46:02[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [33mhmr invalidate [39m[2m/src/components/TaskCard.tsx[22m Could not Fast Refresh ("getTaskCardCoverBadge" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m17:46:02[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/components/TaskGrid.tsx[22m

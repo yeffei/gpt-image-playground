@@ -5,7 +5,6 @@ import type {
   AgentMessage,
   AgentRound,
   AccountState,
-  AccountProfileState,
   AuthReturnContext,
   AuthRedirectView,
   AuthViewMode,
@@ -17,9 +16,6 @@ import type {
   GalleryView,
   LibraryViewMode,
   RechargeFlowStatus,
-  RechargePaymentMethod,
-  RechargeReturnView,
-  RechargeResultStatus,
   TaskParams,
   InputImage,
   MaskDraft,
@@ -29,7 +25,9 @@ import type {
   ResponsesOutputItem,
   WorkbenchAccessState,
   WorkbenchReturnContext,
+  ImageGatewayFailureKind,
   ModelSku,
+  ServerPersistedImageOutput,
 } from './types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
 import type { PromptTemplateItem } from './lib/promptLibrary'
@@ -56,16 +54,18 @@ import {
   clearImages,
   storeImage,
 } from './lib/db'
-import { normalizeParamsForModelSku } from './lib/modelSkus'
+import { getModelSku, normalizeParamsForModelSku } from './lib/modelSkus'
 import type { ImageGatewayResult } from './lib/imageGatewayApi'
 import type { CallApiResult } from './lib/imageApiShared'
 import { isServerImageGatewayEnabled } from './lib/serverImageGatewayConfig'
+import type { ServerImageTaskListItem, ServerLibraryOutputListItem } from './lib/serverImageGatewayApi'
 import type { AgentApiResultImage } from './lib/agentApi'
 import { collectAgentRoundOutputImageSlots, extractAgentReferenceIds, getAgentCurrentReferenceId, getAgentGeneratedImageReferenceId, replaceAgentPromptImageReferencesForApi } from './lib/agentImageReferences'
 import { formatGatewayFailureMessage } from './lib/gatewayFailure'
 import { IMAGE_FETCH_CORS_HINT } from './lib/imageApiShared'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
 import { getSizeTier } from './lib/size'
+import { sanitizeNegativePrompt } from './lib/negativePromptSafety'
 
 // ===== Image cache =====
 // 内存缓存，id → dataUrl。只保留少量最近使用图片，避免大量 4K data URL 常驻内存。
@@ -81,7 +81,8 @@ const MAX_THUMBNAIL_CACHE_ENTRIES = 80
 const MAX_THUMBNAIL_BACKFILL_CONCURRENT = 4
 const FAL_RECOVERY_POLL_MS = 10_000
 const CUSTOM_RECOVERY_POLL_MS = 10_000
-const SUPPORT_PROMPT_IMAGE_THRESHOLD = 50
+const LIBRARY_ACTIVE_OUTPUT_LIMIT = 100
+const LIBRARY_TRASH_RETENTION_DAYS = 7
 const AGENT_INPUT_DRAFT_RETENTION_MS = 3 * 24 * 60 * 60 * 1000
 const AGENT_ROUND_IMAGE_MENTION_RE = /@(?:第)?(\d+)轮图(\d+)/g
 const falRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -91,9 +92,25 @@ const agentRoundControllers = new Map<string, AbortController>()
 let agentConversationPersistenceReady = false
 let agentConversationMigrationPending = false
 const OPENAI_INTERRUPTED_ERROR = '请求中断'
+const SERVER_IMAGE_INTERRUPTED_ERROR = '页面已刷新或连接中断，生成状态无法继续跟踪。'
 const AGENT_STOPPED_MESSAGE = '已停止生成。'
 const AGENT_CONVERSATION_TITLE_MAX_LENGTH = 28
 const ERROR_TOAST_MAX_LENGTH = 80
+const IMAGE_GATEWAY_FAILURE_KINDS = new Set<ImageGatewayFailureKind>([
+  'no_route',
+  'route_exhausted',
+  'insufficient_balance',
+  'upstream_timeout',
+  'upstream_rate_limited',
+  'upstream_server_error',
+  'upstream_bad_request',
+  'upstream_auth_error',
+  'content_policy_violation',
+  'unsupported_model',
+  'parameter_incompatible',
+  'network',
+  'unknown',
+])
 type ToastType = 'info' | 'success' | 'error'
 type AgentInputDraft = {
   prompt: string
@@ -123,6 +140,14 @@ function getToastMessage(message: string, type: ToastType): string {
   return type === 'error' ? getErrorToastMessage(message) : message
 }
 
+function getTrashRestoreErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  if (message.includes(`作品库最多保留 ${LIBRARY_ACTIVE_OUTPUT_LIMIT} 张`)) {
+    return `作品库已满 ${LIBRARY_ACTIVE_OUTPUT_LIMIT} 张，请先把部分作品移入回收站后再恢复。`
+  }
+  return message
+}
+
 function isErrorToastTitle(title: string): boolean {
   return /(?:失败|错误|异常|报错|无法|不能|超时|中断|断开|请先|请输入|已达上限|不存在|已丢失)$/.test(title)
 }
@@ -144,19 +169,12 @@ const DEFAULT_ACCOUNT_STATE: AccountState = {
   planName: '未开通',
 }
 const DEFAULT_BILLING_STATE: BillingState = {
-  lastRechargeAmount: null,
-  lastRechargeStatus: 'idle',
-  lastRechargeAt: null,
-  lastRechargeErrorMessage: null,
   pendingRechargeAmount: DEFAULT_RECHARGE_PACKAGE_POINTS,
-  selectedPaymentMethod: 'wechat',
   rechargeFlowStatus: 'idle',
-  rechargeReturnView: 'plan',
   rechargeHistory: [],
   usageHistory: [],
 }
 const DEFAULT_AUTH_VIEW_MODE: AuthViewMode = 'login'
-type AccountProfilesState = Record<string, AccountProfileState>
 
 type TimeoutStreamingHintProfile = Pick<ApiProfile, 'provider' | 'streamImages' | 'streamPartialImages'>
 
@@ -190,7 +208,7 @@ function normalizeAccountState(value: unknown, fallback: AccountState = DEFAULT_
   const planName = typeof value.planName === 'string' && value.planName.trim()
     ? value.planName.trim()
     : isLoggedIn
-    ? fallback.planName || '体验版'
+    ? fallback.planName || '个人标准版'
     : DEFAULT_ACCOUNT_STATE.planName
 
   return {
@@ -204,70 +222,18 @@ function normalizeAccountState(value: unknown, fallback: AccountState = DEFAULT_
   }
 }
 
-function slugifyAccountName(value: string) {
-  const trimmed = value.trim().toLowerCase()
-  if (!trimmed) return 'creator'
-  const slug = trimmed
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-  return slug || 'creator'
-}
-
-function createMockAccountUserId(displayName: string) {
-  return `mock-${slugifyAccountName(displayName)}`
-}
-
-function normalizeAccountProfiles(value: unknown): AccountProfilesState {
-  if (!isRecord(value)) return {}
-
-  const profiles: AccountProfilesState = {}
-  for (const [rawUserId, rawProfile] of Object.entries(value)) {
-    if (!rawUserId.trim() || !isRecord(rawProfile)) continue
-    const account = normalizeAccountState(rawProfile.account, DEFAULT_ACCOUNT_STATE)
-    const userId = account.userId ?? rawUserId.trim()
-    if (!userId) continue
-    const normalizedAccount = normalizeAccountState({
-      ...account,
-      userId,
-      isLoggedIn: false,
-    }, account)
-    profiles[userId] = {
-      account: normalizedAccount,
-      billing: normalizeBillingState(rawProfile.billing, DEFAULT_BILLING_STATE),
-      updatedAt: typeof rawProfile.updatedAt === 'number' && Number.isFinite(rawProfile.updatedAt)
-        ? rawProfile.updatedAt
-        : Date.now(),
-    }
-  }
-  return profiles
-}
-
-function saveAccountProfile(
-  profiles: AccountProfilesState,
-  account: AccountState,
-  billing: BillingState,
-): AccountProfilesState {
-  if (!account.userId) return profiles
-  return {
-    ...profiles,
-    [account.userId]: {
-      account: normalizeAccountState({ ...account, isLoggedIn: false }, account),
-      billing: normalizeBillingState(billing, DEFAULT_BILLING_STATE),
-      updatedAt: Date.now(),
-    },
-  }
-}
-
 function getFreshBillingState() {
   return normalizeBillingState(DEFAULT_BILLING_STATE, DEFAULT_BILLING_STATE)
 }
 
-function getStoredAccountBilling(profile: AccountProfileState | null | undefined) {
-  return normalizeBillingState(profile?.billing ?? DEFAULT_BILLING_STATE, DEFAULT_BILLING_STATE)
-}
-
 function getCurrentOwnerUserId(account = useStore.getState().account) {
   return account.isLoggedIn && account.userId ? account.userId : null
+}
+
+function resolveGatewayModelSkuId(selectedModelSkuId: string, modelSkus: ModelSku[]) {
+  const normalizedSelectedModelSkuId = selectedModelSkuId.trim()
+  if (normalizedSelectedModelSkuId) return normalizedSelectedModelSkuId
+  return modelSkus.find((sku) => sku.enabled)?.id ?? ''
 }
 
 export function isTaskVisibleForAccount(
@@ -304,28 +270,10 @@ function normalizeRechargePackageAmount(value: number | null | undefined) {
     : DEFAULT_RECHARGE_PACKAGE_POINTS
 }
 
-function normalizeSelectedRechargePaymentMethod(
-  value: unknown,
-  fallback: RechargePaymentMethod = DEFAULT_BILLING_STATE.selectedPaymentMethod,
-): RechargePaymentMethod {
-  if (value === 'wechat' || value === 'alipay') return value
-  return fallback === 'alipay' ? 'alipay' : 'wechat'
-}
-
-function getBillingUnitPoints(params: Pick<TaskParams, 'size' | 'quality'>) {
+function getBillingUnitPoints(params: Pick<TaskParams, 'size'>) {
   const sizeTier = getSizeTier(params.size)
-  if (sizeTier === '4K') {
-    if (params.quality === 'high') return 6
-    if (params.quality === 'medium') return 5
-    return 4
-  }
-  if (sizeTier === '2K') {
-    if (params.quality === 'high') return 4
-    if (params.quality === 'medium') return 3
-    return 2
-  }
-  if (params.quality === 'high') return 3
-  if (params.quality === 'medium') return 2
+  if (sizeTier === '4K') return 6
+  if (sizeTier === '2K') return 3
   return 1
 }
 
@@ -340,7 +288,7 @@ export function estimateBillingPoints(params: Pick<TaskParams, 'size' | 'quality
   }
 }
 
-function getLocalUsageCharge(params: Pick<TaskParams, 'size' | 'quality'>, outputCount: number) {
+function getLocalUsageCharge(params: Pick<TaskParams, 'size'>, outputCount: number) {
   const unit = getBillingUnitPoints(params)
   return normalizeMoney(unit * Math.max(1, outputCount))
 }
@@ -348,36 +296,14 @@ function getLocalUsageCharge(params: Pick<TaskParams, 'size' | 'quality'>, outpu
 function normalizeBillingState(value: unknown, fallback: BillingState = DEFAULT_BILLING_STATE): BillingState {
   if (!isRecord(value)) return { ...fallback }
   return {
-    lastRechargeAmount:
-      typeof value.lastRechargeAmount === 'number' && Number.isFinite(value.lastRechargeAmount)
-        ? Math.max(0, Number(value.lastRechargeAmount.toFixed(2)))
-        : fallback.lastRechargeAmount,
-    lastRechargeStatus:
-      value.lastRechargeStatus === 'success' || value.lastRechargeStatus === 'failed' || value.lastRechargeStatus === 'interrupted'
-        ? value.lastRechargeStatus
-        : 'idle',
-    lastRechargeAt:
-      typeof value.lastRechargeAt === 'number' && Number.isFinite(value.lastRechargeAt)
-        ? value.lastRechargeAt
-        : fallback.lastRechargeAt,
-    lastRechargeErrorMessage:
-      typeof value.lastRechargeErrorMessage === 'string' && value.lastRechargeErrorMessage.trim()
-        ? value.lastRechargeErrorMessage.trim().slice(0, 120)
-        : fallback.lastRechargeErrorMessage ?? null,
     pendingRechargeAmount:
       typeof value.pendingRechargeAmount === 'number' && Number.isFinite(value.pendingRechargeAmount)
         ? normalizeRechargePackageAmount(value.pendingRechargeAmount)
         : fallback.pendingRechargeAmount,
-    selectedPaymentMethod:
-      normalizeSelectedRechargePaymentMethod(value.selectedPaymentMethod, fallback.selectedPaymentMethod),
     rechargeFlowStatus:
       value.rechargeFlowStatus === 'processing' || value.rechargeFlowStatus === 'success' || value.rechargeFlowStatus === 'failed' || value.rechargeFlowStatus === 'cancelled'
         ? value.rechargeFlowStatus
         : 'idle',
-    rechargeReturnView:
-      value.rechargeReturnView === 'workbench' || value.rechargeReturnView === 'plan'
-        ? value.rechargeReturnView
-        : fallback.rechargeReturnView,
     rechargeHistory:
       Array.isArray(value.rechargeHistory)
         ? value.rechargeHistory
@@ -396,7 +322,7 @@ function normalizeBillingState(value: unknown, fallback: BillingState = DEFAULT_
               amount: Math.max(0, Number(item.amount.toFixed(2))),
               status: item.status,
               paymentMethod: item.paymentMethod,
-              channel: item.channel === 'recharge_code' || item.channel === 'mock_payment' ? item.channel : undefined,
+              channel: item.channel === 'recharge_code' ? item.channel : undefined,
               code: typeof item.code === 'string' ? item.code.trim().slice(0, 48) : undefined,
               createdAt: item.createdAt,
               balanceAfter:
@@ -464,7 +390,7 @@ function getTimeoutStreamingHint(profile?: TimeoutStreamingHintProfile | null) {
 }
 
 function isWorkbenchReturnNavSource(view: GalleryView): view is Exclude<GalleryView, 'workbench' | 'auth'> {
-  return view === 'library' || view === 'promptLibrary' || view === 'plan' || view === 'recharge'
+  return view === 'library' || view === 'promptLibrary' || view === 'agentWorkflow' || view === 'plan' || view === 'recharge'
 }
 
 function createOpenAITimeoutError(timeoutSeconds: number, profile?: TimeoutStreamingHintProfile | null) {
@@ -588,6 +514,352 @@ async function storeGeneratedImageForTask(image: string) {
   return { imgId, dataUrl }
 }
 
+function mapServerOutputsByImageId(
+  imageIds: string[],
+  persistedImages?: ServerPersistedImageOutput[],
+): TaskRecord['serverOutputByImageId'] | undefined {
+  if (!persistedImages?.length) return undefined
+  const refs: NonNullable<TaskRecord['serverOutputByImageId']> = {}
+  for (const output of persistedImages) {
+    const imageId = imageIds[output.outputIndex]
+    if (!imageId || !output.id) continue
+    refs[imageId] = {
+      outputId: output.id,
+      taskId: output.taskId,
+      outputIndex: output.outputIndex,
+    }
+  }
+  return Object.keys(refs).length > 0 ? refs : undefined
+}
+
+function getServerOutputImageId(output: ServerPersistedImageOutput, taskId: string) {
+  return `server-${output.id || `${taskId}-${output.outputIndex}`}`
+}
+
+function parseServerTaskTime(value?: string | null) {
+  if (!value) return null
+  const time = Date.parse(value)
+  return Number.isFinite(time) ? time : null
+}
+
+function parseServerTimeOrNull(value?: string | null) {
+  return parseServerTaskTime(value) ?? null
+}
+
+function mapServerTaskStatus(status: ServerImageTaskListItem['status']): TaskRecord['status'] {
+  if (status === 'succeeded') return 'done'
+  if (status === 'queued' || status === 'running') return 'running'
+  return 'error'
+}
+
+async function persistServerTaskImageReferences(task: ServerImageTaskListItem) {
+  const persistedImages = Array.isArray(task.persistedImages) ? task.persistedImages : []
+  const imageIds: string[] = []
+  const createdAt = parseServerTaskTime(task.createdAt) ?? Date.now()
+  for (const output of persistedImages) {
+    const imageUrl = typeof output.url === 'string' && output.url.trim() ? output.url.trim() : task.images?.[output.outputIndex]
+    if (!imageUrl) continue
+    const imageId = getServerOutputImageId(output, task.taskId)
+    imageIds[output.outputIndex] = imageId
+    await putImage({
+      id: imageId,
+      dataUrl: imageUrl,
+      publicUrl: imageUrl,
+      createdAt,
+      source: 'generated',
+    })
+    await putImageThumbnail({
+      id: imageId,
+      thumbnailDataUrl: imageUrl,
+      thumbnailVersion: CURRENT_THUMBNAIL_VERSION,
+    })
+  }
+  return imageIds.filter(Boolean)
+}
+
+async function mapServerTaskToTaskRecord(
+  task: ServerImageTaskListItem,
+  ownerUserId: string,
+): Promise<TaskRecord> {
+  const createdAt = parseServerTaskTime(task.createdAt) ?? Date.now()
+  const finishedAt = parseServerTaskTime(task.finishedAt)
+  const outputImages = await persistServerTaskImageReferences(task)
+  const revisedPromptByImage = outputImages.reduce<Record<string, string>>((acc, imageId, index) => {
+    const revisedPrompt = task.revisedPrompts?.[index]
+    if (typeof revisedPrompt === 'string' && revisedPrompt.trim()) acc[imageId] = revisedPrompt
+    return acc
+  }, {})
+  const status = mapServerTaskStatus(task.status)
+  const errorMessage = typeof task.error?.message === 'string' && task.error.message.trim()
+    ? task.error.message
+    : status === 'error'
+      ? '任务未完成'
+      : null
+  return {
+    id: task.taskId,
+    ownerUserId,
+    prompt: typeof task.prompt === 'string' ? task.prompt : '',
+    negativePrompt: typeof task.negativePrompt === 'string' ? task.negativePrompt : undefined,
+    params: {
+      ...DEFAULT_PARAMS,
+      ...(task.params ?? {}),
+    },
+    apiProvider: 'openai',
+    modelSku: task.modelSku,
+    requestId: task.error?.requestId || task.requestId,
+    routeId: task.routeId,
+    upstreamModel: task.upstreamModel,
+    attempts: task.attempts,
+    requestedOutputCount: task.requestedOutputCount,
+    partialFailureMessage: task.partialFailureMessage,
+    chargedPoints: task.billing?.chargedPoints ?? null,
+    chargeLedgerId: task.billing?.ledgerId ?? null,
+    gatewayFailureKind: IMAGE_GATEWAY_FAILURE_KINDS.has(task.error?.failureKind as ImageGatewayFailureKind)
+      ? task.error?.failureKind as ImageGatewayFailureKind
+      : undefined,
+    serverImageTaskId: task.taskId,
+    actualParams: task.actualParams,
+    deliveryPlan: task.deliveryPlan,
+    revisedPromptByImage: Object.keys(revisedPromptByImage).length ? revisedPromptByImage : undefined,
+    inputImageIds: [],
+    outputImages,
+    serverOutputByImageId: mapServerOutputsByImageId(outputImages, task.persistedImages),
+    libraryState: 'active',
+    libraryDeletedAt: null,
+    libraryPurgeAfter: null,
+    rawImageUrls: task.rawImageUrls,
+    status,
+    error: errorMessage,
+    createdAt,
+    finishedAt,
+    elapsed: finishedAt ? Math.max(0, finishedAt - createdAt) : null,
+    sourceMode: task.mode === 'agent' || task.mode === 'agent_edit' ? 'agent' : 'gallery',
+  }
+}
+
+async function mapServerLibraryOutputGroupToTaskRecord(
+  outputs: ServerLibraryOutputListItem[],
+  ownerUserId: string,
+): Promise<TaskRecord> {
+  const primary = outputs[0]
+  const createdAt = parseServerTaskTime(primary?.task.createdAt) ?? Date.now()
+  const finishedAt = parseServerTaskTime(primary?.task.finishedAt) ?? createdAt
+  const outputImages: string[] = []
+  const serverOutputByImageId: NonNullable<TaskRecord['serverOutputByImageId']> = {}
+  const actualParamsByImage: NonNullable<TaskRecord['actualParamsByImage']> = {}
+  for (const output of outputs) {
+    const imageId = `server-${output.id || `${output.taskId}-${output.outputIndex}`}`
+    const outputSize =
+      output.width != null && output.width > 0 && output.height != null && output.height > 0
+        ? `${output.width}x${output.height}`
+        : undefined
+    outputImages[output.outputIndex] = imageId
+    serverOutputByImageId[imageId] = {
+      outputId: output.id,
+      taskId: output.taskId,
+      outputIndex: output.outputIndex,
+    }
+    if (outputSize) {
+      actualParamsByImage[imageId] = { size: outputSize }
+    }
+    await putImage({
+      id: imageId,
+      dataUrl: output.url,
+      publicUrl: output.url,
+      createdAt,
+      source: 'generated',
+      width: output.width ?? undefined,
+      height: output.height ?? undefined,
+    })
+    await putImageThumbnail({
+      id: imageId,
+      thumbnailDataUrl: output.url,
+      width: output.width ?? undefined,
+      height: output.height ?? undefined,
+      thumbnailVersion: CURRENT_THUMBNAIL_VERSION,
+    })
+  }
+
+  const primaryOutputSize = actualParamsByImage[outputImages[0] ?? '']?.size
+
+  return {
+    id: primary.taskId,
+    ownerUserId,
+    prompt: primary.task.prompt || '',
+    negativePrompt: primary.task.negativePrompt,
+    params: { ...DEFAULT_PARAMS },
+    apiProvider: 'openai',
+    modelSku: primary.task.modelSku,
+    requestId: primary.task.requestId ?? undefined,
+    routeId: primary.task.routeId ?? undefined,
+    upstreamModel: primary.task.upstreamModel ?? undefined,
+    serverImageTaskId: primary.task.id,
+    actualParams: primaryOutputSize ? { size: primaryOutputSize } : undefined,
+    actualParamsByImage: Object.keys(actualParamsByImage).length ? actualParamsByImage : undefined,
+    inputImageIds: [],
+    outputImages: outputImages.filter(Boolean),
+    serverOutputByImageId,
+    libraryState: primary.deletedAt ? 'trashed' : 'active',
+    libraryDeletedAt: parseServerTimeOrNull(primary.deletedAt),
+    libraryPurgeAfter: parseServerTimeOrNull(primary.purgeAfter),
+    status: primary.task.status === 'succeeded' ? 'done' : mapServerTaskStatus(primary.task.status),
+    error: null,
+    createdAt,
+    finishedAt,
+    elapsed: Math.max(0, finishedAt - createdAt),
+    sourceMode: 'gallery',
+  }
+}
+
+function mergeServerTaskIntoLocalTask(existingTask: TaskRecord, serverTask: TaskRecord): TaskRecord {
+  return {
+    ...existingTask,
+    ...serverTask,
+    id: existingTask.id,
+    ownerUserId: existingTask.ownerUserId ?? serverTask.ownerUserId,
+    prompt: serverTask.prompt || existingTask.prompt,
+    negativePrompt: serverTask.negativePrompt ?? existingTask.negativePrompt,
+    params: {
+      ...existingTask.params,
+      ...serverTask.params,
+    },
+    apiProvider: existingTask.apiProvider ?? serverTask.apiProvider,
+    apiProfileId: existingTask.apiProfileId,
+    apiProfileName: existingTask.apiProfileName,
+    apiMode: existingTask.apiMode,
+    apiModel: existingTask.apiModel,
+    inputImageIds: existingTask.inputImageIds,
+    maskTargetImageId: existingTask.maskTargetImageId,
+    maskImageId: existingTask.maskImageId,
+    sourceMode: existingTask.sourceMode ?? serverTask.sourceMode,
+    agentConversationId: existingTask.agentConversationId,
+    agentRoundId: existingTask.agentRoundId,
+    agentMessageId: existingTask.agentMessageId,
+    agentToolCallId: existingTask.agentToolCallId,
+    agentBatchCallId: existingTask.agentBatchCallId,
+    agentToolAction: existingTask.agentToolAction,
+    isFavorite: existingTask.isFavorite,
+  }
+}
+
+async function loadServerImageTasksForSession(localTasks: TaskRecord[]) {
+  const state = useStore.getState()
+  const sessionToken = state.authSessionToken?.trim()
+  const ownerUserId = state.account.userId?.trim()
+  if (!state.account.isLoggedIn || !sessionToken || !ownerUserId || !isServerImageGatewayEnabled()) return localTasks
+
+  try {
+    const { listServerImageTasks, listServerLibraryOutputs } = await import('./lib/serverImageGatewayApi')
+    const [serverTasks, activeOutputs, trashedOutputs] = await Promise.all([
+      listServerImageTasks(sessionToken, { limit: 100 }),
+      listServerLibraryOutputs(sessionToken, { limit: 200, status: 'active' }),
+      listServerLibraryOutputs(sessionToken, { limit: 200, status: 'trashed' }),
+    ])
+    const taskMap = new Map<string, TaskRecord>()
+    const mappedTasks = await Promise.all(serverTasks.map((task) => mapServerTaskToTaskRecord(task, ownerUserId)))
+    for (const task of mappedTasks) taskMap.set(task.id, task)
+    const groupedOutputs = new Map<string, ServerLibraryOutputListItem[]>()
+    for (const item of [...activeOutputs, ...trashedOutputs]) {
+      const group = groupedOutputs.get(item.taskId) ?? []
+      group.push(item)
+      groupedOutputs.set(item.taskId, group)
+    }
+    const mappedOutputs = await Promise.all(
+      Array.from(groupedOutputs.values()).map((group) =>
+        mapServerLibraryOutputGroupToTaskRecord(
+          [...group].sort((a, b) => a.outputIndex - b.outputIndex),
+          ownerUserId,
+        ),
+      ),
+    )
+    for (const task of mappedOutputs) {
+      const existing = taskMap.get(task.id)
+      taskMap.set(task.id, existing ? mergeServerTaskIntoLocalTask(existing, task) : task)
+    }
+    const mergedTasks = Array.from(taskMap.values())
+    await Promise.all(mergedTasks.map((task) => putTask(task)))
+    return mergedTasks
+  } catch {
+    return localTasks
+  }
+}
+
+async function syncServerLibraryTasksForCurrentSession() {
+  const state = useStore.getState()
+  const mergedTasks = await loadServerImageTasksForSession(state.tasks)
+  if (mergedTasks !== state.tasks) {
+    const serverTaskIds = new Set(mergedTasks.map((task) => task.id))
+    const preservedLocalTasks = state.tasks.filter((task) => {
+      const hasServerOutputs = Boolean(task.serverOutputByImageId && Object.keys(task.serverOutputByImageId).length > 0)
+      const isServerBacked = Boolean(task.serverImageTaskId?.trim()) || hasServerOutputs
+      return !isServerBacked
+    })
+    state.setTasks([
+      ...mergedTasks,
+      ...preservedLocalTasks.filter((task) => !serverTaskIds.has(task.id)),
+    ])
+  }
+}
+
+async function refreshTaskFromServer(taskId: string) {
+  const state = useStore.getState()
+  const sessionToken = state.authSessionToken?.trim()
+  if (!state.account.isLoggedIn || !sessionToken || !isServerImageGatewayEnabled()) return
+
+  const localTask = state.tasks.find((task) => task.id === taskId)
+  if (!localTask) return
+  const remoteTaskId = localTask.serverImageTaskId?.trim() || localTask.id
+  if (!remoteTaskId) return
+
+  try {
+    const { getServerImageTask } = await import('./lib/serverImageGatewayApi')
+    const serverTask = await getServerImageTask(remoteTaskId, sessionToken)
+    const mappedTask = await mapServerTaskToTaskRecord(
+      { ...serverTask, taskId: remoteTaskId },
+      localTask.ownerUserId?.trim() || state.account.userId?.trim() || '',
+    )
+    updateTaskInStore(taskId, mergeServerTaskIntoLocalTask(localTask, mappedTask))
+  } catch {
+    // Keep the current local snapshot when the backend detail cannot be refreshed.
+  }
+}
+
+function getRemoteServerTaskId(task: TaskRecord) {
+  const explicitTaskId = task.serverImageTaskId?.trim()
+  if (explicitTaskId) return explicitTaskId
+  const hasServerTrace = Boolean(
+    task.chargeLedgerId
+    || task.requestId
+    || task.routeId
+    || task.upstreamModel
+    || (task.serverOutputByImageId && Object.keys(task.serverOutputByImageId).length > 0),
+  )
+  return hasServerTrace && task.id.trim() ? task.id.trim() : null
+}
+
+async function deleteTaskFromServerIfNeeded(task: TaskRecord) {
+  const state = useStore.getState()
+  const sessionToken = state.authSessionToken?.trim()
+  if (!state.account.isLoggedIn || !sessionToken || !isServerImageGatewayEnabled()) return
+
+  const remoteTaskId = getRemoteServerTaskId(task)
+  if (!remoteTaskId) return
+
+  const { deleteServerImageTask } = await import('./lib/serverImageGatewayApi')
+  await deleteServerImageTask(remoteTaskId, sessionToken)
+}
+
+async function moveTaskOutputsToTrashIfNeeded(task: TaskRecord) {
+  const state = useStore.getState()
+  const sessionToken = state.authSessionToken?.trim()
+  if (!state.account.isLoggedIn || !sessionToken || !isServerImageGatewayEnabled()) return false
+  const outputs = task.serverOutputByImageId ? Object.values(task.serverOutputByImageId) : []
+  if (!outputs.length) return false
+  const { deleteServerLibraryOutput } = await import('./lib/serverImageGatewayApi')
+  await Promise.all(outputs.map((output) => deleteServerLibraryOutput(output.outputId, sessionToken)))
+  return true
+}
+
 async function recordAgentCompletedImageTask(input: {
   taskId: string
   prompt: string
@@ -615,23 +887,49 @@ async function recordAgentCompletedImageTask(input: {
     }, state.authSessionToken)
 
     if (!result.alreadyRecorded && result.chargedPoints > 0) {
-      useStore.setState((current) => ({
-        account: normalizeAccountState({
-          ...current.account,
-          balance: Math.max(0, current.account.balance - result.chargedPoints),
-        }, current.account),
-      }))
+      void useStore.getState().refreshBackendAccount()
     }
 
     return {
       outputCount: result.outputCount,
       chargedPoints: result.chargedPoints,
       ledgerId: result.ledgerId,
+      persistedImages: result.persistedImages,
     }
   } catch (error) {
     console.warn('记录对话生图任务失败', error)
     return null
   }
+}
+
+export async function cancelServerTask(task: TaskRecord) {
+  if (!task.serverImageTaskId || !isServerImageGatewayEnabled()) return
+  const state = useStore.getState()
+  if (!state.authSessionToken) return
+  try {
+    const { cancelServerImageTask } = await import('./lib/serverImageGatewayApi')
+    await cancelServerImageTask(task.serverImageTaskId, state.authSessionToken)
+  } catch (err) {
+    console.warn('cancel server image task failed', err)
+  }
+}
+
+export async function stopRunningTask(task: TaskRecord, options: { silent?: boolean } = {}) {
+  if (task.status !== 'running') return false
+  const finishedAt = Date.now()
+  await cancelServerTask(task)
+  updateTaskInStore(task.id, {
+    status: 'error',
+    error: '已停止生成。',
+    falRecoverable: false,
+    customRecoverable: false,
+    finishedAt,
+    elapsed: Math.max(0, finishedAt - task.createdAt),
+  })
+  if (!options.silent) {
+    useStore.getState().showToast('已停止等待，可重新生成', 'info')
+  }
+  return true
 }
 
 export async function ensureImageThumbnailCached(id: string): Promise<{ dataUrl: string; width?: number; height?: number } | undefined> {
@@ -778,53 +1076,6 @@ function orderImagesWithMaskFirst(images: InputImage[], maskTargetImageId: strin
   const [maskImage] = next.splice(maskIdx, 1)
   next.unshift(maskImage)
   return next
-}
-
-function isAgentTask(task: TaskRecord) {
-  return task.sourceMode === 'agent' || Boolean(task.agentConversationId || task.agentRoundId)
-}
-
-function countSuccessfulOutputImages(tasks: TaskRecord[]) {
-  return tasks.reduce((count, task) => count + (task.status === 'done' && !isAgentTask(task) ? task.outputImages.length : 0), 0)
-}
-
-function skipSupportPromptForImportedData(tasks: TaskRecord[]) {
-  const count = countSuccessfulOutputImages(tasks)
-  useStore.setState((state) => {
-    if (state.supportPromptDismissed) return {}
-    if (count <= SUPPORT_PROMPT_IMAGE_THRESHOLD) {
-      return { supportPromptSkippedForImportedData: false }
-    }
-    if (state.supportPromptOpen) return {}
-    return { supportPromptSkippedForImportedData: true }
-  })
-}
-
-function showSupportPromptForExistingLocalData(tasks: TaskRecord[]) {
-  const count = countSuccessfulOutputImages(tasks)
-  useStore.setState((state) => {
-    if (state.supportPromptDismissed || state.supportPromptOpen) return {}
-    if (count <= SUPPORT_PROMPT_IMAGE_THRESHOLD) {
-      return { supportPromptSkippedForImportedData: false }
-    }
-    if (state.supportPromptSkippedForImportedData) return {}
-    return { supportPromptOpen: true }
-  })
-}
-
-function maybeOpenSupportPrompt(previousTasks: TaskRecord[], nextTasks: TaskRecord[], taskId: string) {
-  const state = useStore.getState()
-  if (state.supportPromptDismissed || state.supportPromptOpen || state.supportPromptSkippedForImportedData) return
-
-  const previousTask = previousTasks.find((task) => task.id === taskId)
-  const nextTask = nextTasks.find((task) => task.id === taskId)
-  if (!nextTask || previousTask?.status === 'done' || nextTask.status !== 'done' || nextTask.outputImages.length === 0) return
-
-  const previousCount = countSuccessfulOutputImages(previousTasks)
-  const nextCount = countSuccessfulOutputImages(nextTasks)
-  if (previousCount <= SUPPORT_PROMPT_IMAGE_THRESHOLD && nextCount > SUPPORT_PROMPT_IMAGE_THRESHOLD) {
-    useStore.setState({ supportPromptOpen: true })
-  }
 }
 
 function normalizeStringArray(value: unknown): string[] {
@@ -1001,12 +1252,22 @@ function stripPersistedAgentConversations(value: unknown): unknown {
 
 export function migratePersistedState(persistedState: unknown): unknown {
   if (!isRecord(persistedState)) return persistedState
+  const { accountProfiles: _legacyAccountProfiles, ...restPersistedState } = persistedState
+  const authSessionToken = typeof persistedState.authSessionToken === 'string' && persistedState.authSessionToken.trim()
+    ? persistedState.authSessionToken.trim()
+    : null
+  const normalizedAccount = normalizeAccountState(persistedState.account, DEFAULT_ACCOUNT_STATE)
+  const account = authSessionToken ? normalizedAccount : { ...DEFAULT_ACCOUNT_STATE }
+  const billing = authSessionToken
+    ? normalizeBillingState(persistedState.billing, DEFAULT_BILLING_STATE)
+    : getFreshBillingState()
   return {
-    ...persistedState,
+    ...restPersistedState,
     appMode: 'gallery',
     params: migratePersistedParams(persistedState.params),
-    account: normalizeAccountState(persistedState.account, DEFAULT_ACCOUNT_STATE),
-    billing: normalizeBillingState(persistedState.billing, DEFAULT_BILLING_STATE),
+    authSessionToken,
+    account,
+    billing,
     agentConversations: stripPersistedAgentConversations(persistedState.agentConversations),
     constraintMemoryTerms: Array.isArray(persistedState.constraintMemoryTerms)
       ? persistedState.constraintMemoryTerms.filter((item): item is string => typeof item === 'string')
@@ -1058,12 +1319,10 @@ function getLatestAgentConversation(conversations: AgentConversation[]) {
 export function getPersistedState(state: AppState) {
   const settings = normalizeSettings(state.settings)
   const galleryInputDraft = getPersistableGalleryInputDraft(state)
-  const accountProfiles = saveAccountProfile(state.accountProfiles, state.account, state.billing)
   return {
     authSessionToken: state.authSessionToken,
     account: state.account,
     billing: state.billing,
-    accountProfiles,
     settings,
     params: state.params,
     constraintMemoryTerms: state.constraintMemoryTerms,
@@ -1098,9 +1357,6 @@ export function getPersistedState(state: AppState) {
     agentSidebarCollapsed: state.agentSidebarCollapsed,
     agentAssetTab: state.agentAssetTab,
     agentAssetPanelCollapsed: state.agentAssetPanelCollapsed,
-    supportPromptDismissed: state.supportPromptDismissed,
-    supportPromptOpen: state.supportPromptOpen,
-    supportPromptSkippedForImportedData: state.supportPromptSkippedForImportedData,
   }
 }
 
@@ -1116,16 +1372,13 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
   if (!persistedState || typeof persistedState !== 'object') return currentState
 
   const persisted = persistedState as Partial<AppState>
-  const account = normalizeAccountState(persisted.account, currentState.account)
   const authSessionToken = typeof persisted.authSessionToken === 'string' && persisted.authSessionToken.trim()
     ? persisted.authSessionToken.trim()
     : null
-  const billing = normalizeBillingState(persisted.billing, currentState.billing)
-  const accountProfiles = saveAccountProfile(
-    normalizeAccountProfiles(persisted.accountProfiles),
-    account,
-    billing,
-  )
+  const account = authSessionToken
+    ? normalizeAccountState(persisted.account, currentState.account)
+    : { ...DEFAULT_ACCOUNT_STATE }
+  const billing = getFreshBillingState()
   const settings = normalizeSettings(persisted.settings ?? currentState.settings)
   const hasPersistedAgentConversations = Array.isArray(persisted.agentConversations)
   if (hasPersistedAgentConversations && normalizeAgentConversations(persisted.agentConversations).length > 0) {
@@ -1145,12 +1398,18 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     ? 'auth'
     : persisted.galleryView === 'recharge'
     ? 'plan'
+    : persisted.galleryView === 'agentWorkflow'
+    ? 'agentWorkflow'
     : persisted.galleryView === 'promptLibrary'
     ? 'promptLibrary'
     : persisted.galleryView === 'library'
     ? 'library'
     : 'workbench'
-  const libraryViewMode = persisted.libraryViewMode === 'favorites' ? 'favorites' : 'all'
+  const libraryViewMode = persisted.libraryViewMode === 'favorites'
+    ? 'favorites'
+    : persisted.libraryViewMode === 'trash'
+    ? 'trash'
+    : 'all'
   const promptLibraryTab = persisted.promptLibraryTab === 'mine'
     ? 'mine'
     : persisted.promptLibraryTab === 'recent'
@@ -1254,7 +1513,6 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     authSessionToken,
     account,
     billing,
-    accountProfiles,
     settings,
     appMode,
     galleryView,
@@ -1272,9 +1530,6 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     agentSidebarCollapsed: Boolean(persisted.agentSidebarCollapsed),
     agentAssetTab: persisted.agentAssetTab === 'references' ? 'references' : 'outputs',
     agentAssetPanelCollapsed: Boolean(persisted.agentAssetPanelCollapsed),
-    supportPromptDismissed: Boolean(persisted.supportPromptDismissed),
-    supportPromptOpen: Boolean(persisted.supportPromptOpen),
-    supportPromptSkippedForImportedData: Boolean(persisted.supportPromptSkippedForImportedData),
     prompt: restoredAgentDraft ? restoredAgentDraft.prompt : galleryInputDraft?.prompt ?? '',
     negativePrompt: restoredAgentDraft ? restoredAgentDraft.negativePrompt ?? '' : galleryInputDraft?.negativePrompt ?? '',
     constraintMemoryTerms,
@@ -1305,7 +1560,6 @@ interface AppState {
   setAuthViewMode: (mode: AuthViewMode) => void
   authRedirectView: AuthRedirectView
   openAuthView: (options?: { mode?: AuthViewMode; redirectTo?: AuthRedirectView }) => void
-  completeMockAuth: (patch?: Partial<AccountState>) => void
   completeAuthSession: (input: { token: string; account: Partial<AccountState> }) => void
   promptLibraryTab: 'official' | 'mine' | 'recent'
   setPromptLibraryTab: (tab: AppState['promptLibraryTab']) => void
@@ -1319,24 +1573,35 @@ interface AppState {
   // 账户与工作台访问
   authSessionToken: string | null
   account: AccountState
-  accountProfiles: AccountProfilesState
+  accountLedger: Array<{
+    id: string
+    type: string
+    amount: number
+    balanceBefore: number
+    balanceAfter: number
+    relatedId?: string | null
+    note?: string | null
+    createdAt: string
+  }> | null
+  accountLedgerError: string | null
+  accountLedgerLoading: boolean
   setAccountState: (patch: Partial<AccountState>) => void
-  setLoggedIn: (loggedIn: boolean) => void
   setAccountBalance: (balance: number) => void
   setAccountPlanName: (planName: string) => void
   setAccountDisplayName: (displayName: string) => void
+  refreshBackendAccount: () => Promise<void>
+  refreshAccountLedger: () => Promise<void>
+  refreshReferralInfo: () => Promise<void>
+  syncServerLibraryTasks: () => Promise<void>
+  refreshTaskFromServer: (taskId: string) => Promise<void>
   logout: () => void
   getWorkbenchAccessState: () => WorkbenchAccessState
   openLoginDialog: () => void
   openPlanDialog: () => void
-  openRechargeView: (options?: { amount?: number; returnTo?: RechargeReturnView }) => void
   billing: BillingState
-  setRechargeResult: (status: RechargeResultStatus, amount?: number | null) => void
   setPendingRechargeAmount: (amount: number) => void
-  setSelectedPaymentMethod: (method: RechargePaymentMethod) => void
   setRechargeFlowStatus: (status: RechargeFlowStatus) => void
   redeemRechargeCode: (code: string) => Promise<void>
-  completeRechargeFlow: (status: Extract<RechargeFlowStatus, 'success' | 'failed' | 'cancelled'>) => void
 
   // 设置
   settings: AppSettings
@@ -1366,6 +1631,7 @@ interface AppState {
   clearInputImages: () => void
   setInputImages: (imgs: InputImage[], options?: { equivalentImageIds?: Record<string, string> }) => void
   moveInputImage: (fromIdx: number, toIdx: number) => void
+  addInputImageFromReference: (src: string) => Promise<InputImage>
   maskDraft: MaskDraft | null
   setMaskDraft: (draft: MaskDraft | null) => void
   clearMaskDraft: () => void
@@ -1440,11 +1706,6 @@ interface AppState {
   showSettings: boolean
   settingsTabRequest: SettingsTab | null
   setShowSettings: (v: boolean, tab?: SettingsTab) => void
-  supportPromptOpen: boolean
-  supportPromptDismissed: boolean
-  supportPromptSkippedForImportedData: boolean
-  setSupportPromptOpen: (v: boolean) => void
-  dismissSupportPrompt: () => void
 
   // Toast
   toast: { message: string; type: ToastType } | null
@@ -1846,6 +2107,8 @@ export const useStore = create<AppState>()(
         const redirectTo = options?.redirectTo
           ?? (get().galleryView === 'plan'
             ? 'plan'
+            : get().galleryView === 'agentWorkflow'
+            ? 'agentWorkflow'
             : get().galleryView === 'library'
             ? 'library'
             : get().galleryView === 'promptLibrary'
@@ -1860,76 +2123,23 @@ export const useStore = create<AppState>()(
           authRedirectView: redirectTo,
         })
       },
-      completeMockAuth: (patch) => {
-        const state = get()
-        const redirectTo = state.authRedirectView
-        const baseProfiles = saveAccountProfile(state.accountProfiles, state.account, state.billing)
-        const nextDisplayName = patch?.displayName ?? state.account.displayName ?? '创作者'
-        const nextUserId = patch?.userId ?? state.account.userId ?? createMockAccountUserId(nextDisplayName)
-        const savedProfile = nextUserId ? baseProfiles[nextUserId] : null
-        const savedAccount = savedProfile?.account
-        const nextPlanName = patch?.planName ?? savedAccount?.planName ?? '体验版'
-        const nextBalance = typeof patch?.balance === 'number'
-          ? patch.balance
-          : savedAccount?.balance ?? 0
-        const nextBilling = savedProfile ? getStoredAccountBilling(savedProfile) : getFreshBillingState()
-        const finishedAt = Date.now()
-        const account = normalizeAccountState({
-          ...DEFAULT_ACCOUNT_STATE,
-          ...savedAccount,
-          ...patch,
-          userId: nextUserId,
-          isLoggedIn: true,
-          displayName: nextDisplayName,
-          planName: nextPlanName === '未开通' ? '体验版' : nextPlanName,
-          balance: nextBalance,
-        }, savedAccount ?? DEFAULT_ACCOUNT_STATE)
-        set(() => ({
-          account,
-          billing: nextBilling,
-          accountProfiles: saveAccountProfile(baseProfiles, account, nextBilling),
-          galleryView: redirectTo,
-          workbenchReturnContext: redirectTo === 'workbench'
-            ? {
-                source: 'auth',
-                timestamp: finishedAt,
-              }
-            : null,
-          authReturnContext: redirectTo !== 'workbench'
-            ? {
-                source: redirectTo,
-                timestamp: finishedAt,
-              }
-            : null,
-          authViewMode: 'login',
-          detailTaskId: null,
-          lightboxImageId: null,
-          lightboxImageList: [],
-          selectedTaskIds: [],
-        }))
-        state.showToast(nextBalance > 0 ? '已完成模拟登录，可继续查看额度并提交生成' : '已完成模拟登录，当前余额为 0', 'success')
-      },
       completeAuthSession: ({ token, account: accountPatch }) => {
         const state = get()
         const redirectTo = state.authRedirectView
         const finishedAt = Date.now()
-        const baseProfiles = saveAccountProfile(state.accountProfiles, state.account, state.billing)
         const nextUserId = accountPatch.userId ?? state.account.userId ?? null
-        const savedProfile = nextUserId ? baseProfiles[nextUserId] : null
         const account = normalizeAccountState({
           ...DEFAULT_ACCOUNT_STATE,
-          ...savedProfile?.account,
           ...accountPatch,
           userId: nextUserId,
           isLoggedIn: true,
-          planName: accountPatch.planName ?? savedProfile?.account.planName ?? '个人标准版',
-        }, savedProfile?.account ?? DEFAULT_ACCOUNT_STATE)
-        const nextBilling = savedProfile ? getStoredAccountBilling(savedProfile) : getFreshBillingState()
+          planName: accountPatch.planName ?? '个人标准版',
+        }, DEFAULT_ACCOUNT_STATE)
+        const nextBilling = getFreshBillingState()
         set(() => ({
           authSessionToken: token,
           account,
           billing: nextBilling,
-          accountProfiles: saveAccountProfile(baseProfiles, account, nextBilling),
           galleryView: redirectTo,
           workbenchReturnContext: redirectTo === 'workbench'
             ? { source: 'auth', timestamp: finishedAt }
@@ -1971,18 +2181,22 @@ export const useStore = create<AppState>()(
       // Account
       authSessionToken: null,
       account: { ...DEFAULT_ACCOUNT_STATE },
-      accountProfiles: {},
+      accountLedger: null,
+      accountLedgerError: null,
+      accountLedgerLoading: false,
       billing: { ...DEFAULT_BILLING_STATE },
       setAccountState: (patch) => set((state) => {
-        const baseProfiles = saveAccountProfile(state.accountProfiles, state.account, state.billing)
         const account = normalizeAccountState({ ...state.account, ...patch }, state.account)
         const isSameAccount = account.userId === state.account.userId
-        const savedProfile = !isSameAccount && account.userId ? baseProfiles[account.userId] : null
-        const billing = isSameAccount ? state.billing : getStoredAccountBilling(savedProfile)
+        const shouldResetBillingForAccountChange = !isSameAccount && (
+          Boolean(state.authSessionToken?.trim())
+          || Boolean(state.account.email?.trim())
+          || Boolean(account.email?.trim())
+        )
+        const billing = shouldResetBillingForAccountChange ? getFreshBillingState() : state.billing
         return {
           account,
           billing,
-          accountProfiles: saveAccountProfile(baseProfiles, account, billing),
           ...(!isSameAccount ? {
             detailTaskId: null,
             lightboxImageId: null,
@@ -1991,52 +2205,78 @@ export const useStore = create<AppState>()(
           } : {}),
         }
       }),
-      setLoggedIn: (loggedIn) => set((state) => {
-        const baseProfiles = saveAccountProfile(state.accountProfiles, state.account, state.billing)
-        const account = normalizeAccountState({
-          ...state.account,
-          userId: loggedIn
-            ? (state.account.userId ?? createMockAccountUserId(state.account.displayName || '创作者'))
-            : null,
-          isLoggedIn: loggedIn,
-          displayName: loggedIn ? (state.account.displayName || '创作者') : DEFAULT_ACCOUNT_STATE.displayName,
-          planName: loggedIn ? (state.account.planName || '体验版') : DEFAULT_ACCOUNT_STATE.planName,
-          balance: loggedIn ? state.account.balance : 0,
-        }, state.account)
-        const billing = loggedIn
-          ? getStoredAccountBilling(account.userId ? baseProfiles[account.userId] : null)
-          : getFreshBillingState()
-        return {
-          account,
-          billing,
-          accountProfiles: loggedIn ? saveAccountProfile(baseProfiles, account, billing) : baseProfiles,
-        }
-      }),
       setAccountBalance: (balance) => set((state) => {
         const account = normalizeAccountState({ ...state.account, balance }, state.account)
-        return {
-          account,
-          accountProfiles: saveAccountProfile(state.accountProfiles, account, state.billing),
-        }
+        return { account }
       }),
       setAccountPlanName: (planName) => set((state) => {
         const account = normalizeAccountState({ ...state.account, planName }, state.account)
-        return {
-          account,
-          accountProfiles: saveAccountProfile(state.accountProfiles, account, state.billing),
-        }
+        return { account }
       }),
       setAccountDisplayName: (displayName) => set((state) => {
         const account = normalizeAccountState({ ...state.account, displayName }, state.account)
-        return {
-          account,
-          accountProfiles: saveAccountProfile(state.accountProfiles, account, state.billing),
-        }
+        return { account }
       }),
-      logout: () => set((state) => ({
-        accountProfiles: saveAccountProfile(state.accountProfiles, state.account, state.billing),
+      refreshBackendAccount: async () => {
+        const state = get()
+        const token = state.authSessionToken?.trim()
+        if (!token) return
+
+        try {
+          const { accountFromAuthSnapshot, getCurrentAuthAccount } = await import('./lib/authApi')
+          const payload = await getCurrentAuthAccount(token)
+          get().setAccountState(accountFromAuthSnapshot(payload))
+        } catch (error) {
+          get().logout()
+          get().showToast(error instanceof Error ? error.message : '登录状态已失效，请重新登录', 'info')
+        }
+      },
+      refreshAccountLedger: async () => {
+        const state = get()
+        const token = state.authSessionToken?.trim()
+        if (!state.account.isLoggedIn || !token) {
+          set({ accountLedger: null, accountLedgerError: null, accountLedgerLoading: false })
+          return
+        }
+
+        set({ accountLedger: null, accountLedgerError: null, accountLedgerLoading: true })
+        try {
+          const { getAccountLedger } = await import('./lib/authApi')
+          const ledger = await getAccountLedger(token, 100)
+          set({ accountLedger: ledger, accountLedgerError: null, accountLedgerLoading: false })
+        } catch (error) {
+          set({
+            accountLedger: null,
+            accountLedgerError: error instanceof Error ? error.message : '余额流水加载失败',
+            accountLedgerLoading: false,
+          })
+        }
+      },
+      refreshReferralInfo: async () => {
+        const state = get()
+        const token = state.authSessionToken?.trim()
+        if (!state.account.isLoggedIn || state.account.inviteCode?.trim() || !token) return
+
+        try {
+          const { getMyReferralInfo } = await import('./lib/authApi')
+          const payload = await getMyReferralInfo(token)
+          get().setAccountState({ inviteCode: payload.referral.inviteCode })
+        } catch {
+          get().showToast('邀请信息加载失败，请稍后刷新账号状态', 'info')
+        }
+      },
+      refreshTaskFromServer: async (taskId) => {
+        await refreshTaskFromServer(taskId)
+      },
+      syncServerLibraryTasks: async () => {
+        await syncServerLibraryTasksForCurrentSession()
+      },
+      logout: () => set(() => ({
         authSessionToken: null,
         account: { ...DEFAULT_ACCOUNT_STATE },
+        accountLedger: null,
+        accountLedgerError: null,
+        accountLedgerLoading: false,
         authViewMode: DEFAULT_AUTH_VIEW_MODE,
         authRedirectView: 'workbench',
         authReturnContext: null,
@@ -2045,47 +2285,27 @@ export const useStore = create<AppState>()(
         lightboxImageId: null,
         lightboxImageList: [],
         selectedTaskIds: [],
-        supportPromptOpen: false,
         confirmDialog: null,
         billing: getFreshBillingState(),
       })),
       getWorkbenchAccessState: () => getWorkbenchAccessState(get().account),
-      setRechargeResult: (lastRechargeStatus, amount = null) => set((state) => ({
-        billing: {
-          ...state.billing,
-          lastRechargeStatus,
-          lastRechargeAmount: amount == null ? state.billing.lastRechargeAmount : amount,
-          lastRechargeAt: lastRechargeStatus === 'idle' ? state.billing.lastRechargeAt : Date.now(),
-          lastRechargeErrorMessage: lastRechargeStatus === 'failed' ? state.billing.lastRechargeErrorMessage ?? null : null,
-        },
-      })),
       setPendingRechargeAmount: (amount) => set((state) => ({
         billing: {
           ...state.billing,
           pendingRechargeAmount: normalizeRechargePackageAmount(
             Number.isFinite(amount) ? amount : state.billing.pendingRechargeAmount ?? DEFAULT_RECHARGE_PACKAGE_POINTS,
           ),
-          lastRechargeErrorMessage: null,
-        },
-      })),
-      setSelectedPaymentMethod: (selectedPaymentMethod) => set((state) => ({
-        billing: {
-          ...state.billing,
-          selectedPaymentMethod: normalizeSelectedRechargePaymentMethod(selectedPaymentMethod, state.billing.selectedPaymentMethod),
         },
       })),
       setRechargeFlowStatus: (rechargeFlowStatus) => set((state) => ({
         billing: {
           ...state.billing,
           rechargeFlowStatus,
-          lastRechargeErrorMessage: rechargeFlowStatus === 'failed' ? state.billing.lastRechargeErrorMessage ?? null : null,
         },
       })),
       redeemRechargeCode: async (code) => {
         const state = get()
-        const amount = normalizeRechargePackageAmount(state.billing.pendingRechargeAmount)
         const normalizedCode = code.trim().toUpperCase()
-        const expectedCode = `SST-${amount}`
 
         if (!state.account.isLoggedIn) {
           state.openLoginDialog()
@@ -2102,19 +2322,42 @@ export const useStore = create<AppState>()(
           return
         }
 
+        const token = state.authSessionToken?.trim()
+        if (!token) {
+          const now = Date.now()
+          const rechargeErrorMessage = '请登录真实账号后再兑换余额码'
+          const nextRecord: BillingState['rechargeHistory'][number] = {
+            id: genId(),
+            amount: normalizeRechargePackageAmount(state.billing.pendingRechargeAmount),
+            status: 'failed',
+            paymentMethod: 'wechat',
+            channel: 'recharge_code',
+            code: normalizedCode,
+            createdAt: now,
+            balanceAfter: state.account.balance,
+          }
+          set((current) => ({
+            billing: {
+              ...current.billing,
+              rechargeFlowStatus: 'failed',
+              rechargeHistory: [nextRecord, ...current.billing.rechargeHistory].slice(0, 12),
+            },
+          }))
+          state.showToast(rechargeErrorMessage, 'error')
+          return
+        }
+
         set((current) => ({
           billing: {
             ...current.billing,
             rechargeFlowStatus: 'processing',
-            lastRechargeErrorMessage: null,
           },
         }))
 
-        const { canUseLocalRechargeCodeFallback, redeemRechargeCodeWithApi, RechargeCodeApiUnavailableError } = await import('./lib/rechargeCodeApi')
-        const canFallbackToLocalDemo = canUseLocalRechargeCodeFallback() && !state.authSessionToken?.trim()
+        const { redeemRechargeCodeWithApi } = await import('./lib/rechargeCodeApi')
 
         try {
-          const result = await redeemRechargeCodeWithApi(normalizedCode, state.account.userId, state.authSessionToken)
+          const result = await redeemRechargeCodeWithApi(normalizedCode, token)
           const redeemedAt = Date.parse(result.redeemedAt)
           const now = Number.isFinite(redeemedAt) ? redeemedAt : Date.now()
           const nextRecord: BillingState['rechargeHistory'][number] = {
@@ -2128,109 +2371,39 @@ export const useStore = create<AppState>()(
             balanceAfter: normalizeMoney(result.balanceAfter),
           }
           set((current) => ({
-            account: normalizeAccountState({
-              ...current.account,
-              balance: result.balanceAfter,
-              planName: current.account.planName === '未开通' ? '个人标准版' : current.account.planName,
-            }, current.account),
             billing: {
               ...current.billing,
               rechargeFlowStatus: 'success',
-              lastRechargeStatus: 'success',
-              lastRechargeAmount: normalizeMoney(result.points),
-              lastRechargeAt: now,
-              lastRechargeErrorMessage: null,
               rechargeHistory: [nextRecord, ...current.billing.rechargeHistory].slice(0, 12),
             },
           }))
+          await get().refreshBackendAccount()
+          await get().refreshAccountLedger()
           get().showToast(`余额码兑换成功，已到账 ${formatAccountBalance(result.points)} 点`, 'success')
           return
         } catch (error) {
-          if (!(error instanceof RechargeCodeApiUnavailableError) || !canFallbackToLocalDemo) {
-            const now = Date.now()
-            const rechargeErrorMessage = error instanceof Error ? error.message : '余额码兑换失败，请稍后重试'
-            const nextRecord: BillingState['rechargeHistory'][number] = {
-              id: genId(),
-              amount,
-              status: 'failed',
-              paymentMethod: 'wechat',
-              channel: 'recharge_code',
-              code: normalizedCode,
-              createdAt: now,
-              balanceAfter: get().account.balance,
-            }
-            set((current) => ({
-              billing: {
-                ...current.billing,
-                rechargeFlowStatus: 'failed',
-                lastRechargeStatus: 'failed',
-                lastRechargeAmount: amount,
-                lastRechargeAt: now,
-                lastRechargeErrorMessage: rechargeErrorMessage,
-                rechargeHistory: [nextRecord, ...current.billing.rechargeHistory].slice(0, 12),
-              },
-            }))
-            get().showToast(rechargeErrorMessage, 'error')
-            return
-          }
-        }
-
-        const latest = get()
-        const now = Date.now()
-        if (normalizedCode !== expectedCode) {
-          const rechargeErrorMessage = `余额码无效。当前本地演示码是 ${expectedCode}`
+          const now = Date.now()
+          const rechargeErrorMessage = error instanceof Error ? error.message : '余额码兑换失败，请稍后重试'
           const nextRecord: BillingState['rechargeHistory'][number] = {
             id: genId(),
-            amount,
+            amount: normalizeRechargePackageAmount(state.billing.pendingRechargeAmount),
             status: 'failed',
             paymentMethod: 'wechat',
             channel: 'recharge_code',
             code: normalizedCode,
             createdAt: now,
-            balanceAfter: latest.account.balance,
+            balanceAfter: get().account.balance,
           }
           set((current) => ({
             billing: {
               ...current.billing,
               rechargeFlowStatus: 'failed',
-              lastRechargeStatus: 'failed',
-              lastRechargeAmount: amount,
-              lastRechargeAt: now,
-              lastRechargeErrorMessage: rechargeErrorMessage,
               rechargeHistory: [nextRecord, ...current.billing.rechargeHistory].slice(0, 12),
             },
           }))
           get().showToast(rechargeErrorMessage, 'error')
           return
         }
-
-        const nextRecord: BillingState['rechargeHistory'][number] = {
-          id: genId(),
-          amount,
-          status: 'success',
-          paymentMethod: 'wechat',
-          channel: 'recharge_code',
-          code: normalizedCode,
-          createdAt: now,
-          balanceAfter: Number((latest.account.balance + amount).toFixed(2)),
-        }
-        set((current) => ({
-          account: normalizeAccountState({
-            ...current.account,
-            balance: current.account.balance + amount,
-            planName: current.account.planName === '未开通' ? '个人标准版' : current.account.planName,
-          }, current.account),
-          billing: {
-            ...current.billing,
-            rechargeFlowStatus: 'success',
-            lastRechargeStatus: 'success',
-            lastRechargeAmount: amount,
-            lastRechargeAt: now,
-            lastRechargeErrorMessage: null,
-            rechargeHistory: [nextRecord, ...current.billing.rechargeHistory].slice(0, 12),
-          },
-        }))
-        get().showToast(`本地演示码兑换成功，已到账 ${amount} 点`, 'success')
       },
       openLoginDialog: () => {
         const state = get()
@@ -2238,87 +2411,14 @@ export const useStore = create<AppState>()(
           mode: 'login',
           redirectTo: state.galleryView === 'plan'
             ? 'plan'
+            : state.galleryView === 'agentWorkflow'
+            ? 'agentWorkflow'
             : state.galleryView === 'library'
             ? 'library'
             : state.galleryView === 'promptLibrary'
             ? 'promptLibrary'
             : 'workbench',
         })
-      },
-      openRechargeView: (options) => {
-        const state = get()
-        const amount = normalizeRechargePackageAmount(options?.amount ?? state.billing.pendingRechargeAmount)
-        const returnTo = options?.returnTo ?? (state.galleryView === 'workbench' ? 'workbench' : 'plan')
-        set((current) => ({
-          appMode: 'gallery',
-          galleryView: 'plan',
-          workbenchReturnContext: null,
-          billing: {
-            ...current.billing,
-            pendingRechargeAmount: amount,
-            selectedPaymentMethod: normalizeSelectedRechargePaymentMethod(current.billing.selectedPaymentMethod),
-            rechargeReturnView: returnTo,
-            rechargeFlowStatus: 'idle',
-            lastRechargeErrorMessage: null,
-          },
-        }))
-      },
-      completeRechargeFlow: (status) => {
-        const state = get()
-        const amount = normalizeRechargePackageAmount(state.billing.pendingRechargeAmount)
-        const paymentMethod = normalizeSelectedRechargePaymentMethod(state.billing.selectedPaymentMethod)
-        const now = Date.now()
-
-        if (status === 'success') {
-          const nextRecord: BillingState['rechargeHistory'][number] = {
-            id: genId(),
-            amount,
-            status: 'success',
-            paymentMethod,
-            createdAt: now,
-            balanceAfter: Number((state.account.balance + amount).toFixed(2)),
-          }
-          set((current) => ({
-            account: normalizeAccountState({
-              ...current.account,
-              balance: current.account.balance + amount,
-              planName: current.account.planName === '未开通' ? '个人标准版' : current.account.planName,
-            }, current.account),
-            billing: {
-              ...current.billing,
-              rechargeFlowStatus: 'success',
-              lastRechargeStatus: 'success',
-              lastRechargeAmount: amount,
-              lastRechargeAt: now,
-              lastRechargeErrorMessage: null,
-              rechargeHistory: [nextRecord, ...current.billing.rechargeHistory].slice(0, 12),
-            },
-          }))
-          state.showToast(`已补充模拟额度 ${amount}，可继续提交生成`, 'success')
-          return
-        }
-
-        const lastRechargeStatus = status === 'failed' ? 'failed' : 'interrupted'
-        const nextRecord: BillingState['rechargeHistory'][number] = {
-          id: genId(),
-          amount,
-          status,
-          paymentMethod,
-          createdAt: now,
-          balanceAfter: state.account.balance,
-        }
-        set((current) => ({
-          billing: {
-            ...current.billing,
-            rechargeFlowStatus: status,
-            lastRechargeStatus,
-            lastRechargeAmount: amount,
-            lastRechargeAt: now,
-            lastRechargeErrorMessage: status === 'failed' ? '模拟支付失败' : null,
-            rechargeHistory: [nextRecord, ...current.billing.rechargeHistory].slice(0, 12),
-          },
-        }))
-        state.showToast(status === 'failed' ? '模拟支付失败' : '已取消本次充值', status === 'failed' ? 'error' : 'info')
       },
       openPlanDialog: () => {
         const state = get()
@@ -2492,6 +2592,14 @@ export const useStore = create<AppState>()(
             prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, images),
           })
         }),
+      addInputImageFromReference: async (src) => {
+        const dataUrl = await fetchImageReferenceAsDataUrl(src)
+        const id = await storeImage(dataUrl, 'upload')
+        cacheImage(id, dataUrl)
+        const image = { id, dataUrl }
+        get().addInputImage(image)
+        return image
+      },
       maskDraft: null,
       setMaskDraft: (maskDraft) =>
         set((s) => {
@@ -2518,10 +2626,17 @@ export const useStore = create<AppState>()(
       loadModelSkus: async () => {
         try {
           const { fetchPublicModelSkus } = await import('./lib/modelSkuApi')
-          const modelSkus = await fetchPublicModelSkus()
+          const { modelSkus, defaultModelSkuId } = await fetchPublicModelSkus()
           set((state) => {
             const selectedStillAvailable = modelSkus.some((sku) => sku.enabled && sku.id === state.selectedModelSkuId)
-            const selectedModelSkuId = selectedStillAvailable ? state.selectedModelSkuId : modelSkus.find((sku) => sku.enabled)?.id ?? ''
+            const defaultStillAvailable = defaultModelSkuId
+              ? modelSkus.some((sku) => sku.enabled && sku.id === defaultModelSkuId)
+              : false
+            const selectedModelSkuId = selectedStillAvailable
+              ? state.selectedModelSkuId
+              : defaultStillAvailable
+                ? defaultModelSkuId as string
+                : modelSkus.find((sku) => sku.enabled)?.id ?? ''
             return {
               modelSkus,
               modelSkusLoaded: true,
@@ -2535,12 +2650,26 @@ export const useStore = create<AppState>()(
           set({ modelSkus: [], modelSkusLoaded: true, selectedModelSkuId: '' })
         }
       },
-      setSelectedModelSkuId: (selectedModelSkuId) => set((state) => ({
-        selectedModelSkuId,
-        params: selectedModelSkuId
-          ? normalizeParamsForModelSku(state.params, selectedModelSkuId, state.modelSkus)
-          : state.params,
-      })),
+      setSelectedModelSkuId: (selectedModelSkuId) => set((state) => {
+        const nextModelSku = getModelSku(selectedModelSkuId, state.modelSkus)
+        const clearsMaskDraft = Boolean(state.maskDraft) && nextModelSku?.supportsMask === false
+        const blocksReferenceEditing = state.inputImages.length > 0 && nextModelSku?.supportsEdit === false
+        const nextState = syncActiveInputDraft(state, {
+          ...(clearsMaskDraft ? { maskDraft: null, maskEditorImageId: null } : {}),
+        })
+        if (clearsMaskDraft) {
+          state.showToast('当前模型不支持遮罩编辑，已清除现有遮罩草稿。', 'info')
+        } else if (blocksReferenceEditing) {
+          state.showToast('当前模型不支持参考图编辑，已保留参考图，但暂不可提交图生图。', 'info')
+        }
+        return {
+          ...nextState,
+          selectedModelSkuId,
+          params: selectedModelSkuId
+            ? normalizeParamsForModelSku(state.params, selectedModelSkuId, state.modelSkus)
+            : state.params,
+        }
+      }),
       setParams: (p) => set((s) => ({ params: { ...s.params, ...p } })),
       reusedTaskApiProfileId: null,
       reusedTaskApiProfileName: null,
@@ -2647,12 +2776,7 @@ export const useStore = create<AppState>()(
 
       // Tasks
       tasks: [],
-      setTasks: (tasks) => set(() => ({
-        tasks,
-        ...(countSuccessfulOutputImages(tasks) <= SUPPORT_PROMPT_IMAGE_THRESHOLD
-          ? { supportPromptSkippedForImportedData: false }
-          : {}),
-      })),
+      setTasks: (tasks) => set({ tasks }),
       streamPreviews: {},
       streamPreviewSlots: {},
       setTaskStreamPreview: (taskId, image, requestIndex = 0) => set((s) => {
@@ -2711,6 +2835,7 @@ export const useStore = create<AppState>()(
         }
         if (detailTaskId) dismissAllTooltips()
         set({ detailTaskId })
+        if (detailTaskId) void get().refreshTaskFromServer(detailTaskId)
       },
       lightboxImageId: null,
       lightboxImageList: [],
@@ -2728,12 +2853,6 @@ export const useStore = create<AppState>()(
           ...(!showSettings ? { settingsTabRequest: null } : {}),
         })
       },
-      supportPromptOpen: false,
-      supportPromptDismissed: false,
-      supportPromptSkippedForImportedData: false,
-      setSupportPromptOpen: (supportPromptOpen) => set({ supportPromptOpen }),
-      dismissSupportPrompt: () => set({ supportPromptOpen: false, supportPromptDismissed: true }),
-
       // Toast
       toast: null,
       showToast: (message, type = 'info') => {
@@ -2852,8 +2971,9 @@ export function markInterruptedOpenAIRunningTasks(tasks: TaskRecord[], now = Dat
     const updated: TaskRecord = {
       ...task,
       status: 'error',
-      error: OPENAI_INTERRUPTED_ERROR,
+      error: task.serverImageTaskId ? SERVER_IMAGE_INTERRUPTED_ERROR : OPENAI_INTERRUPTED_ERROR,
       falRecoverable: false,
+      customRecoverable: false,
       finishedAt: now,
       elapsed: Math.max(0, now - task.createdAt),
     }
@@ -3028,18 +3148,36 @@ function getRawErrorPayload(err: unknown): Pick<Partial<TaskRecord>, 'rawImageUr
   }
 }
 
-function getGatewayErrorPublicInfo(err: unknown): Pick<Partial<TaskRecord>, 'gatewayFailureKind'> & { requestId?: string } {
+function getGatewayErrorPublicInfo(err: unknown): Pick<Partial<TaskRecord>, 'gatewayFailureKind' | 'routeId' | 'upstreamModel' | 'attempts'> & { requestId?: string } {
   if (!(err instanceof Error)) return {}
 
   const requestId = 'requestId' in err && typeof (err as { requestId?: unknown }).requestId === 'string'
     ? (err as { requestId: string }).requestId
     : undefined
-  const gatewayFailureKind = 'failureKind' in err && typeof (err as { failureKind?: unknown }).failureKind === 'string'
-    ? (err as { failureKind: TaskRecord['gatewayFailureKind'] }).failureKind
+  const routeIdFromError = 'routeId' in err && typeof (err as { routeId?: unknown }).routeId === 'string'
+    ? (err as { routeId: string }).routeId
+    : undefined
+  const upstreamModelFromError = 'upstreamModel' in err && typeof (err as { upstreamModel?: unknown }).upstreamModel === 'string'
+    ? (err as { upstreamModel: string }).upstreamModel
+    : undefined
+  const attempts = 'attempts' in err && Array.isArray((err as { attempts?: unknown }).attempts)
+    ? (err as { attempts: TaskRecord['attempts'] }).attempts
+    : undefined
+  const latestAttempt = attempts?.length ? attempts[attempts.length - 1] : undefined
+  const routeId = routeIdFromError ?? latestAttempt?.routeId
+  const upstreamModel = upstreamModelFromError ?? latestAttempt?.upstreamModel
+  const rawFailureKind = 'failureKind' in err && typeof (err as { failureKind?: unknown }).failureKind === 'string'
+    ? (err as { failureKind: string }).failureKind
+    : undefined
+  const gatewayFailureKind = rawFailureKind && IMAGE_GATEWAY_FAILURE_KINDS.has(rawFailureKind as ImageGatewayFailureKind)
+    ? rawFailureKind as ImageGatewayFailureKind
     : undefined
 
   return {
     requestId,
+    routeId,
+    upstreamModel,
+    attempts,
     gatewayFailureKind,
   }
 }
@@ -3091,7 +3229,44 @@ function mapActualParamsByImage(outputIds: string[], paramsList: Array<Partial<T
   return mapped && Object.keys(mapped).length > 0 ? mapped : undefined
 }
 
+function readSvgDataUrlSizeParam(dataUrl: string): Partial<TaskParams> | undefined {
+  if (!dataUrl.startsWith('data:image/svg+xml')) return undefined
+  const commaIndex = dataUrl.indexOf(',')
+  if (commaIndex < 0) return undefined
+
+  const meta = dataUrl.slice(0, commaIndex)
+  const payload = dataUrl.slice(commaIndex + 1)
+  const svg = /;base64/i.test(meta)
+    ? globalThis.atob?.(payload)
+    : decodeURIComponent(payload)
+  if (!svg) return undefined
+
+  const width = Number(svg.match(/\bwidth=["']?([0-9.]+)/i)?.[1])
+  const height = Number(svg.match(/\bheight=["']?([0-9.]+)/i)?.[1])
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return undefined
+
+  return { size: `${Math.round(width)}x${Math.round(height)}` }
+}
+
+async function hydrateActualImageParamsList(
+  images: string[],
+  preferred?: Array<Partial<TaskParams> | undefined>,
+): Promise<Array<Partial<TaskParams> | undefined>> {
+  const measured = await readImageSizeParamsList(images)
+  return images.map((_, index) => {
+    const preferredParams = preferred?.[index]
+    const measuredParams = measured[index]
+    const merged = {
+      ...(hasActualParams(preferredParams) ? preferredParams : {}),
+      ...(hasActualParams(measuredParams) ? measuredParams : {}),
+    }
+    return hasActualParams(merged) ? merged : undefined
+  })
+}
+
 async function readImageSizeParam(dataUrl: string): Promise<Partial<TaskParams> | undefined> {
+  const svgSize = readSvgDataUrlSizeParam(dataUrl)
+  if (svgSize) return svgSize
   if (typeof Image === 'undefined') return undefined
 
   return new Promise((resolve) => {
@@ -3232,12 +3407,12 @@ export async function initStore() {
   }
   const { tasks: markedTasks, interruptedTasks } = markInterruptedOpenAIRunningTasks(storedTasks)
   const interruptedTaskIds = new Set(interruptedTasks.map((task) => task.id))
-  const tasks = markedTasks.map(getPersistableTask)
-  await Promise.all(tasks
+  const localTasks = markedTasks.map(getPersistableTask)
+  await Promise.all(localTasks
     .filter((task, index) => interruptedTaskIds.has(task.id) || task.rawResponsePayload !== markedTasks[index]?.rawResponsePayload)
     .map((task) => putTask(task)))
+  const tasks = await loadServerImageTasksForSession(localTasks)
   useStore.getState().setTasks(tasks)
-  showSupportPromptForExistingLocalData(tasks)
   for (const task of tasks) {
     if (
       task.apiProvider === 'fal' &&
@@ -3398,7 +3573,9 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   const normalizedSettings = normalizeSettings(settings)
   let activeProfile = getActiveApiProfile(settings)
   let requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
-  const hasGatewayPath = Boolean(selectedModelSkuId) && isServerImageGatewayEnabled()
+  const gatewayModelSkuId = resolveGatewayModelSkuId(selectedModelSkuId, modelSkus)
+  const activeModelSku = getModelSku(gatewayModelSkuId, modelSkus)
+  const hasGatewayPath = isServerImageGatewayEnabled()
   if (normalizedSettings.reuseTaskApiProfileTemporarily && (reusedTaskApiProfileId || reusedTaskApiProfileMissing)) {
     const reusedProfile = getReusedTaskApiProfile(normalizedSettings, reusedTaskApiProfileId)
     if (!reusedProfile) {
@@ -3430,6 +3607,16 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
 
   if (!prompt.trim()) {
     showToast('请输入提示词', 'error')
+    return
+  }
+
+  if (hasGatewayPath && inputImages.length > 0 && activeModelSku?.supportsEdit === false) {
+    showToast('当前模型「' + activeModelSku.label + '」不支持参考图编辑，请切换支持编辑的模型。', 'error')
+    return
+  }
+
+  if (hasGatewayPath && maskDraft && activeModelSku?.supportsMask === false) {
+    showToast('当前模型「' + activeModelSku.label + '」不支持遮罩编辑，请切换支持遮罩的模型。', 'error')
     return
   }
 
@@ -3475,7 +3662,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   }
 
   const normalizedParams = hasGatewayPath
-    ? normalizeParamsForModelSku(params, selectedModelSkuId, modelSkus)
+    ? normalizeParamsForModelSku(params, gatewayModelSkuId, modelSkus.length ? modelSkus : undefined)
     : normalizeParamsForSettings(params, requestSettings, { hasInputImages: orderedInputImages.length > 0 })
   const normalizedParamPatch = getChangedParams(params, normalizedParams)
   if (Object.keys(normalizedParamPatch).length) {
@@ -3483,18 +3670,19 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   }
 
   const taskId = genId()
+  const sanitizedNegativePrompt = sanitizeNegativePrompt(negativePrompt, prompt.trim())
   const task: TaskRecord = {
     id: taskId,
     ownerUserId: getCurrentOwnerUserId(),
     prompt: prompt.trim(),
-    negativePrompt: negativePrompt.trim() || undefined,
+    negativePrompt: sanitizedNegativePrompt,
     params: normalizedParams,
     apiProvider: activeProfile.provider,
     apiProfileId: activeProfile.id,
     apiProfileName: activeProfile.name,
     apiMode: activeProfile.apiMode,
     apiModel: activeProfile.model,
-    modelSku: selectedModelSkuId,
+    modelSku: gatewayModelSkuId || undefined,
     inputImageIds: orderedInputImages.map((i) => i.id),
     maskTargetImageId,
     maskImageId,
@@ -4630,9 +4818,14 @@ async function executeAgentRound(
         revisedPrompts: image.revisedPrompt ? [image.revisedPrompt] : undefined,
         mode: image.action === 'edit' ? 'agent_edit' : 'agent',
       })
+      const serverOutputByImageId = mapServerOutputsByImageId([imgId], serverBilling?.persistedImages)
       updateTaskInStore(taskId, {
         prompt,
         outputImages: [imgId],
+        ...(serverOutputByImageId ? { serverOutputByImageId } : {}),
+        chargedPoints: serverBilling?.chargedPoints ?? null,
+        chargeLedgerId: serverBilling?.ledgerId ?? null,
+        requestedOutputCount: 1,
         actualParams,
         actualParamsByImage: { [imgId]: actualParams },
         revisedPromptByImage: image.revisedPrompt ? { [imgId]: image.revisedPrompt } : undefined,
@@ -4649,6 +4842,9 @@ async function executeAgentRound(
         sourceMode: latestTask?.sourceMode ?? 'agent',
       }, 1, finishedAt, serverBilling ?? undefined)
       useStore.getState().setTaskStreamPreview(taskId)
+      if (serverBilling?.persistedImages?.length) {
+        void syncServerLibraryTasksForCurrentSession()
+      }
       return taskId
     }
 
@@ -4931,6 +5127,7 @@ async function executeAgentRound(
           revisedPrompts: image.revisedPrompt ? [image.revisedPrompt] : undefined,
           mode: image.action === 'edit' ? 'agent_edit' : 'agent',
         })
+        const serverOutputByImageId = mapServerOutputsByImageId([imgId], serverBilling?.persistedImages)
         const task: TaskRecord = {
           id: taskId,
           ownerUserId: getCurrentOwnerUserId(),
@@ -4945,6 +5142,10 @@ async function executeAgentRound(
           maskTargetImageId: round?.maskTargetImageId ?? null,
           maskImageId: round?.maskImageId ?? null,
           outputImages: [imgId],
+          ...(serverOutputByImageId ? { serverOutputByImageId } : {}),
+          chargedPoints: serverBilling?.chargedPoints ?? null,
+          chargeLedgerId: serverBilling?.ledgerId ?? null,
+          requestedOutputCount: 1,
           actualParams,
           actualParamsByImage: { [imgId]: actualParams },
           revisedPromptByImage: image.revisedPrompt ? { [imgId]: image.revisedPrompt } : undefined,
@@ -4969,6 +5170,9 @@ async function executeAgentRound(
           params: effectiveParams,
           sourceMode: task.sourceMode,
         }, task.outputImages.length, finishedAt, serverBilling ?? undefined)
+        if (serverBilling?.persistedImages?.length) {
+          void syncServerLibraryTasksForCurrentSession()
+        }
       }
 
       if (result.rawResponsePayload && streamingTaskIds.length > 0) {
@@ -5203,20 +5407,24 @@ async function executeTask(taskId: string) {
     }
 
     const promptForApi = replaceImageMentionsForApi(task.prompt, inputDataUrls.length)
+    const sanitizedNegativePrompt = sanitizeNegativePrompt(task.negativePrompt, task.prompt)
     const preferServerGateway = isServerImageGatewayEnabled()
     let gatewayResult: ImageGatewayResult | null = null
     let result
-    if (preferServerGateway && task.modelSku) {
+    if (preferServerGateway) {
       const gatewayRequest = {
-        modelSku: task.modelSku,
+        ...(task.modelSku ? { modelSku: task.modelSku } : {}),
         prompt: promptForApi,
-        negativePrompt: task.negativePrompt,
+        negativePrompt: sanitizedNegativePrompt,
         params: task.params,
         inputImageDataUrls: inputDataUrls,
         maskDataUrl,
         onPartialImage: (partial: { image: string; partialImageIndex?: number; requestIndex?: number }) => {
           useStore.getState().setTaskStreamPreview(taskId, partial.image, partial.requestIndex)
           void persistTaskStreamPartialImage(taskId, partial.image)
+        },
+        onServerTaskSubmitted: (serverTask: { taskId: string }) => {
+          updateTaskInStore(taskId, { serverImageTaskId: serverTask.taskId })
         },
       }
 
@@ -5239,7 +5447,7 @@ async function executeTask(taskId: string) {
       result = await callImageApi({
         settings: requestSettings,
         prompt: promptForApi,
-        negativePrompt: task.negativePrompt,
+        negativePrompt: sanitizedNegativePrompt,
         params: task.params,
         inputImageDataUrls: inputDataUrls,
         maskDataUrl,
@@ -5270,17 +5478,16 @@ async function executeTask(taskId: string) {
         modelSku: gatewayResult.modelSku,
         apiProvider: 'openai',
         apiMode: 'images',
+        requestId: gatewayResult.taskId || gatewayResult.routeHealth?.requestId || gatewayResult.routeSelection?.requestId,
+        routeId: gatewayResult.routeId,
+        upstreamModel: gatewayResult.upstreamModel,
+        attempts: gatewayResult.attempts,
       })
       taskProvider = 'openai'
     }
     const serverBilling = gatewayResult?.billing
     if (serverBilling && Number.isFinite(serverBilling.chargedPoints) && serverBilling.chargedPoints > 0) {
-      useStore.setState((current) => ({
-        account: normalizeAccountState({
-          ...current.account,
-          balance: Math.max(0, current.account.balance - serverBilling.chargedPoints),
-        }, current.account),
-      }))
+      void useStore.getState().refreshBackendAccount()
     }
 
     const latestBeforeSuccess = useStore.getState().tasks.find((t) => t.id === taskId)
@@ -5298,13 +5505,15 @@ async function executeTask(taskId: string) {
     const isAsyncCustomTask = taskProvider !== 'fal' && taskProvider !== 'openai' && Boolean(customTaskInfo)
     const actualParamsList = taskProvider === 'fal'
       ? await resolveImageSizeParamsList(result.images, result.actualParamsList)
-      : isAsyncCustomTask
-      ? await readImageSizeParamsList(result.images)
-      : result.actualParamsList
+      : await hydrateActualImageParamsList(result.images, result.actualParamsList)
     const actualParams = (() => {
       if (taskProvider === 'fal') return firstActualParams(actualParamsList)
       if (isAsyncCustomTask) return firstActualParams(actualParamsList)
-      return { ...result.actualParams, n: outputIds.length }
+      return {
+        ...result.actualParams,
+        ...firstActualParams(actualParamsList),
+        n: outputIds.length,
+      }
     })()
     const shouldStoreRevisedPrompts = taskProvider !== 'fal' && !isAsyncCustomTask
     const actualParamsByImage = mapActualParamsByImage(outputIds, actualParamsList)
@@ -5335,10 +5544,21 @@ async function executeTask(taskId: string) {
     clearOpenAIWatchdogTimer(taskId)
     useStore.getState().setTaskStreamPreview(taskId)
     const finishedAt = Date.now()
+    const gatewayPartialResult = result as Partial<ImageGatewayResult>
     updateTaskInStore(taskId, {
       outputImages: outputIds,
+      serverOutputByImageId: mapServerOutputsByImageId(outputIds, (result as ImageGatewayResult).persistedImages),
       streamPartialImageIds: undefined,
       rawImageUrls: result.rawImageUrls?.length ? result.rawImageUrls : undefined,
+      requestId: gatewayPartialResult.taskId || gatewayPartialResult.routeHealth?.requestId || gatewayPartialResult.routeSelection?.requestId,
+      routeId: gatewayPartialResult.routeId,
+      upstreamModel: gatewayPartialResult.upstreamModel,
+      attempts: gatewayPartialResult.attempts,
+      requestedOutputCount: gatewayPartialResult.requestedOutputCount,
+      partialFailureMessage: gatewayPartialResult.partialFailureMessage,
+      deliveryPlan: gatewayPartialResult.deliveryPlan,
+      chargedPoints: serverBilling?.chargedPoints ?? null,
+      chargeLedgerId: serverBilling?.ledgerId ?? null,
       actualParams,
       actualParamsByImage,
       revisedPromptByImage: revisedPromptByImage && Object.keys(revisedPromptByImage).length > 0 ? revisedPromptByImage : undefined,
@@ -5358,13 +5578,15 @@ async function executeTask(taskId: string) {
     }, outputIds.length, finishedAt, serverBilling)
     void deleteUnreferencedImageIds(partialImageIdsToClean)
 
-    const gatewayPartialResult = result as Partial<ImageGatewayResult>
     const requestedOutputCount = Math.max(1, Math.trunc(gatewayPartialResult.requestedOutputCount || latestBeforeUpdate.params.n || outputIds.length || 1))
     if (gatewayPartialResult.partialSuccess || outputIds.length < requestedOutputCount) {
       const reason = gatewayPartialResult.partialFailureMessage ? `：${gatewayPartialResult.partialFailureMessage}` : ''
       useStore.getState().showToast(`本次只生成 ${outputIds.length}/${requestedOutputCount} 张${reason}`, 'info')
     } else {
       useStore.getState().showToast(`生成完成，共 ${outputIds.length} 张图片`, 'success')
+    }
+    if ((result as ImageGatewayResult).persistedImages?.length) {
+      void syncServerLibraryTasksForCurrentSession()
     }
     const currentMask = useStore.getState().maskDraft
     if (
@@ -5380,6 +5602,7 @@ async function executeTask(taskId: string) {
     const latestTask = useStore.getState().tasks.find((t) => t.id === taskId) ?? task
     if (latestTask.status !== 'running') return
     useStore.getState().setTaskStreamPreview(taskId)
+    const gatewayInfo = getGatewayErrorPublicInfo(err)
     const latestFalRequestInfo = falRequestInfo ?? (latestTask.falRequestId && latestTask.falEndpoint
       ? { requestId: latestTask.falRequestId, endpoint: latestTask.falEndpoint }
       : null)
@@ -5388,6 +5611,7 @@ async function executeTask(taskId: string) {
       updateTaskInStore(taskId, {
         status: 'error',
         error: '与 fal.ai 的连接已断开，之后会继续查询任务结果。',
+        requestId: latestFalRequestInfo.requestId,
         falRequestId: latestFalRequestInfo.requestId,
         falEndpoint: latestFalRequestInfo.endpoint,
         falRecoverable: true,
@@ -5405,9 +5629,19 @@ async function executeTask(taskId: string) {
         elapsed: Date.now() - task.createdAt,
       })
       scheduleCustomRecovery(taskId)
+    } else if (latestTask.serverImageTaskId && !gatewayInfo.gatewayFailureKind && !gatewayInfo.requestId) {
+      updateTaskInStore(taskId, {
+        status: 'error',
+        error: SERVER_IMAGE_INTERRUPTED_ERROR,
+        requestId: latestTask.requestId,
+        gatewayFailureKind: undefined,
+        falRecoverable: false,
+        customRecoverable: false,
+        finishedAt: Date.now(),
+        elapsed: Date.now() - task.createdAt,
+      })
     } else {
       let errorMessage = err instanceof Error ? err.message : String(err)
-      const gatewayInfo = getGatewayErrorPublicInfo(err)
       const settings = useStore.getState().settings
       const profile = getTaskApiProfile(settings, latestTask)
       const usesApiProxy = profile?.apiProxy ?? settings.apiProxy
@@ -5431,6 +5665,10 @@ async function executeTask(taskId: string) {
       updateTaskInStore(taskId, {
         status: 'error',
         error: errorMessage,
+        requestId: gatewayInfo.requestId,
+        routeId: gatewayInfo.routeId,
+        upstreamModel: gatewayInfo.upstreamModel,
+        attempts: gatewayInfo.attempts,
         gatewayFailureKind: gatewayInfo.gatewayFailureKind,
         ...getRawErrorPayload(err),
         falRecoverable: false,
@@ -5454,7 +5692,6 @@ export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
     t.id === taskId ? { ...t, ...patch } : t,
   )
   setTasks(updated)
-  maybeOpenSupportPrompt(tasks, updated, taskId)
   const task = updated.find((t) => t.id === taskId)
   if (task) putTask(task)
 }
@@ -5471,6 +5708,12 @@ function applyLocalUsageCharge(
   if (state.billing.usageHistory.some((record) => record.taskId === task.id)) return
 
   const hasServerBilling = serverBilling && Number.isFinite(serverBilling.chargedPoints)
+  if (state.authSessionToken?.trim() && hasServerBilling) {
+    if (serverBilling.chargedPoints > 0) {
+      void useStore.getState().refreshAccountLedger()
+    }
+    return
+  }
   const amount = hasServerBilling
     ? normalizeMoney(Math.max(0, serverBilling.chargedPoints))
     : getLocalUsageCharge(task.params, outputCount)
@@ -5507,6 +5750,7 @@ function applyLocalUsageCharge(
 export async function retryTask(task: TaskRecord) {
   const { settings, modelSkus } = useStore.getState()
   const activeProfile = getActiveApiProfile(settings)
+  const sanitizedNegativePrompt = sanitizeNegativePrompt(task.negativePrompt, task.prompt)
   const normalizedParams = task.modelSku
     ? normalizeParamsForModelSku(task.params, task.modelSku, modelSkus)
     : normalizeParamsForSettings(task.params, settings, { hasInputImages: task.inputImageIds.length > 0 })
@@ -5515,7 +5759,7 @@ export async function retryTask(task: TaskRecord) {
     id: taskId,
     ownerUserId: getCurrentOwnerUserId(),
     prompt: task.prompt,
-    negativePrompt: task.negativePrompt,
+    negativePrompt: sanitizedNegativePrompt,
     params: normalizedParams,
     apiProvider: activeProfile.provider,
     apiProfileId: activeProfile.id,
@@ -5575,10 +5819,11 @@ export async function reuseConfig(task: TaskRecord) {
   }
   setInputImages(imgs)
   setPrompt(task.prompt)
-  setNegativePrompt(task.negativePrompt ?? '')
+  const sanitizedNegativePrompt = sanitizeNegativePrompt(task.negativePrompt, task.prompt)
+  setNegativePrompt(sanitizedNegativePrompt ?? '')
   useStore.setState({
-    reusedNegativePromptSource: task.negativePrompt?.trim()
-      ? { prompt: task.prompt, negativePrompt: task.negativePrompt }
+    reusedNegativePromptSource: sanitizedNegativePrompt
+      ? { prompt: task.prompt, negativePrompt: sanitizedNegativePrompt }
       : null,
   })
   const maskTargetImageId = task.maskTargetImageId ?? (task.maskImageId ? task.inputImageIds[0] : null)
@@ -5638,8 +5883,9 @@ export function mergeNegativePromptTerms(existingValue: string, terms: string[])
   return merged.join('，')
 }
 
-export function mergeNegativePromptValue(existingValue: string, incomingValue: string) {
-  return mergeNegativePromptTerms(existingValue, parseNegativePromptTerms(incomingValue))
+export function mergeNegativePromptValue(existingValue: string, incomingValue: string, prompt = '') {
+  const merged = mergeNegativePromptTerms(existingValue, parseNegativePromptTerms(incomingValue))
+  return sanitizeNegativePrompt(merged, prompt) ?? ''
 }
 
 function mergeNegativePromptMemoryTerms(existingTerms: string[], terms: string[]) {
@@ -5717,20 +5963,49 @@ export async function removeMultipleTasks(taskIds: string[]) {
   
   if (!taskIds.length) return
 
-  const toDelete = new Set(taskIds)
-  const deletedTasks = tasks.filter(t => toDelete.has(t.id))
-  const remaining = await scrubAgentOutputPayloadsForDeletedTasks(deletedTasks, tasks.filter(t => !toDelete.has(t.id)))
+  const stoppedTaskIds = new Set<string>()
+  const failedTaskErrors: string[] = []
+  const confirmedTaskIds: string[] = []
+  for (const task of tasks.filter((item) => taskIds.includes(item.id))) {
+    if (task.status === 'running') {
+      await stopRunningTask(task)
+      stoppedTaskIds.add(task.id)
+      continue
+    }
+    try {
+      await deleteTaskFromServerIfNeeded(task)
+      confirmedTaskIds.push(task.id)
+    } catch (error) {
+      failedTaskErrors.push(error instanceof Error ? error.message : '删除服务端任务失败')
+    }
+  }
+
+  if (!confirmedTaskIds.length) {
+    if (failedTaskErrors.length > 0) {
+      showToast(failedTaskErrors[0], 'error')
+      return
+    }
+    if (stoppedTaskIds.size > 0) {
+      showToast(`已停止等待 ${stoppedTaskIds.size} 条任务，保留记录供后续查看`, 'info')
+    }
+    return
+  }
+
+  const latestTasks = useStore.getState().tasks
+  const toDelete = new Set(confirmedTaskIds)
+  const deletedTasks = latestTasks.filter(t => toDelete.has(t.id))
+  const remaining = await scrubAgentOutputPayloadsForDeletedTasks(deletedTasks, latestTasks.filter(t => !toDelete.has(t.id)))
 
   // 收集所有被删除任务的关联图片
   const deletedImageIds = new Set<string>()
-  for (const t of tasks) {
+  for (const t of latestTasks) {
     if (toDelete.has(t.id)) {
       addTaskReferencedImageIds(deletedImageIds, t)
     }
   }
 
   setTasks(remaining)
-  for (const id of taskIds) {
+  for (const id of confirmedTaskIds) {
     await dbDeleteTask(id)
   }
 
@@ -5758,12 +6033,43 @@ export async function removeMultipleTasks(taskIds: string[]) {
     useStore.getState().setSelectedTaskIds(newSelection)
   }
 
-  showToast(`已删除 ${taskIds.length} 条记录`, 'success')
+  const summaryParts = [`已删除 ${confirmedTaskIds.length} 条记录`]
+  if (stoppedTaskIds.size > 0) summaryParts.push(`停止等待 ${stoppedTaskIds.size} 条`)
+  if (failedTaskErrors.length > 0) summaryParts.push(`失败 ${failedTaskErrors.length} 条`)
+  showToast(summaryParts.join('，'), failedTaskErrors.length > 0 ? 'info' : 'success')
 }
 
 /** 删除单条任务 */
 export async function removeTask(task: TaskRecord) {
+  if (task.status === 'running') {
+    await stopRunningTask(task)
+    return
+  }
   const { tasks, setTasks, inputImages, galleryInputDraft, showToast } = useStore.getState()
+  const hasServerOutputs = Boolean(task.serverOutputByImageId && Object.keys(task.serverOutputByImageId).length > 0)
+  if (hasServerOutputs) {
+    try {
+      const moved = await moveTaskOutputsToTrashIfNeeded(task)
+      if (moved) {
+        updateTaskInStore(task.id, {
+          libraryState: 'trashed',
+          libraryDeletedAt: Date.now(),
+          libraryPurgeAfter: Date.now() + LIBRARY_TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+        })
+        showToast(`作品已移入回收站，${LIBRARY_TRASH_RETENTION_DAYS} 天后清理`, 'success')
+        return
+      }
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '移入回收站失败', 'error')
+      return
+    }
+  }
+  try {
+    await deleteTaskFromServerIfNeeded(task)
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '删除服务端任务失败', 'error')
+    return
+  }
 
   // 收集此任务关联的图片
   const taskImageIds = new Set([
@@ -5799,6 +6105,28 @@ export async function removeTask(task: TaskRecord) {
   showToast('记录已删除', 'success')
 }
 
+export async function restoreTaskFromTrash(task: TaskRecord) {
+  const state = useStore.getState()
+  const sessionToken = state.authSessionToken?.trim()
+  const outputs = task.serverOutputByImageId ? Object.values(task.serverOutputByImageId) : []
+  if (!state.account.isLoggedIn || !sessionToken || !outputs.length || !isServerImageGatewayEnabled()) {
+    state.showToast('当前记录不支持从回收站恢复', 'error')
+    return
+  }
+  try {
+    const { restoreServerLibraryOutput } = await import('./lib/serverImageGatewayApi')
+    await Promise.all(outputs.map((output) => restoreServerLibraryOutput(output.outputId, sessionToken)))
+    updateTaskInStore(task.id, {
+      libraryState: 'active',
+      libraryDeletedAt: null,
+      libraryPurgeAfter: null,
+    })
+    state.showToast('作品已恢复到作品库', 'success')
+  } catch (error) {
+    state.showToast(getTrashRestoreErrorMessage(error) || '恢复作品失败', 'error')
+  }
+}
+
 /** 清空数据选项 */
 export interface ClearOptions {
   clearConfig?: boolean
@@ -5810,6 +6138,23 @@ export async function clearData(options: ClearOptions = { clearConfig: true, cle
   const { setTasks, clearInputImages, clearMaskDraft, setSettings, setParams, showToast } = useStore.getState()
 
   if (options.clearTasks) {
+    const state = useStore.getState()
+    const sessionToken = state.authSessionToken?.trim()
+    if (state.account.isLoggedIn && sessionToken && isServerImageGatewayEnabled()) {
+      const runningTasks = state.tasks.filter((task) => task.status === 'running')
+      for (const task of runningTasks) {
+        await stopRunningTask(task, { silent: true })
+      }
+
+      try {
+        const { deleteAllCompletedServerImageTasks } = await import('./lib/serverImageGatewayApi')
+        await deleteAllCompletedServerImageTasks(sessionToken)
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : '清空服务端任务失败', 'error')
+        return
+      }
+    }
+
     await dbClearTasks()
     await dbClearAgentConversations()
     await clearImages()
@@ -5820,15 +6165,13 @@ export async function clearData(options: ClearOptions = { clearConfig: true, cle
     useStore.setState({
       agentConversations: [],
       activeAgentConversationId: null,
-      supportPromptOpen: false,
-      supportPromptSkippedForImportedData: false,
     })
     clearInputImages()
     clearMaskDraft()
   }
 
   if (options.clearConfig) {
-    useStore.setState({ dismissedCodexCliPrompts: [], supportPromptDismissed: false })
+    useStore.setState({ dismissedCodexCliPrompts: [] })
     setSettings({ ...DEFAULT_SETTINGS })
     setParams({ ...DEFAULT_PARAMS })
   }
@@ -6099,7 +6442,6 @@ export async function importData(file: File, options: ImportOptions = { importCo
         }
       })
       await replaceStoredAgentConversations(useStore.getState().agentConversations)
-      skipSupportPromptForImportedData(tasks)
       scheduleThumbnailBackfill(importedImageIds)
     }
 

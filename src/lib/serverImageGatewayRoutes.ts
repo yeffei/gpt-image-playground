@@ -1,7 +1,8 @@
-import { DEFAULT_MODEL_SKU_ID, MODEL_SKUS } from './modelSkus'
+import { DEV_ONLY_PRIMARY_MODEL_SKU_ID } from './modelSkus'
 import type { BackendRoute, ImageRequestCompatibilityStrategy, ModelSku } from '../types'
 
 const DEFAULT_ROUTE_MODEL = 'gpt-image-2'
+const DEFAULT_GEMINI_ROUTE_MODEL = 'gemini-3-pro-image-preview'
 const DEFAULT_TIMEOUT_SECONDS = 180
 const DEFAULT_MAX_CONCURRENCY = 2
 const DEFAULT_ROUTE_WEIGHT = 1
@@ -41,23 +42,28 @@ function readCompatibilityStrategy(value: unknown): ImageRequestCompatibilityStr
   return readEnvString(value) === 'openai_standard' ? 'openai_standard' : DEFAULT_COMPATIBILITY_STRATEGY
 }
 
+function readProvider(value: unknown): import('../types').BackendRouteProvider {
+  return readEnvString(value) === 'gemini-native' ? 'gemini-native' : 'openai-compatible'
+}
+
 function readServerGatewayRoute(env: Record<string, unknown>, index: number): BackendRoute | null {
   const prefix = `IMAGE_GATEWAY_ROUTE_${index}`
   const baseUrl = readEnvString(env[`${prefix}_BASE_URL`])
   const apiKey = readEnvString(env[`${prefix}_API_KEY`])
   if (!baseUrl || !apiKey) return null
 
-  const defaultModel = readEnvString(env[`${prefix}_MODEL`]) || DEFAULT_ROUTE_MODEL
+  const provider = readProvider(env[`${prefix}_PROVIDER`])
+  const defaultModel = readEnvString(env[`${prefix}_MODEL`]) || (provider === 'gemini-native' ? DEFAULT_GEMINI_ROUTE_MODEL : DEFAULT_ROUTE_MODEL)
 
   return {
     id: `route-${index}`,
     name: readEnvString(env[`${prefix}_NAME`]) || `Route ${index}`,
-    provider: 'openai-compatible',
+    provider,
     compatibilityStrategy: readCompatibilityStrategy(env[`${prefix}_COMPATIBILITY`]),
     baseUrl,
     apiKey,
     upstreamModelBySku: {
-      [DEFAULT_MODEL_SKU_ID]: readEnvString(env[`${prefix}_MODEL_${DEFAULT_MODEL_SKU_ID.toUpperCase().replace(/-/g, '_')}`]) || defaultModel,
+      [DEV_ONLY_PRIMARY_MODEL_SKU_ID]: readEnvString(env[`${prefix}_MODEL_${DEV_ONLY_PRIMARY_MODEL_SKU_ID.toUpperCase().replace(/-/g, '_')}`]) || defaultModel,
       'gpt-image-2-quality': readEnvString(env[`${prefix}_MODEL_GPT_IMAGE_2_QUALITY`]) || defaultModel,
     },
     apiMode: 'images',
@@ -69,8 +75,8 @@ function readServerGatewayRoute(env: Record<string, unknown>, index: number): Ba
     initialLatencyMs: Math.max(1, readEnvInteger(env[`${prefix}_INITIAL_LATENCY_MS`], DEFAULT_INITIAL_LATENCY_MS, 1)),
     exhaustedCooldownSeconds: Math.max(60, readEnvInteger(env[`${prefix}_EXHAUSTED_COOLDOWN_SECONDS`], DEFAULT_EXHAUSTED_COOLDOWN_SECONDS, 60)),
     maxConcurrency: Math.max(1, readEnvInteger(env[`${prefix}_MAX_CONCURRENCY`], DEFAULT_MAX_CONCURRENCY, 1)),
-    supportsEdit: readEnvBoolean(env[`${prefix}_SUPPORTS_EDIT`], DEFAULT_SUPPORTS_EDIT),
-    supportsMask: readEnvBoolean(env[`${prefix}_SUPPORTS_MASK`], DEFAULT_SUPPORTS_MASK),
+    supportsEdit: readEnvBoolean(env[`${prefix}_SUPPORTS_EDIT`], provider === 'gemini-native' ? false : DEFAULT_SUPPORTS_EDIT),
+    supportsMask: readEnvBoolean(env[`${prefix}_SUPPORTS_MASK`], provider === 'gemini-native' ? false : DEFAULT_SUPPORTS_MASK),
     supportsStreaming: readEnvBoolean(env[`${prefix}_SUPPORTS_STREAMING`], DEFAULT_SUPPORTS_STREAMING),
   }
 }
@@ -86,7 +92,7 @@ export function getConfiguredServerGatewayRoutes(
 
 export function getServerGatewayModelSkus(
   routes: BackendRoute[],
-  modelSkus: ModelSku[] = MODEL_SKUS,
+  modelSkus: ModelSku[],
 ): ModelSku[] {
   return modelSkus.map((sku) => ({
     ...sku,

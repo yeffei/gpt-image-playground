@@ -17,7 +17,7 @@ export default function SearchBar({ compact = false, showFavoriteToggle = true }
   return (
     <div
       data-no-drag-select
-      className={`studio-filterbar ${compact ? 'studio-filterbar-compact mt-2 mb-3 sm:mt-2 sm:mb-3' : 'mt-4 mb-5 sm:mt-5 sm:mb-6'}`}
+      className={`studio-filterbar ${compact ? 'studio-filterbar-compact' : 'mt-4 mb-5 sm:mt-5 sm:mb-6'}`}
     >
       <div className="relative flex-1 min-w-[220px] z-10">
         <svg

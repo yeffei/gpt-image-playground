@@ -10,9 +10,14 @@ import {
 } from '../lib/accessCopy'
 import {
   PROMPT_LIBRARY_TEMPLATES,
+  ensureSearchablePromptTemplate,
+  mergeOfficialPromptTemplates,
   type PromptTemplateItem,
   type PromptTemplateSearchableItem,
 } from '../lib/promptLibrary'
+import { buildAdminApiUrl } from '../lib/adminApi'
+import { sanitizeNegativePrompt } from '../lib/negativePromptSafety'
+import { fetchPublicPromptTemplates } from '../lib/promptTemplateApi'
 
 type PromptLibraryFilterGroup =
   | '全部'
@@ -43,7 +48,39 @@ const PROMPT_LIBRARY_TABS = [
   { key: 'mine', label: '我的模板' },
   { key: 'recent', label: '最近使用' },
 ] as const
-const OFFICIAL_TEMPLATE_BY_ID = new Map(PROMPT_LIBRARY_TEMPLATES.map((item) => [item.id, item]))
+const OFFICIAL_TEMPLATE_OVERRIDES_PATH = '/api/prompt-library/official-template-overrides'
+
+function getOfficialTemplateOverridesUrls() {
+  const urls = [buildAdminApiUrl(OFFICIAL_TEMPLATE_OVERRIDES_PATH)]
+  if (
+    typeof window !== 'undefined' &&
+    /^localhost$|^127\.0\.0\.1$/.test(window.location.hostname) &&
+    urls[0] === OFFICIAL_TEMPLATE_OVERRIDES_PATH
+  ) {
+    urls.push(`http://127.0.0.1:3001${OFFICIAL_TEMPLATE_OVERRIDES_PATH}`)
+  }
+  return Array.from(new Set(urls))
+}
+
+async function fetchOfficialTemplateOverrideIds() {
+  let lastError: unknown = null
+  for (const url of getOfficialTemplateOverridesUrls()) {
+    try {
+      const response = await fetch(url)
+      const payload = await response.json() as { ok?: boolean; hiddenTemplateIds?: unknown }
+      if (!response.ok || payload.ok === false) {
+        lastError = new Error(`official_template_overrides_failed:${response.status}`)
+        continue
+      }
+      return Array.isArray(payload.hiddenTemplateIds)
+        ? payload.hiddenTemplateIds.filter((item): item is string => typeof item === 'string')
+        : []
+    } catch (error) {
+      lastError = error
+    }
+  }
+  throw lastError
+}
 
 function getFilterGroup(category: PromptTemplateItem['category']): Exclude<PromptLibraryFilterGroup, '全部'> {
   if (category === '海报插画') return '海报视觉'
@@ -59,19 +96,8 @@ function createMineTemplateId() {
   return `mine-template-${Date.now()}`
 }
 
-function createSearchText(item: PromptTemplateItem) {
-  return [item.title, item.summary, item.category, item.tags.join(' '), item.prompt].join(' ').toLowerCase()
-}
-
 function ensureSearchableTemplate(item: PromptTemplateItem): PromptTemplateSearchableItem {
-  if ('searchText' in item && typeof item.searchText === 'string') {
-    return item as PromptTemplateSearchableItem
-  }
-
-  return {
-    ...item,
-    searchText: createSearchText(item),
-  }
+  return ensureSearchablePromptTemplate(item)
 }
 
 interface PromptLibraryCardProps {
@@ -157,7 +183,7 @@ const PromptLibraryCard = memo(function PromptLibraryCard({
           <div className="prompt-library-card-detail">
             <div className="prompt-library-card-actions">
               <button type="button" className="prompt-library-card-primary" onClick={() => onApply(template)}>
-                套用
+                套用并回工作台
               </button>
               <button
                 type="button"
@@ -189,6 +215,7 @@ const PromptLibraryCard = memo(function PromptLibraryCard({
 
 export default function PromptLibraryView() {
   const account = useStore((s) => s.account)
+  const setGalleryView = useStore((s) => s.setGalleryView)
   const setPrompt = useStore((s) => s.setPrompt)
   const setNegativePrompt = useStore((s) => s.setNegativePrompt)
   const setParams = useStore((s) => s.setParams)
@@ -214,6 +241,9 @@ export default function PromptLibraryView() {
   const [previewLightboxUrl, setPreviewLightboxUrl] = useState<string | null>(null)
   const [previewLightboxTemplate, setPreviewLightboxTemplate] = useState<PromptTemplateItem | null>(null)
   const [previewOrientation, setPreviewOrientation] = useState<'landscape' | 'portrait' | 'square'>('landscape')
+  const [hiddenOfficialTemplateIds, setHiddenOfficialTemplateIds] = useState<string[]>([])
+  const [officialTemplateOverridesLoaded, setOfficialTemplateOverridesLoaded] = useState(false)
+  const [serverOfficialTemplates, setServerOfficialTemplates] = useState<PromptTemplateSearchableItem[]>([])
   const cardGridRef = useRef<HTMLDivElement | null>(null)
   const isGuest = !account.isLoggedIn
   const isLockedPersonalTab = isGuest && promptLibraryTab !== 'official'
@@ -229,6 +259,16 @@ export default function PromptLibraryView() {
     [searchableMyPromptTemplates],
   )
 
+  const officialTemplates = useMemo(
+    () => mergeOfficialPromptTemplates(PROMPT_LIBRARY_TEMPLATES, serverOfficialTemplates),
+    [serverOfficialTemplates],
+  )
+
+  const officialTemplateById = useMemo(
+    () => new Map(officialTemplates.map((item) => [item.id, item])),
+    [officialTemplates],
+  )
+
   const recentIndexById = useMemo(
     () => new Map(recentPromptTemplateIds.map((id, index) => [id, index])),
     [recentPromptTemplateIds],
@@ -238,20 +278,26 @@ export default function PromptLibraryView() {
     () => account.isLoggedIn
       ? recentPromptTemplateIds
           .map((id) => {
-            const officialMatch = OFFICIAL_TEMPLATE_BY_ID.get(id)
+            const officialMatch = officialTemplateById.get(id)
             if (officialMatch) return officialMatch
             return searchableMyTemplateById.get(id)
           })
           .filter((item): item is PromptTemplateSearchableItem => Boolean(item))
       : [],
-    [account.isLoggedIn, recentPromptTemplateIds, searchableMyTemplateById],
+    [account.isLoggedIn, officialTemplateById, recentPromptTemplateIds, searchableMyTemplateById],
   )
+
+  const visibleOfficialTemplates = useMemo(() => {
+    if (!hiddenOfficialTemplateIds.length) return officialTemplates
+    const hiddenIds = new Set(hiddenOfficialTemplateIds)
+    return officialTemplates.filter((item) => !hiddenIds.has(item.id))
+  }, [hiddenOfficialTemplateIds, officialTemplates])
 
   const tabTemplates = useMemo(() => {
     if (promptLibraryTab === 'mine') return account.isLoggedIn ? searchableMyPromptTemplates : []
     if (promptLibraryTab === 'recent') return account.isLoggedIn ? recentTemplates : []
-    return PROMPT_LIBRARY_TEMPLATES
-  }, [account.isLoggedIn, promptLibraryTab, recentTemplates, searchableMyPromptTemplates])
+    return visibleOfficialTemplates
+  }, [account.isLoggedIn, promptLibraryTab, recentTemplates, searchableMyPromptTemplates, visibleOfficialTemplates])
 
   const visibleTemplates = useMemo(() => {
     const query = deferredSearchValue.trim().toLowerCase()
@@ -343,6 +389,48 @@ export default function PromptLibraryView() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [previewLightboxUrl])
 
+  useEffect(() => {
+    let cancelled = false
+    const loadHiddenOfficialTemplateIds = async () => {
+      try {
+        const ids = await fetchOfficialTemplateOverrideIds()
+        if (cancelled) return
+        setHiddenOfficialTemplateIds(ids)
+      } catch {
+        if (!cancelled) {
+          setHiddenOfficialTemplateIds([])
+        }
+      } finally {
+        if (!cancelled) {
+          setOfficialTemplateOverridesLoaded(true)
+        }
+      }
+    }
+    void loadHiddenOfficialTemplateIds()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const loadServerOfficialTemplates = async () => {
+      try {
+        const templates = await fetchPublicPromptTemplates()
+        if (cancelled) return
+        setServerOfficialTemplates(templates.map(ensureSearchableTemplate))
+      } catch {
+        if (!cancelled) {
+          setServerOfficialTemplates([])
+        }
+      }
+    }
+    void loadServerOfficialTemplates()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const hasActiveFilters = activeCategory !== '全部' || searchValue.trim().length > 0
   const resultSummary = isLockedPersonalTab
     ? '个人内容需登录'
@@ -375,15 +463,22 @@ export default function PromptLibraryView() {
     setPreviewOrientation('landscape')
   }, [])
 
+  const goBackToWorkbench = useCallback(() => {
+    setGalleryView('workbench')
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [setGalleryView])
+
   const applyTemplate = useCallback((template: PromptTemplateItem) => {
     const commitApply = () => {
       setPrompt(template.prompt)
-      setNegativePrompt(template.negativePrompt)
+      setNegativePrompt(sanitizeNegativePrompt(template.negativePrompt, template.prompt) ?? '')
       setParams({ size: template.ratio })
       if (account.isLoggedIn) {
         touchRecentPromptTemplate(template.id)
       }
       showToast(`已将「${template.title}」套用到工作台`, 'success')
+      setGalleryView('workbench')
+      window.scrollTo({ top: 0, behavior: 'smooth' })
     }
 
     const hasExistingDraft = Boolean(currentPrompt.trim() || currentNegativePrompt.trim() || currentInputImages.length)
@@ -399,7 +494,7 @@ export default function PromptLibraryView() {
       cancelText: '取消',
       action: commitApply,
     })
-  }, [account.isLoggedIn, currentInputImages.length, currentNegativePrompt, currentPrompt, setConfirmDialog, setNegativePrompt, setParams, setPrompt, showToast, touchRecentPromptTemplate])
+  }, [account.isLoggedIn, currentInputImages.length, currentNegativePrompt, currentPrompt, setConfirmDialog, setGalleryView, setNegativePrompt, setParams, setPrompt, showToast, touchRecentPromptTemplate])
 
   const copyTemplate = useCallback(async (template: PromptTemplateItem) => {
     const { copyTextToClipboard, getClipboardFailureMessage } = await import('../lib/clipboard')
@@ -467,11 +562,24 @@ export default function PromptLibraryView() {
       <section className="prompt-library-shell" aria-label="提示词库">
         <section className="prompt-library-panel">
           <div className="prompt-library-topbar">
-            <div className="prompt-library-title-row">
-              <h1 className="prompt-library-title">提示词库</h1>
-              <span className="prompt-library-count-badge">{resultSummary}</span>
+            <div className="prompt-library-topbar-copy">
+              <div className="prompt-library-title-row">
+                <h1 className="prompt-library-title">提示词库</h1>
+                <span className="prompt-library-count-badge">{resultSummary}</span>
+              </div>
+              <p className="prompt-library-subtitle">先挑方向，再带回工作台继续填。套用会覆盖主提示词和负面提示词，但保留参考图与其他参数。</p>
             </div>
-            <p className="prompt-library-subtitle">挑一个合适的方向，直接套用或留成自己的常用模板。</p>
+            <div className="prompt-library-topbar-actions">
+              <button type="button" className="prompt-library-secondary" onClick={goBackToWorkbench}>
+                回工作台
+              </button>
+            </div>
+          </div>
+
+          <div className="prompt-library-flow-strip" aria-label="使用路径">
+            <span>筛选方向</span>
+            <span>套用即回工作台</span>
+            <span>继续补参数并提交</span>
           </div>
 
           <div className="prompt-library-toolbar">
@@ -486,7 +594,9 @@ export default function PromptLibraryView() {
                   <strong>{tab.label}</strong>
                   <span>
                     {tab.key === 'official'
-                      ? String(PROMPT_LIBRARY_TEMPLATES.length)
+                      ? officialTemplateOverridesLoaded
+                        ? String(visibleOfficialTemplates.length)
+                        : '同步中'
                       : tab.key === 'mine'
                       ? isGuest
                         ? '锁定'
@@ -555,6 +665,9 @@ export default function PromptLibraryView() {
               </button>
               <button type="button" className="prompt-library-secondary" onClick={() => setPromptLibraryTab('official')}>
                 先看官方模板
+              </button>
+              <button type="button" className="prompt-library-secondary" onClick={goBackToWorkbench}>
+                回工作台继续填
               </button>
             </div>
           </div>

@@ -3,13 +3,14 @@ import { createPortal } from 'react-dom'
 import { useStore, submitTask, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, updateTaskInStore, removeMultipleTasks, ensureImageCached, appendNegativePromptTerms, estimateBillingPoints, getWorkbenchAccessState, mergeNegativePromptValue, isTaskVisibleForAccount } from '../store'
 import { DEFAULT_PARAMS, type TaskParams } from '../types'
 import { getActiveApiProfile, normalizeSettings } from '../lib/apiProfiles'
-import { normalizeParamsForModelSku } from '../lib/modelSkus'
+import { getOutputImageLimitForModelSku, getSpecificSupportedModelSkuSizes, normalizeParamsForModelSku } from '../lib/modelSkus'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
 import { getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers } from '../lib/promptImageMentions'
 import { formatImageRatio, normalizeImageSize } from '../lib/size'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import { getSafeBoundingClientRect } from '../lib/domRect'
-import type { PromptOptimizerResult } from '../lib/promptOptimizer'
+import type { PromptOptimizerInput, PromptOptimizerResult } from '../lib/promptOptimizer'
+import { getShareSafetyHint } from '../lib/shareSafetyHint'
 import { isServerImageGatewayEnabled } from '../lib/serverImageGatewayConfig'
 import { useHintTooltip } from '../hooks/useHintTooltip'
 import Select from './Select'
@@ -45,9 +46,6 @@ const WILDCARD_QUALITY_OPTIONS: Array<{ label: string; value: TaskParams['qualit
 function isSpecificQuality(value: TaskParams['quality'] | '*'): value is TaskParams['quality'] {
   return value !== '*'
 }
-
-const PRODUCT_GATEWAY_OUTPUT_LIMIT = 4
-
 
 function getMentionTagTextLength(el: Element) {
   return el.textContent?.length ?? 0
@@ -555,6 +553,7 @@ export default function InputBar() {
   const [showSizePicker, setShowSizePicker] = useState(false)
   const [showMobileUploadMenu, setShowMobileUploadMenu] = useState(false)
   const [promptOptimizerResult, setPromptOptimizerResult] = useState<PromptOptimizerResult | null>(null)
+  const [promptOptimizerPreview, setPromptOptimizerPreview] = useState<PromptOptimizerResult | null>(null)
   const [maskPreviewUrl, setMaskPreviewUrl] = useState('')
   const [imageDragIndex, setImageDragIndex] = useState<number | null>(null)
   const [imageDragOverIndex, setImageDragOverIndex] = useState<number | null>(null)
@@ -638,10 +637,18 @@ export default function InputBar() {
     [modelSkus],
   )
   const productGatewayUnavailableMessage = '暂无可用模型，请先在后台配置模型和线路。'
+  const editUnsupportedMessage = activeModelSku
+    ? '当前模型「' + activeModelSku.label + '」不支持参考图编辑，请切换支持编辑的模型。'
+    : ''
+  const maskUnsupportedMessage = activeModelSku
+    ? '当前模型「' + activeModelSku.label + '」不支持遮罩编辑，请切换支持遮罩的模型。'
+    : ''
+  const isEditCapabilityBlocked = usesProductGateway && Boolean(activeModelSku) && inputImages.length > 0 && activeModelSku?.supportsEdit === false
+  const isMaskCapabilityBlocked = usesProductGateway && Boolean(activeModelSku) && Boolean(maskDraft) && activeModelSku?.supportsMask === false
   const hasSubmitRoute = usesProductGateway ? Boolean(activeModelSku) : Boolean(activeProfile.apiKey)
   const isSubmitAccessBlocked = workbenchAccessState !== 'ready'
   const hasPromptContent = Boolean(prompt.trim())
-  const canSubmit = Boolean(hasPromptContent && hasSubmitRoute && !isSubmitAccessBlocked)
+  const canSubmit = Boolean(hasPromptContent && hasSubmitRoute && !isSubmitAccessBlocked && !isEditCapabilityBlocked && !isMaskCapabilityBlocked)
   const submitButtonAriaLabel = workbenchAccessState === 'guest'
     ? GUEST_SUBMIT_GENERATION_LABEL
     : workbenchAccessState === 'no_balance'
@@ -655,6 +662,10 @@ export default function InputBar() {
     ? '当前账号余额不足，请先进入计划与额度补充额度'
     : !hasSubmitRoute
     ? usesProductGateway ? productGatewayUnavailableMessage : '当前生成服务暂不可用，请稍后重试。'
+    : isMaskCapabilityBlocked
+    ? maskUnsupportedMessage
+    : isEditCapabilityBlocked
+    ? editUnsupportedMessage
     : !hasPromptContent
     ? '请输入提示词'
     : ''
@@ -679,8 +690,16 @@ export default function InputBar() {
       showToast(usesProductGateway ? productGatewayUnavailableMessage : '当前生成服务暂不可用，请稍后重试。', 'error')
       return
     }
+    if (isMaskCapabilityBlocked) {
+      showToast(maskUnsupportedMessage, 'error')
+      return
+    }
+    if (isEditCapabilityBlocked) {
+      showToast(editUnsupportedMessage, 'error')
+      return
+    }
     void submitTask()
-  }, [hasSubmitRoute, openLoginDialog, openPlanDialog, showToast, usesProductGateway, workbenchAccessState])
+  }, [editUnsupportedMessage, hasSubmitRoute, isEditCapabilityBlocked, isMaskCapabilityBlocked, maskUnsupportedMessage, openLoginDialog, openPlanDialog, showToast, usesProductGateway, workbenchAccessState])
   const syncPromptFromContentEditable = useCallback(() => {
     const el = textareaRef.current
     if (!el) return
@@ -693,8 +712,25 @@ export default function InputBar() {
   const activeProvider = activeProfile.provider
   const isFalProvider = activeProvider === 'fal'
   const negativePromptModeLabel = isFalProvider ? '独立发送' : '附加到主提示词'
+  useEffect(() => {
+    if (params.output_format === 'webp') {
+      setParams({ output_format: 'jpeg' })
+    }
+  }, [params.output_format, setParams])
+
   const compressionDisabled = params.output_format === 'png' || isFalProvider
-  const outputImageLimit = usesProductGateway ? PRODUCT_GATEWAY_OUTPUT_LIMIT : getOutputImageLimitForSettings(effectiveSettings)
+  const outputImageLimit = usesProductGateway
+    ? getOutputImageLimitForModelSku(selectedModelSkuId, modelSkus)
+    : getOutputImageLimitForSettings(effectiveSettings)
+  const outputCountOptions = useMemo(() => {
+    const options = new Set([1])
+    for (let count = 2; count <= outputImageLimit; count += 1) options.add(count)
+    return Array.from(options)
+  }, [outputImageLimit])
+  const supportedSizeOptions = useMemo(
+    () => usesProductGateway ? getSpecificSupportedModelSkuSizes(activeModelSku) : [],
+    [activeModelSku, usesProductGateway],
+  )
   const isFalTextToImage = isFalProvider && inputImages.length === 0
   const effectiveNValue = params.n
   const displaySize = isFalTextToImage && params.size === 'auto'
@@ -733,6 +769,7 @@ export default function InputBar() {
     : !hasSubmitRoute
     ? '服务未就绪'
     : submitBillingHint
+  const shareSafetyHint = useMemo(() => getShareSafetyHint(prompt, negativePrompt), [negativePrompt, prompt])
   const negativePromptTerms = useMemo(
     () => negativePrompt.split(/[\n,，]+/).map((item) => item.trim()).filter(Boolean),
     [negativePrompt],
@@ -778,6 +815,18 @@ export default function InputBar() {
   const cursorPosition = cursorPos
   const visiblePrompt = stripImageMentionMarkers(prompt)
   const promptOptimizerModeLabel = inputImages.length > 0 || maskDraft ? '图生图优化' : '文生图优化'
+  const promptOptimizerStatusLabel = !visiblePrompt.trim()
+    ? '输入后准备建议'
+    : promptOptimizerPreview
+      ? '建议已准备好'
+      : '正在准备建议'
+  const promptOptimizerInput = useMemo<PromptOptimizerInput>(() => ({
+    prompt: visiblePrompt,
+    negativePrompt,
+    hasReferenceImages: inputImages.length > 0,
+    hasMask: Boolean(maskDraft),
+    currentSize: displaySize,
+  }), [displaySize, inputImages.length, maskDraft, negativePrompt, visiblePrompt])
   const atImageSourceCount = inputImages.length
   const atImageQuery = isCursorInSelectedImageMention(prompt, cursorPosition)
     ? null
@@ -880,15 +929,12 @@ export default function InputBar() {
       return
     }
 
-    const { optimizePrompt } = await import('../lib/promptOptimizer')
-    setPromptOptimizerResult(optimizePrompt({
+    const { buildPromptOptimizerResult } = await import('../lib/promptOptimizer')
+    setPromptOptimizerResult(buildPromptOptimizerResult({
+      ...promptOptimizerInput,
       prompt: livePrompt,
-      negativePrompt,
-      hasReferenceImages: inputImages.length > 0,
-      hasMask: Boolean(maskDraft),
-      currentSize: displaySize,
     }))
-  }, [displaySize, inputImages.length, maskDraft, negativePrompt, showToast, visiblePrompt])
+  }, [promptOptimizerInput, showToast, visiblePrompt])
 
   const handleClosePromptOptimizer = useCallback(() => {
     setPromptOptimizerResult(null)
@@ -898,7 +944,11 @@ export default function InputBar() {
     if (!promptOptimizerResult) return
 
     isUserInputRef.current = false
-    const mergedNegativePrompt = mergeNegativePromptValue(negativePrompt, promptOptimizerResult.negativePrompt)
+    const mergedNegativePrompt = mergeNegativePromptValue(
+      negativePrompt,
+      promptOptimizerResult.negativePrompt,
+      promptOptimizerResult.optimizedPrompt,
+    )
     setPrompt(promptOptimizerResult.optimizedPrompt)
     setNegativePrompt(mergedNegativePrompt)
     setPromptOptimizerResult(null)
@@ -932,8 +982,10 @@ export default function InputBar() {
       '负面提示词：',
       promptOptimizerResult.negativePrompt,
       '',
-      `推荐比例：${promptOptimizerResult.recommendedRatio}`,
-      '',
+      ...(promptOptimizerResult.recommendedRatio ? [
+        `推荐比例：${promptOptimizerResult.recommendedRatio}`,
+        '',
+      ] : []),
       '增强建议：',
       ...promptOptimizerResult.enhancementTips.map((line) => `- ${line}`),
     ].join('\n')
@@ -955,6 +1007,27 @@ export default function InputBar() {
   useEffect(() => {
     setPromptOptimizerResult(null)
   }, [prompt, negativePrompt, inputImages.length, maskDraft?.targetImageId, maskDraft?.updatedAt])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const run = async () => {
+      const { buildPromptOptimizerResult, shouldPrecomputePromptOptimizer } = await import('../lib/promptOptimizer')
+      if (!shouldPrecomputePromptOptimizer(promptOptimizerInput)) {
+        if (!cancelled) setPromptOptimizerPreview(null)
+        return
+      }
+
+      const next = buildPromptOptimizerResult(promptOptimizerInput)
+      if (!cancelled) setPromptOptimizerPreview(next)
+    }
+
+    void run()
+
+    return () => {
+      cancelled = true
+    }
+  }, [promptOptimizerInput])
 
   useEffect(() => {
     const normalizedParams = usesProductGateway && selectedModelSkuId
@@ -1115,6 +1188,10 @@ export default function InputBar() {
 
   const handleEditReferenceImage = useCallback((img: (typeof inputImages)[number], idx: number, isMaskTarget: boolean) => {
     if (isMaskTarget) {
+      if (usesProductGateway && activeModelSku?.supportsMask === false) {
+        showToast(maskUnsupportedMessage, 'error')
+        return
+      }
       setMaskEditorImageId(img.id)
       return
     }
@@ -1125,6 +1202,10 @@ export default function InputBar() {
     }
 
     if (settings.referenceImageEditAction === 'add-mask') {
+      if (usesProductGateway && activeModelSku?.supportsMask === false) {
+        showToast(maskUnsupportedMessage, 'error')
+        return
+      }
       setMaskEditorImageId(img.id)
       return
     }
@@ -1147,12 +1228,16 @@ export default function InputBar() {
           tone: 'primary',
           action: (remember) => {
             commitReferenceEditChoice('add-mask', remember)
+            if (usesProductGateway && activeModelSku?.supportsMask === false) {
+              showToast(maskUnsupportedMessage, 'error')
+              return
+            }
             setMaskEditorImageId(img.id)
           },
         },
       ],
     })
-  }, [commitReferenceEditChoice, openReplaceReferenceFilePicker, setConfirmDialog, setMaskEditorImageId, settings.referenceImageEditAction])
+  }, [activeModelSku?.supportsMask, commitReferenceEditChoice, maskUnsupportedMessage, openReplaceReferenceFilePicker, setConfirmDialog, setMaskEditorImageId, settings.referenceImageEditAction, showToast, usesProductGateway])
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     await handleFilesRef.current(e.target.files || [])
@@ -1870,7 +1955,7 @@ export default function InputBar() {
         onTouchCancel={sizeHint.hide}
         onClick={sizeHint.show}
       >
-        <span className="ml-1 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-gray-500">尺寸</span>
+        <span className="ml-1 text-[11px] font-medium tracking-normal text-slate-400 dark:text-gray-500">尺寸</span>
         <button
           type="button"
           onClick={() => { dismissAllTooltips(); setShowSizePicker(true) }}
@@ -1879,7 +1964,7 @@ export default function InputBar() {
           title="选择尺寸"
         >
           <div className="font-mono text-xs text-slate-700 dark:text-gray-100">{displaySizeLabel}</div>
-          <div className="mt-0.5 text-[10px] leading-none text-slate-400 dark:text-gray-500">{displaySizeSubLabel}</div>
+          <div className="mt-0.5 text-[11px] leading-tight text-slate-400 dark:text-gray-500">{displaySizeSubLabel}</div>
         </button>
         <ButtonTooltip
           visible={isFalTextToImage && sizeHint.visible}
@@ -1898,7 +1983,7 @@ export default function InputBar() {
         onTouchCancel={qualityHint.hide}
         onClick={qualityHint.show}
       >
-        <span className="prototype-param-compact-label ml-1 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-gray-500">质量</span>
+        <span className="prototype-param-compact-label ml-1 text-[11px] font-medium tracking-normal text-slate-400 dark:text-gray-500">质量</span>
         {usesProductGateway ? (
           <div className="prototype-quality-segment" role="radiogroup" aria-label="质量">
             {qualityOptions.map((option) => {
@@ -1939,11 +2024,16 @@ export default function InputBar() {
       </label>
     )
 
-    const quantityField = (
+    const quantityField = outputCountOptions.length <= 4 ? (
       <label className="prototype-param-quantity-field prototype-param-compact-field relative flex flex-col gap-1">
-        <span className="prototype-param-compact-label ml-1 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-gray-500">数量</span>
-        <div className="prototype-quantity-segment" role="radiogroup" aria-label="数量">
-          {[1, 2, 4].map((value) => {
+        <span className="prototype-param-compact-label ml-1 text-[11px] font-medium tracking-normal text-slate-400 dark:text-gray-500">数量</span>
+        <div
+          className="prototype-quantity-segment"
+          role="radiogroup"
+          aria-label="数量"
+          style={{ gridTemplateColumns: 'repeat(' + Math.max(outputCountOptions.length, 1) + ', minmax(0, 1fr))' }}
+        >
+          {outputCountOptions.map((value) => {
             const disabled = value > outputImageLimit
             const active = params.n === value
             return (
@@ -1962,6 +2052,16 @@ export default function InputBar() {
           })}
         </div>
       </label>
+    ) : (
+      <label className="prototype-param-quantity-field prototype-param-compact-field relative flex flex-col gap-1">
+        <span className="prototype-param-compact-label ml-1 text-[11px] font-medium tracking-normal text-slate-400 dark:text-gray-500">数量</span>
+        <Select
+          value={String(params.n)}
+          onChange={(val) => handleQuantitySelect(Number(val))}
+          options={outputCountOptions.map((value) => ({ label: value + ' 张', value: String(value) }))}
+          className={selectClass}
+        />
+      </label>
     )
 
     if (layout === 'desktop-stacked') {
@@ -1969,7 +2069,7 @@ export default function InputBar() {
         <div className="prototype-param-grid prototype-param-grid-desktop grid text-xs flex-1">
           {sizeField}
           <div className="prototype-param-side-stack">
-            {qualityField}
+            {!usesProductGateway && qualityField}
             {quantityField}
           </div>
         </div>
@@ -1979,7 +2079,7 @@ export default function InputBar() {
     return (
       <div className={`prototype-param-grid grid ${cols} gap-2 text-xs flex-1`}>
         {sizeField}
-        {qualityField}
+        {!usesProductGateway && qualityField}
         {quantityField}
       </div>
     )
@@ -1988,7 +2088,7 @@ export default function InputBar() {
   const renderModelSelector = () => (
     <div className="prototype-model-picker">
       <label className="prototype-param-model-field relative flex flex-col gap-1">
-        <span className="prototype-field-label ml-1 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-gray-500">模型</span>
+        <span className="prototype-field-label ml-1 text-[11px] font-medium tracking-normal text-slate-400 dark:text-gray-500">模型</span>
         <div className="prototype-model-radio-group" role="radiogroup" aria-label="模型选择">
           {productModelOptions.length ? productModelOptions.map((option) => {
             const active = option.value === selectedModelSkuId
@@ -2029,8 +2129,8 @@ export default function InputBar() {
     >
       <div className="prototype-optimizer-copy min-w-0">
         <div className="prototype-optimizer-title text-[13px] font-semibold leading-snug text-slate-800 dark:text-gray-100">提示词优化</div>
-        <div className="prototype-optimizer-body mt-0.5 text-[10px] leading-relaxed text-slate-500 dark:text-gray-400">
-          {promptOptimizerModeLabel}
+        <div className="prototype-optimizer-body mt-0.5 text-[11px] leading-relaxed text-slate-500 dark:text-gray-400">
+          {promptOptimizerModeLabel} · {promptOptimizerStatusLabel}
         </div>
       </div>
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white/80 text-cyan-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] transition group-hover:bg-white dark:bg-white/[0.08] dark:text-cyan-200 dark:group-hover:bg-white/[0.12]">
@@ -2044,17 +2144,27 @@ export default function InputBar() {
   const renderOutputParams = (cols: string, singleFieldCols = 'grid-cols-1') => (
     <div className={`prototype-param-grid grid ${compressionDisabled ? singleFieldCols : cols} gap-2 text-xs flex-1`}>
       <label className={`prototype-output-format-field ${compressionDisabled ? 'is-single' : 'is-paired'} flex flex-col gap-1`}>
-        <span className="prototype-output-format-label ml-1 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-gray-500">格式</span>
-        <Select
-          value={params.output_format}
-          onChange={(val) => setParams({ output_format: val as any })}
-          options={[
+        <span className="prototype-output-format-label ml-1 text-[11px] font-medium tracking-normal text-slate-400 dark:text-gray-500">格式</span>
+        <div className="prototype-output-format-segment" role="radiogroup" aria-label="格式">
+          {[
             { label: 'PNG', value: 'png' },
-            { label: 'JPEG', value: 'jpeg' },
-            { label: 'WebP', value: 'webp' },
-          ]}
-          className={selectClass}
-        />
+            { label: 'JPG', value: 'jpeg' },
+          ].map((option) => {
+            const active = params.output_format === option.value
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                onClick={() => setParams({ output_format: option.value as 'png' | 'jpeg' })}
+                className={`prototype-output-format-option ${active ? 'is-active' : ''}`}
+              >
+                {option.label}
+              </button>
+            )
+          })}
+        </div>
       </label>
       {!compressionDisabled && (
         <label
@@ -2066,7 +2176,7 @@ export default function InputBar() {
           onTouchCancel={compressionHint.hide}
           onClick={compressionHint.show}
         >
-          <span className="ml-1 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-gray-500">压缩率</span>
+          <span className="ml-1 text-[11px] font-medium tracking-normal text-slate-400 dark:text-gray-500">压缩率</span>
           <input
             value={outputCompressionInput}
             onChange={(e) => setOutputCompressionInput(e.target.value)}
@@ -2079,7 +2189,7 @@ export default function InputBar() {
           />
           <ButtonTooltip
             visible={compressionHint.visible}
-            text={isFalProvider ? 'fal.ai 不支持压缩率参数' : '仅 JPEG 和 WebP 支持压缩率'}
+            text={isFalProvider ? 'fal.ai 不支持压缩率参数' : '仅 JPG 支持压缩率'}
           />
         </label>
       )}
@@ -2090,6 +2200,9 @@ export default function InputBar() {
     <span className="prototype-submit-copy">
       <span>{submitButtonLabel}</span>
       {submitFooterHint ? <small>{submitFooterHint}</small> : null}
+      {shareSafetyHint.level !== 'safe' ? (
+        <small className={shareSafetyHint.level === 'blocked' ? 'text-red-500' : 'text-amber-500'}>{shareSafetyHint.message}</small>
+      ) : null}
     </span>
   )
 
@@ -2136,6 +2249,8 @@ export default function InputBar() {
             onSelect={(size) => setParams({ size })}
             onClose={() => setShowSizePicker(false)}
             allowAuto={!isFalTextToImage}
+            supportedSizes={supportedSizeOptions}
+            maxDeliveryLongEdge={usesProductGateway ? activeModelSku?.maxDeliveryLongEdge ?? activeModelSku?.maxSupportedLongEdge ?? null : null}
           />
         </Suspense>
       )}
@@ -2335,7 +2450,7 @@ export default function InputBar() {
               <button
                 type="button"
                 onClick={handleClearPrompt}
-                className={`absolute right-3 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-white/[0.08] rounded-full p-1 transition-all duration-200 focus:outline-none z-10 flex items-center justify-center ${
+                className={`prototype-prompt-clear-button absolute right-3 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-white/[0.08] rounded-full p-1 transition-all duration-200 focus:outline-none z-10 flex items-center justify-center ${
                   isSingleLine ? 'top-1/2 -translate-y-1/2' : 'top-3'
                 }`}
                 title="清空提示词和负面提示"

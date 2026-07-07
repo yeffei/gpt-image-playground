@@ -67,17 +67,16 @@ function parseRedeemResult(value: unknown): RechargeCodeRedeemResult {
   }
 }
 
-export function canUseLocalRechargeCodeFallback() {
-  return import.meta.env.DEV
-}
-
-export async function redeemRechargeCodeWithApi(code: string, userId: string, sessionToken?: string | null): Promise<RechargeCodeRedeemResult> {
-  const token = typeof sessionToken === 'string' ? sessionToken.trim() : ''
+export async function redeemRechargeCodeWithApi(code: string, sessionToken: string): Promise<RechargeCodeRedeemResult> {
+  const token = sessionToken.trim()
+  if (!token) {
+    throw new RechargeCodeApiError('请登录真实账号后再兑换余额码', 'missing_session')
+  }
   const response = await fetch('/api/recharge-codes/redeem', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : { 'X-User-Id': userId }),
+      Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ code }),
   })

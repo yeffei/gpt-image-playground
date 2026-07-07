@@ -1,12 +1,15 @@
 import './SiteFooter.css'
+import type { GalleryView } from '../types'
 
 type SiteFooterProps = {
-  currentView: 'workbench' | 'library' | 'promptLibrary' | 'plan' | 'recharge' | 'auth'
+  currentView: GalleryView
   isLoggedIn: boolean
 }
 
 function getCurrentViewLabel(view: SiteFooterProps['currentView']) {
   if (view === 'library') return '作品库'
+  if (view === 'agentWorkflow') return '智能创作流'
+  if (view === 'inspiration') return '灵感广场'
   if (view === 'promptLibrary') return '提示词库'
   if (view === 'plan' || view === 'recharge') return '计划与额度'
   if (view === 'auth') return '登录与注册'
@@ -15,11 +18,11 @@ function getCurrentViewLabel(view: SiteFooterProps['currentView']) {
 
 export default function SiteFooter({ currentView, isLoggedIn }: SiteFooterProps) {
   const brandNote = isLoggedIn
-    ? '面向图像生成、模板复用和资产沉淀的创作工作台。'
-    : '可先试填图像需求、浏览官方模板，登录后再同步个人资产。'
+    ? '面向图像生成、模板复用和个人结果沉淀的创作工作台。'
+    : '可先试填图像需求、浏览官方模板，登录后再查看个人结果与额度。'
   const sectionSummary = isLoggedIn
-    ? '工作台 · 提示词库 · 作品资产 · 计划与额度'
-    : '工作台 · 提示词库 · 登录 / 注册'
+    ? '工作台 · 灵感广场 · 提示词库 · 作品资产 · 计划与额度'
+    : '工作台 · 灵感广场 · 提示词库 · 登录 / 注册'
 
   return (
     <footer className="site-footer-shell" aria-label="全站底部信息">
@@ -41,7 +44,7 @@ export default function SiteFooter({ currentView, isLoggedIn }: SiteFooterProps)
               <h2>产品状态</h2>
               <ul>
                 <li>当前页面：{getCurrentViewLabel(currentView)}</li>
-                <li>{isLoggedIn ? '已登录，可继续沉淀与保存' : '访客态，可先使用试填入口与官方模板'}</li>
+                <li>{isLoggedIn ? '已登录，可继续生成并沉淀个人结果' : '访客态，可先试填工作台与浏览官方模板'}</li>
               </ul>
             </section>
           </div>

@@ -1,5 +1,5 @@
 import type { BackendRoute, ModelSku } from '../types'
-import { DEFAULT_MODEL_SKU_ID, MODEL_SKUS } from './modelSkus'
+import { BUILTIN_MODEL_SKUS, DEV_ONLY_PRIMARY_MODEL_SKU_ID } from './modelSkus'
 import { readRuntimeEnv } from './runtimeEnv'
 
 // Dev-only compatibility for local experiments. Formal product flows should use
@@ -20,7 +20,7 @@ function readRouteEnv(index: number): BackendRoute | null {
     baseUrl,
     apiKey,
     upstreamModelBySku: {
-      [DEFAULT_MODEL_SKU_ID]: model,
+      [DEV_ONLY_PRIMARY_MODEL_SKU_ID]: model,
       'gpt-image-2-quality': model,
     },
     apiMode: 'images',
@@ -41,7 +41,7 @@ export function getDevOnlyGatewayRoutes(): BackendRoute[] {
     .filter((route): route is BackendRoute => route !== null)
 }
 
-export function getDevOnlyGatewayModelSkus(routes: BackendRoute[] = getDevOnlyGatewayRoutes(), modelSkus: ModelSku[] = MODEL_SKUS): ModelSku[] {
+export function getDevOnlyGatewayModelSkus(routes: BackendRoute[] = getDevOnlyGatewayRoutes(), modelSkus: ModelSku[] = BUILTIN_MODEL_SKUS): ModelSku[] {
   return modelSkus.map((sku) => ({
     ...sku,
     routeIds: routes

@@ -206,3 +206,29 @@
     font-size: 9px;
   }
 }
+
+/* Stage B compact text pass. */
+.site-footer-kicker,
+.site-footer-column h2 {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.site-footer-brand-note,
+.site-footer-column li,
+.site-footer-bottom {
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.site-footer-brand strong {
+  letter-spacing: -0.01em;
+}
+
+@media (max-width: 720px) {
+  .site-footer-brand-note,
+  .site-footer-column li,
+  .site-footer-bottom {
+    font-size: 11px;
+  }
+}

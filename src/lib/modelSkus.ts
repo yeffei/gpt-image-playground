@@ -1,21 +1,21 @@
 import { DEFAULT_PARAMS, type ModelSku, type TaskParams } from '../types'
 import { normalizeImageSize } from './size'
 
-export const DEFAULT_MODEL_SKU_ID = 'gpt-image-2-fast'
+export const DEV_ONLY_PRIMARY_MODEL_SKU_ID = 'gpt-image-2-fast'
 const ANY_NORMALIZED_SIZE = '*'
-const ANY_QUALITY = '*'
-export const GPT_IMAGE_2_SUPPORTED_SIZES = ['1024x1024', '1536x1024', '1024x1536']
+export const GPT_IMAGE_2_SUPPORTED_SIZES = [ANY_NORMALIZED_SIZE]
 
-export const MODEL_SKUS: ModelSku[] = [
+// Built-in fallback SKUs are only used before the real platform capabilities load.
+export const BUILTIN_MODEL_SKUS: ModelSku[] = [
   {
-    id: DEFAULT_MODEL_SKU_ID,
+    id: DEV_ONLY_PRIMARY_MODEL_SKU_ID,
     label: 'GPT Image 2 快速',
     description: '默认均衡线路，兼顾日常出图速度和可用画质。',
     enabled: true,
     routeIds: [],
     defaultParams: { ...DEFAULT_PARAMS },
-    supportedSizes: [ANY_NORMALIZED_SIZE],
-    supportedQualities: ['low', 'medium', 'high'],
+    supportedSizes: GPT_IMAGE_2_SUPPORTED_SIZES,
+    supportedQualities: ['auto'],
     supportsEdit: true,
     supportsMask: true,
     maxOutputCount: 4,
@@ -26,24 +26,24 @@ export const MODEL_SKUS: ModelSku[] = [
     description: '优先画质，适合最终稿和精修图。',
     enabled: true,
     routeIds: [],
-    defaultParams: { ...DEFAULT_PARAMS, quality: 'high', output_compression: null, output_format: 'png' },
-    supportedSizes: [ANY_NORMALIZED_SIZE],
-    supportedQualities: ['medium', 'high'],
+    defaultParams: { ...DEFAULT_PARAMS, output_compression: null, output_format: 'png' },
+    supportedSizes: GPT_IMAGE_2_SUPPORTED_SIZES,
+    supportedQualities: ['auto'],
     supportsEdit: true,
     supportsMask: true,
     maxOutputCount: 4,
   },
 ]
 
-export function getEnabledModelSkus(modelSkus: ModelSku[] = MODEL_SKUS): ModelSku[] {
+export function getEnabledModelSkus(modelSkus: ModelSku[] = BUILTIN_MODEL_SKUS): ModelSku[] {
   return modelSkus.filter((sku) => sku.enabled)
 }
 
-export function getModelSku(modelSkuId: string, modelSkus: ModelSku[] = MODEL_SKUS): ModelSku | null {
+export function getModelSku(modelSkuId: string, modelSkus: ModelSku[] = BUILTIN_MODEL_SKUS): ModelSku | null {
   return modelSkus.find((sku) => sku.id === modelSkuId && sku.enabled) ?? null
 }
 
-export function getOutputImageLimitForModelSku(modelSkuId: string, modelSkus: ModelSku[] = MODEL_SKUS) {
+export function getOutputImageLimitForModelSku(modelSkuId: string, modelSkus: ModelSku[] = BUILTIN_MODEL_SKUS) {
   return getModelSku(modelSkuId, modelSkus)?.maxOutputCount ?? DEFAULT_PARAMS.n
 }
 
@@ -60,10 +60,54 @@ export function getSpecificSupportedModelSkuSizes(modelSku: ModelSku | null | un
     })
 }
 
+function isGeminiModelSku(modelSku: ModelSku) {
+  return /^gemini(?:$|-)/i.test(modelSku.id)
+}
+
+function getModelSkuMaxDeliveryLongEdge(modelSku: ModelSku) {
+  const maxDeliveryLongEdge = modelSku.maxDeliveryLongEdge
+  if (typeof maxDeliveryLongEdge === 'number' && Number.isFinite(maxDeliveryLongEdge) && maxDeliveryLongEdge > 0) {
+    return Math.max(1, Math.trunc(maxDeliveryLongEdge))
+  }
+  const legacyMaxSupportedLongEdge = modelSku.maxSupportedLongEdge
+  if (typeof legacyMaxSupportedLongEdge === 'number' && Number.isFinite(legacyMaxSupportedLongEdge) && legacyMaxSupportedLongEdge > 0) {
+    return Math.max(1, Math.trunc(legacyMaxSupportedLongEdge))
+  }
+  return null
+}
+
+function clampSizeToMaxLongestEdge(size: string, maxLongestEdge?: number | null) {
+  if (typeof maxLongestEdge !== 'number' || !Number.isFinite(maxLongestEdge) || maxLongestEdge <= 0) {
+    return size
+  }
+
+  const match = size.match(/^(\d+)[xX](\d+)$/)
+  if (!match) return size
+  const width = Number(match[1])
+  const height = Number(match[2])
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return size
+
+  const longestEdge = Math.max(width, height)
+  if (longestEdge <= maxLongestEdge) return size
+
+  const scale = maxLongestEdge / longestEdge
+  return normalizeImageSize(`${Math.round(width * scale)}x${Math.round(height * scale)}`)
+}
+
+function normalizeSizeForModelSku(size: string, modelSku: ModelSku) {
+  const normalizedSize = normalizeImageSize(size) || DEFAULT_PARAMS.size
+  const supportedSizes = getSpecificSupportedModelSkuSizes(modelSku)
+  if (!supportedSizes.length) return clampSizeToMaxLongestEdge(normalizedSize, getModelSkuMaxDeliveryLongEdge(modelSku))
+  if (supportedSizes.includes(normalizedSize)) return normalizedSize
+
+  const defaultSize = normalizeImageSize(modelSku.defaultParams.size) || DEFAULT_PARAMS.size
+  return supportedSizes.includes(defaultSize) ? defaultSize : supportedSizes[0]
+}
+
 export function normalizeParamsForModelSku(
   params: TaskParams,
   modelSkuId: string,
-  modelSkus: ModelSku[] = MODEL_SKUS,
+  modelSkus: ModelSku[] = BUILTIN_MODEL_SKUS,
 ): TaskParams {
   const modelSku = getModelSku(modelSkuId, modelSkus)
   const normalizedSize = normalizeImageSize(params.size) || DEFAULT_PARAMS.size
@@ -75,15 +119,6 @@ export function normalizeParamsForModelSku(
     }
   }
 
-  const supportsAnyQuality = modelSku.supportedQualities.includes(ANY_QUALITY)
-  const defaultQuality = supportsAnyQuality || modelSku.supportedQualities.includes(modelSku.defaultParams.quality)
-    ? modelSku.defaultParams.quality
-    : (modelSku.supportedQualities.find((quality): quality is TaskParams['quality'] => quality !== ANY_QUALITY) ?? DEFAULT_PARAMS.quality)
-  const quality = params.quality === DEFAULT_PARAMS.quality
-    ? defaultQuality
-    : supportsAnyQuality || modelSku.supportedQualities.includes(params.quality)
-      ? params.quality
-      : defaultQuality
   const outputFormat = params.output_format === DEFAULT_PARAMS.output_format
     ? modelSku.defaultParams.output_format
     : params.output_format
@@ -93,10 +128,10 @@ export function normalizeParamsForModelSku(
 
   return {
     ...params,
-    size: normalizedSize,
-    quality,
-    output_format: outputFormat,
-    output_compression: outputFormat === 'png' ? null : outputCompression,
-    n: Math.min(4, Math.max(1, params.n || modelSku.defaultParams.n || DEFAULT_PARAMS.n)),
+    size: normalizeSizeForModelSku(normalizedSize, modelSku),
+    quality: 'auto',
+    output_format: isGeminiModelSku(modelSku) ? 'png' : outputFormat,
+    output_compression: isGeminiModelSku(modelSku) ? null : outputFormat === 'png' ? null : outputCompression,
+    n: isGeminiModelSku(modelSku) ? 1 : Math.min(modelSku.maxOutputCount, Math.max(1, params.n || modelSku.defaultParams.n || DEFAULT_PARAMS.n)),
   }
 }

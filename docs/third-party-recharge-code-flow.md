@@ -1,6 +1,6 @@
 # 第三方余额码充值方案
 
-更新时间：2026-06-08
+更新时间：2026-06-11
 
 适用范围：`D:\gpt_image_playground-main`
 
@@ -268,13 +268,13 @@ curl -X POST http://127.0.0.1:4175/api/admin/recharge-codes \
 
 - 已新增 `npm run recharge-codes:verify`，用于验证“生成一个测试码 -> 指定用户兑换 -> 校验余额变化”。
 - 默认地址：`http://127.0.0.1:4175`
-- 默认用户：`verify-user`
+- 兑换请求必须携带真实用户 session token
 - 默认面额：`30`
 
 示例：
 
 ```bash
-npm run recharge-codes:verify -- --points 30 --user-id mock-tester
+npm run recharge-codes:verify -- --points 30 --session-token <real-user-session-token>
 ```
 
 本项目本地联调统一使用 `4175`。如果确实需要改地址，请显式传入 `--base-url`，不要复用其他项目占用的端口。
@@ -312,23 +312,23 @@ npm run recharge-codes:verify -- --points 30 --user-id mock-tester
 
 ## 7. 前台页面改造方向
 
-当前 `RechargeAndResultView.tsx` 应从“模拟支付页”改为“余额码兑换页”。
+当前 `RechargeAndResultView.tsx` 已从旧“模拟支付页”收口为“余额码兑换页”。
 
-建议保留：
+当前保留：
 
 - 当前账号状态。
 - 当前余额。
 - 结果状态。
 - 最近充值 / 兑换记录。
 
-建议移除或改写：
+当前已移除或改写：
 
 - `微信支付 / 支付宝 / 银行卡` 支付方式选择。
 - `去支付` 按钮。
 - `支付处理中` 模拟状态。
 - 前端直接加余额的模拟成功按钮。
 
-建议新增：
+当前已新增：
 
 - `购买余额码` 外部链接按钮。
 - `余额码` 输入框。
@@ -368,7 +368,7 @@ npm run recharge-codes:verify -- --points 30 --user-id mock-tester
 
 - 仅成功产出最终图片后扣点。
 - 失败或取消不扣点。
-- 按分辨率档位、质量档位和最终成功图片数量计算扣点。
+- 按规格档位和最终成功图片数量计算扣点：`1K = 1 点/张`，`2K = 3 点/张`，`4K = 6 点/张`。
 
 ## 10. 推荐实施顺序
 

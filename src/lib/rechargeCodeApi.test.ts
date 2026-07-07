@@ -18,7 +18,7 @@ describe('redeemRechargeCodeWithApi', () => {
       headers: { 'Content-Type': 'application/json' },
     }))
 
-    const result = await redeemRechargeCodeWithApi('SST-100', 'user-123', 'session-token')
+    const result = await redeemRechargeCodeWithApi('SST-100', 'session-token')
 
     expect(fetchMock).toHaveBeenCalledWith('/api/recharge-codes/redeem', {
       method: 'POST',
@@ -28,25 +28,15 @@ describe('redeemRechargeCodeWithApi', () => {
     expect(result.balanceAfter).toBe(120)
   })
 
-  it('keeps the user id header only for local compatibility without a session token', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
-      ok: true,
-      points: 30,
-      balanceBefore: 0,
-      balanceAfter: 30,
-      redeemedAt: '2026-06-06T10:00:00Z',
-    }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    }))
+  it('requires a backend session token before redeeming', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
 
-    await redeemRechargeCodeWithApi('SST-30', 'user-123')
-
-    expect(fetchMock).toHaveBeenCalledWith('/api/recharge-codes/redeem', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': 'user-123' },
-      body: JSON.stringify({ code: 'SST-30' }),
+    await expect(redeemRechargeCodeWithApi('SST-30', '')).rejects.toMatchObject({
+      message: '请登录真实账号后再兑换余额码',
+      code: 'missing_session',
     })
+
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('keeps 404 as a server redeem failure instead of falling back to demo codes', async () => {
@@ -59,13 +49,13 @@ describe('redeemRechargeCodeWithApi', () => {
       headers: { 'Content-Type': 'application/json' },
     }))
 
-    await expect(redeemRechargeCodeWithApi('RCB-20260609-008', 'user-123')).rejects.toMatchObject({
+    await expect(redeemRechargeCodeWithApi('RCB-20260609-008', 'session-token')).rejects.toMatchObject({
       message: '兑换码不存在',
       code: 'code_not_found',
     })
   })
 
-  it('marks a disabled endpoint as unavailable for local fallback', async () => {
+  it('marks a disabled endpoint as unavailable', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       ok: false,
       error: 'not_implemented',
@@ -75,7 +65,7 @@ describe('redeemRechargeCodeWithApi', () => {
       headers: { 'Content-Type': 'application/json' },
     }))
 
-    await expect(redeemRechargeCodeWithApi('SST-30', 'user-123')).rejects.toBeInstanceOf(RechargeCodeApiUnavailableError)
+    await expect(redeemRechargeCodeWithApi('SST-30', 'session-token')).rejects.toBeInstanceOf(RechargeCodeApiUnavailableError)
   })
 
   it('uses the server failure message when redeeming fails', async () => {
@@ -88,7 +78,7 @@ describe('redeemRechargeCodeWithApi', () => {
       headers: { 'Content-Type': 'application/json' },
     }))
 
-    await expect(redeemRechargeCodeWithApi('SST-100', 'user-123')).rejects.toMatchObject({
+    await expect(redeemRechargeCodeWithApi('SST-100', 'session-token')).rejects.toMatchObject({
       message: '该余额码已被兑换',
       code: 'code_already_redeemed',
     })

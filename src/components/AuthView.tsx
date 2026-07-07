@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import './AuthView.css'
 import { useStore } from '../store'
+import type { AuthRedirectView } from '../types'
 import {
   AuthApiError,
   accountFromAuthPayload,
@@ -37,11 +38,20 @@ function isLikelyEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
 }
 
-function getRedirectTitle(view: 'workbench' | 'plan' | 'library' | 'promptLibrary') {
+function getRedirectTitle(view: AuthRedirectView) {
+  if (view === 'agentWorkflow') return '智能创作流'
   if (view === 'plan') return '计划与额度'
   if (view === 'library') return '作品库'
   if (view === 'promptLibrary') return '提示词库'
   return '工作台'
+}
+
+function getRedirectSupportCopy(view: AuthRedirectView) {
+  if (view === 'agentWorkflow') return '登录后会回到智能创作流，继续把需求整理成计划、确认费用并启动生成。'
+  if (view === 'plan') return '登录后会继续回到计划与额度入口，查看当前点数、套餐和充值路径。'
+  if (view === 'library') return '登录后会回到作品库，继续查看你自己的生成结果和历史记录。'
+  if (view === 'promptLibrary') return '刚挑中的模板方向不会丢，登录后还能继续回到提示词库和工作台之间来回切换。'
+  return '当前工作台草稿会保留，登录后可以直接提交生成，并把个人结果沉淀到账号里。'
 }
 
 function getErrorMessage(error: unknown) {
@@ -70,6 +80,7 @@ export default function AuthView() {
   const inviteUrlAppliedRef = useRef(false)
 
   const redirectTitle = useMemo(() => getRedirectTitle(authRedirectView), [authRedirectView])
+  const redirectSupportCopy = useMemo(() => getRedirectSupportCopy(authRedirectView), [authRedirectView])
   const normalizedEmail = email.trim().toLowerCase()
   const emailReady = isLikelyEmail(normalizedEmail)
   const isSubmitting = submitState === 'submitting' || submitState === 'success'
@@ -222,15 +233,14 @@ export default function AuthView() {
   return (
     <section className="auth-view-shell" aria-label="登录与注册">
       <aside className="auth-guest-brief" aria-label="访客入口说明">
-        <p className="auth-guest-kicker">账号边界</p>
-        <h2>试填不打断，生成与保存需要登录。</h2>
-        <p>
-          当前入口会保留你刚才的提示词和参数。登录后可以继续提交生成，并把额度、作品和模板同步到账号里。
-        </p>
+        <p className="auth-guest-kicker">当前来自 {redirectTitle}</p>
+        <h2>先把流程接上，再把账号补上。</h2>
+        <p>{redirectSupportCopy}</p>
         <div className="auth-guest-paths" aria-label="访客可用入口">
+          <span>返回{redirectTitle}</span>
           <span>试填内容会保留</span>
           <span>官方模板可浏览</span>
-          <span>登录后同步资产</span>
+          <span>登录后同步个人结果</span>
         </div>
       </aside>
       <section className="auth-card">
@@ -244,6 +254,10 @@ export default function AuthView() {
                 <p className="auth-form-eyebrow">{authViewMode === 'login' ? '账号入口' : authViewMode === 'register' ? '创建账号' : '找回访问'}</p>
                 <h1 className="auth-view-title">{getModeTitle(authViewMode)}</h1>
                 <p className="auth-view-subtitle">{getModeSubtitle(authViewMode)}返回{redirectTitle}时会保留当前入口。</p>
+                <div className="auth-return-hint" aria-label="返回说明">
+                  <span>返回{redirectTitle}</span>
+                  <span>当前设备草稿会保留</span>
+                </div>
               </div>
             </div>
             <div className="auth-mode-switch" role="tablist" aria-label="登录与注册切换">
@@ -374,7 +388,7 @@ export default function AuthView() {
                   setGalleryView(authRedirectView)
                 }}
               >
-                先回{redirectTitle}
+                返回{redirectTitle}
               </button>
             </div>
 

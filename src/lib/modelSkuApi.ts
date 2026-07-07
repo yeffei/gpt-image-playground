@@ -1,5 +1,10 @@
 import type { ModelSku, TaskParams } from '../types'
 
+export type PublicModelSkuPayload = {
+  modelSkus: ModelSku[]
+  defaultModelSkuId: string | null
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
@@ -47,19 +52,39 @@ function parseModelSku(value: unknown): ModelSku | null {
     maxOutputCount: typeof value.maxOutputCount === 'number' && Number.isFinite(value.maxOutputCount)
       ? Math.max(1, Math.trunc(value.maxOutputCount))
       : 1,
+    maxSupportedLongEdge: typeof value.maxSupportedLongEdge === 'number' && Number.isFinite(value.maxSupportedLongEdge)
+      ? Math.max(1, Math.trunc(value.maxSupportedLongEdge))
+      : null,
+    maxBaseGenerationLongEdge: typeof value.maxBaseGenerationLongEdge === 'number' && Number.isFinite(value.maxBaseGenerationLongEdge)
+      ? Math.max(1, Math.trunc(value.maxBaseGenerationLongEdge))
+      : null,
+    maxDeliveryLongEdge: typeof value.maxDeliveryLongEdge === 'number' && Number.isFinite(value.maxDeliveryLongEdge)
+      ? Math.max(1, Math.trunc(value.maxDeliveryLongEdge))
+      : null,
   }
 }
 
-export async function fetchPublicModelSkus(): Promise<ModelSku[]> {
-  const response = await fetch('/api/model-skus', { cache: 'no-store' })
+export async function fetchPublicModelSkus(): Promise<PublicModelSkuPayload> {
+  const response = await fetch('/api/platform/capabilities', { cache: 'no-store' })
   if (!response.ok) throw new Error('模型列表读取失败')
   const payload = await response.json() as unknown
   const rawModels = isRecord(payload)
-    ? Array.isArray(payload.models)
+    ? isRecord(payload.image) && Array.isArray(payload.image.models)
+      ? payload.image.models
+      : Array.isArray(payload.models)
       ? payload.models
       : Array.isArray(payload.modelSkus)
         ? payload.modelSkus
         : []
     : []
-  return rawModels.map(parseModelSku).filter((item): item is ModelSku => Boolean(item))
+  const modelSkus = rawModels.map(parseModelSku).filter((item): item is ModelSku => Boolean(item))
+  const defaultModelSkuId = isRecord(payload)
+    ? isRecord(payload.image)
+      ? readString(payload.image.defaultModelSku) || null
+      : readString(payload.defaultModelSku) || null
+    : null
+  return {
+    modelSkus,
+    defaultModelSkuId,
+  }
 }

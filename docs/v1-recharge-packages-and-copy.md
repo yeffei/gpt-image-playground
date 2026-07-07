@@ -1,6 +1,6 @@
 # V1 Recharge Packages And Copy
 
-Last updated: 2026-05-31
+Last updated: 2026-06-11
 Scope: `D:\gpt_image_playground-main`
 Depends on: `docs/v1-billing-standard.md`
 
@@ -71,21 +71,21 @@ These examples should be shown as guidance, not as a hard guarantee.
 
 ### 30 Points
 
-- about `30` images at `1K auto/low`
-- about `10` images at `1K high`
-- about `5` images at `4K high`
+- about `30` images at `1K`
+- about `10` images at `2K`
+- about `5` images at `4K`
 
 ### 100 Points
 
-- about `100` images at `1K auto/low`
-- about `33` images at `1K high`
-- about `16` images at `4K high`
+- about `100` images at `1K`
+- about `33` images at `2K`
+- about `16` images at `4K`
 
 ### 300 Points
 
-- about `300` images at `1K auto/low`
-- about `100` images at `1K high`
-- about `50` images at `4K high`
+- about `300` images at `1K`
+- about `100` images at `2K`
+- about `50` images at `4K`
 
 ## Recharge Page Copy Baseline
 
@@ -137,13 +137,13 @@ Short version:
 
 Longer version:
 
-`计费基于分辨率、质量和最终输出数量，仅在成功产出最终图片后扣点。失败、取消或未完成请求不扣点。`
+`计费基于规格和最终输出数量，仅在成功产出最终图片后扣点。失败、取消或未完成请求不扣点。`
 
 ## Workbench Hint Copy
 
 Suggested submit-area helper copy:
 
-`当前生成会按分辨率与质量扣点，成功出图后结算。`
+`当前生成会按规格与成功出图数量扣点，成功出图后结算。`
 
 Suggested completion copy:
 

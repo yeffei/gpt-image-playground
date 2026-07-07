@@ -12,7 +12,7 @@ describe('verify recharge code flow CLI helpers', () => {
     const parsed = parseArgs([
       '--base-url', 'http://127.0.0.1:4175',
       '--points', '100',
-      '--user-id', 'mock-tester',
+      '--session-token', 'sess_user_token',
       '--json',
     ], {
       RECHARGE_CODE_ADMIN_TOKEN: 'env-token',
@@ -24,7 +24,7 @@ describe('verify recharge code flow CLI helpers', () => {
       redeemUrl: 'http://127.0.0.1:4175/api/recharge-codes/redeem',
       token: 'env-token',
       points: 100,
-      userId: 'mock-tester',
+      sessionToken: 'sess_user_token',
       json: true,
     })
   })
@@ -32,13 +32,13 @@ describe('verify recharge code flow CLI helpers', () => {
   it('rejects missing admin token', () => {
     expect(() => validateOptions({
       token: '',
-      userId: 'mock-tester',
+      sessionToken: 'sess_user_token',
       points: 30,
       help: false,
     })).toThrow('Missing RECHARGE_CODE_ADMIN_TOKEN')
   })
 
-  it('redeems with the user identity header', async () => {
+  it('redeems with the bearer session token', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       ok: true,
       points: 30,
@@ -52,7 +52,7 @@ describe('verify recharge code flow CLI helpers', () => {
 
     const result = await redeemRechargeCode({
       redeemUrl: 'http://127.0.0.1:4175/api/recharge-codes/redeem',
-      userId: 'mock-tester',
+      sessionToken: 'sess_user_token',
     }, 'E2E-30', fetchMock)
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -61,7 +61,7 @@ describe('verify recharge code flow CLI helpers', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-User-Id': 'mock-tester',
+          Authorization: 'Bearer sess_user_token',
         },
         body: JSON.stringify({ code: 'E2E-30' }),
       }),
@@ -103,7 +103,7 @@ describe('verify recharge code flow CLI helpers', () => {
       adminUrl: 'http://127.0.0.1:4175/api/admin/recharge-codes',
       redeemUrl: 'http://127.0.0.1:4175/api/recharge-codes/redeem',
       token: 'secret-token',
-      userId: 'mock-tester',
+      sessionToken: 'sess_user_token',
       points: 30,
       code: 'E2E-30-TEST',
       source: 'local-e2e',
@@ -115,7 +115,6 @@ describe('verify recharge code flow CLI helpers', () => {
     expect(result).toMatchObject({
       ok: true,
       code: 'E2E-30-TEST',
-      userId: 'mock-tester',
       points: 30,
       redeem: {
         balanceBefore: 20,
@@ -127,7 +126,6 @@ describe('verify recharge code flow CLI helpers', () => {
   it('formats a readable verification summary', () => {
     const summary = formatVerifySummary({
       code: 'E2E-30-TEST',
-      userId: 'mock-tester',
       points: 30,
       redeem: {
         balanceBefore: 20,

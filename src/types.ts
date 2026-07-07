@@ -2,17 +2,15 @@
 
 export type ApiMode = 'images' | 'responses'
 export type AppMode = 'gallery' | 'agent'
-export type GalleryView = 'workbench' | 'plan' | 'auth' | 'recharge' | 'library' | 'promptLibrary'
+export type GalleryView = 'workbench' | 'agentWorkflow' | 'plan' | 'auth' | 'recharge' | 'library' | 'promptLibrary' | 'inspiration'
 export type WorkbenchReturnSource = Exclude<GalleryView, 'workbench'>
-export type AuthRedirectView = 'workbench' | 'plan' | 'library' | 'promptLibrary'
+export type AuthRedirectView = 'workbench' | 'agentWorkflow' | 'plan' | 'library' | 'promptLibrary'
 export type AuthReturnSource = Exclude<AuthRedirectView, 'workbench'>
 export type AuthViewMode = 'login' | 'register' | 'recover'
-export type RechargeReturnView = 'workbench' | 'plan'
 export type RechargePaymentMethod = 'wechat' | 'alipay' | 'card'
 export type RechargeFlowStatus = 'idle' | 'processing' | 'success' | 'failed' | 'cancelled'
-export type LibraryViewMode = 'all' | 'favorites'
+export type LibraryViewMode = 'all' | 'favorites' | 'trash'
 export type WorkbenchAccessState = 'guest' | 'no_balance' | 'ready'
-export type RechargeResultStatus = 'idle' | 'success' | 'failed' | 'interrupted'
 export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask'
 export type BuiltInApiProvider = 'openai' | 'fal'
 export type ApiProvider = BuiltInApiProvider | string
@@ -22,6 +20,7 @@ export const DEFAULT_AGENT_MAX_TOOL_ROUNDS = 15
 
 export type ImageGatewayApiMode = Extract<ApiMode, 'images'>
 export type ImageRequestCompatibilityStrategy = 'openai_standard' | 'relay_extended'
+export type BackendRouteProvider = 'openai-compatible' | 'gemini-native'
 
 export interface ModelSku {
   id: string
@@ -35,12 +34,122 @@ export interface ModelSku {
   supportsEdit?: boolean
   supportsMask?: boolean
   maxOutputCount: number
+  maxSupportedLongEdge?: number | null
+  maxBaseGenerationLongEdge?: number | null
+  maxDeliveryLongEdge?: number | null
+}
+
+export interface PlatformCapabilities {
+  ok: true
+  platform: {
+    stage: 'standard_commercial'
+    dataSource: 'postgres'
+  }
+  image: {
+    models: Array<Omit<ModelSku, 'routeIds'>>
+    defaultModelSku: string
+    maxOutputCount: number
+    maxSupportedLongEdge?: number | null
+    maxBaseGenerationLongEdge?: number | null
+    maxDeliveryLongEdge?: number | null
+    supportsEdit: boolean
+    supportsMask: boolean
+    supportsAsyncTasks: boolean
+    taskModes: Array<'generate' | 'edit' | 'agent' | 'agent_edit'>
+  }
+  billing: {
+    unit: 'points'
+    failureCharged: false
+    partialSuccessChargedByOutput: true
+    qualityBasis: 'auto'
+    sizeTiers: Array<{
+      id: '1K' | '2K' | '4K'
+      maxLongestEdge: number | null
+      unitPoints: number
+    }>
+  }
+  sharing:
+    | {
+        supported: false
+        accessCodeSupported?: false
+        expirationSupported?: false
+        revokeSupported?: false
+      }
+    | {
+        supported: true
+        accessCodeSupported: boolean
+        expirationSupported: boolean
+        revokeSupported: boolean
+      }
+}
+
+export interface GatewayRouteProbeTest {
+  requestedSize: string
+  actualSize: string | null
+  actualWidth: number | null
+  actualHeight: number | null
+  shrunk: boolean
+  returnedImage: boolean
+  statusCode: number | null
+  latencyMs: number
+  errorSummary: string | null
+}
+
+export interface GatewayRouteProbeResult {
+  routeId: string
+  routeName: string
+  upstreamModel: string
+  tests: GatewayRouteProbeTest[]
+  maxSupportedLongEdge: number | null
+}
+
+export interface GatewayRouteProbeBatchSummary {
+  totalRoutes: number
+  available2kRouteCount: number
+  available4kRouteCount: number
+  brokenRouteCount: number
+}
+
+export interface GatewayRoutePreflightProbe {
+  ok: boolean
+  status: number | null
+  durationMs: number
+  error?: string
+}
+
+export interface GatewayRoutePreflightResult {
+  id: string
+  name: string
+  enabled: boolean
+  provider?: BackendRouteProvider
+  baseUrl: string
+  apiKey: string
+  model: string
+  compatibilityStrategy: ImageRequestCompatibilityStrategy
+  baseProbe: GatewayRoutePreflightProbe
+  modelsProbe: GatewayRoutePreflightProbe
+  status:
+    | 'missing_base_url'
+    | 'missing_api_key'
+    | 'ready_for_smoke'
+    | 'auth_failed'
+    | 'models_endpoint_missing'
+    | 'rate_limited'
+    | 'upstream_server_error'
+    | 'network_or_timeout'
+    | 'unknown'
+}
+
+export interface GatewayRoutePreflightSummary {
+  totalRoutes: number
+  readyForSmokeCount: number
+  authFailedCount: number
 }
 
 export interface BackendRoute {
   id: string
   name: string
-  provider: 'openai-compatible'
+  provider: BackendRouteProvider
   compatibilityStrategy: ImageRequestCompatibilityStrategy
   baseUrl: string
   apiKey: string
@@ -68,9 +177,102 @@ export interface ImageGatewayAttempt {
   failureKind?: ImageGatewayFailureKind
 }
 
+export interface ServerPersistedImageOutput {
+  id: string
+  taskId: string
+  outputIndex: number
+  url?: string
+  storageProvider?: string
+  storageKey?: string
+  mimeType?: string
+  byteSize?: number
+  storageStatus?: 'active' | 'pending_delete' | 'deleted' | 'purge_failed'
+  deletedAt?: string | null
+  purgeAfter?: string | null
+}
+
+export interface OwnerImageShare {
+  id: string
+  token: string
+  outputId: string
+  purpose?: 'manual' | 'inspiration_public'
+  shareUrlPath: string
+  apiUrlPath: string
+  reviewStatus: 'auto_pass' | 'attention' | 'blocked'
+  reviewSummary: string | null
+  requiresAccessCode: boolean
+  expiresAt: string | null
+  revokedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface PublicImageShare {
+  token: string
+  requiresAccessCode: boolean
+  expiresAt: string | null
+  output: {
+    outputIndex: number
+    mimeType: string
+    byteSize: number
+    width: number | null
+    height: number | null
+    createdAt: string
+  }
+  createdAt: string
+}
+
+export type InspirationEligibilityReason =
+  | 'ok'
+  | 'size_too_small'
+  | 'size_unavailable'
+  | 'review_not_passed'
+  | 'ratio_out_of_range'
+  | 'content_unavailable'
+
+export type InspirationPostStatus = 'ai_reviewing' | 'published' | 'needs_review' | 'hidden' | 'removed'
+
+export interface InspirationPostSummary {
+  id: string
+  status: InspirationPostStatus
+  featured: boolean
+  title: string | null
+  category: string
+  processingLabel: string
+  publishedAt: string | null
+}
+
+export interface InspirationEligibility {
+  eligible: boolean
+  reason: InspirationEligibilityReason
+  width: number | null
+  height: number | null
+  longEdge: number | null
+  existingPost: {
+    id: string
+    status: InspirationPostStatus
+    featured: boolean
+    publishedAt: string | null
+  } | null
+}
+
+export interface InspirationHomePostCard {
+  id: string
+  title: string | null
+  category: string
+  processingLabel: string
+  authorName: string | null
+  publishedAt: string | null
+  imageUrl: string
+  viewCount?: number
+  detailOpenCount?: number
+  enterStudioClickCount?: number
+}
+
 export type ImageGatewayFailureKind =
   | 'no_route'
   | 'route_exhausted'
+  | 'insufficient_balance'
   | 'upstream_timeout'
   | 'upstream_rate_limited'
   | 'upstream_server_error'
@@ -321,20 +523,14 @@ export interface AccountState {
 }
 
 export interface BillingState {
-  lastRechargeAmount: number | null
-  lastRechargeStatus: RechargeResultStatus
-  lastRechargeAt: number | null
-  lastRechargeErrorMessage?: string | null
   pendingRechargeAmount: number | null
-  selectedPaymentMethod: RechargePaymentMethod
   rechargeFlowStatus: RechargeFlowStatus
-  rechargeReturnView: RechargeReturnView
   rechargeHistory: Array<{
     id: string
     amount: number
     status: Extract<RechargeFlowStatus, 'success' | 'failed' | 'cancelled'>
     paymentMethod: RechargePaymentMethod
-    channel?: 'recharge_code' | 'mock_payment'
+    channel?: 'recharge_code'
     code?: string
     createdAt: number
     balanceAfter?: number
@@ -380,7 +576,7 @@ export interface TaskParams {
 
 export const DEFAULT_PARAMS: TaskParams = {
   size: '1024x1024',
-  quality: 'medium',
+  quality: 'auto',
   output_format: 'jpeg',
   output_compression: 90,
   moderation: 'low',
@@ -406,6 +602,23 @@ export interface MaskDraft {
 
 export type TaskStatus = 'running' | 'done' | 'error'
 
+export type PublicTaskResultStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout'
+export type PublicTaskChargeStatus = 'not_charged' | 'charged' | 'partial_charged' | 'pending'
+export type PublicTaskRetryAction = 'reuse_or_tune' | 'retry' | 'adjust_params' | 'wait' | 'contact_support'
+
+export interface PublicTaskResultView {
+  status: PublicTaskResultStatus
+  modelLabel: string
+  outputCount: number
+  requestedOutputCount: number
+  chargedPoints: number
+  chargeStatus: PublicTaskChargeStatus
+  failureHeadline?: string
+  failureSummary?: string
+  requestId?: string
+  retryAction: PublicTaskRetryAction
+}
+
 export interface TaskRecord {
   id: string
   ownerUserId?: string | null
@@ -426,6 +639,22 @@ export interface TaskRecord {
   modelSku?: string
   /** Gateway 失败分类，用于标准化错误文案 */
   gatewayFailureKind?: ImageGatewayFailureKind
+  /** 服务端请求编号，用于前后台统一排查 */
+  requestId?: string
+  /** 服务端最终命中的线路标识，用于失败任务排查 */
+  routeId?: string
+  /** 服务端最终命中的上游模型，用于共享线路排查 */
+  upstreamModel?: string
+  /** 服务端记录的路由尝试明细，用于失败任务排查 */
+  attempts?: ImageGatewayAttempt[]
+  /** 服务端记录的请求输出数量，用于部分成功解释 */
+  requestedOutputCount?: number
+  /** 部分成功时的补充说明 */
+  partialFailureMessage?: string
+  /** 本次任务实际扣点，优先以后端真相为准 */
+  chargedPoints?: number | null
+  /** 本次任务关联的服务端流水编号 */
+  chargeLedgerId?: string | null
   /** fal.ai 队列请求 ID，用于连接断开后的结果恢复 */
   falRequestId?: string
   /** fal.ai 队列 endpoint，用于连接断开后的状态和结果查询 */
@@ -436,8 +665,20 @@ export interface TaskRecord {
   customTaskId?: string
   /** 自定义异步任务是否等待自动恢复 */
   customRecoverable?: boolean
+  /** 服务端生图任务 ID，用于轮询、取消和恢复 */
+  serverImageTaskId?: string
   /** API 返回的实际生效参数，用于标记与请求值不一致的情况 */
   actualParams?: Partial<TaskParams>
+  /** 底图生成计划与交付信息，用于解释平台增强输出 */
+  deliveryPlan?: {
+    requestedSize: string
+    requestedTier: '1K' | '2K' | '4K'
+    requestedRatio: string
+    baseSize: string
+    baseRatio: string
+    strategy: 'direct' | 'upscale' | 'crop_then_upscale' | 'pad_then_upscale'
+    deliveryLabel: string
+  }
   /** 输出图片对应的实际生效参数，key 为 outputImages 中的图片 id */
   actualParamsByImage?: Record<string, Partial<TaskParams>>
   /** 输出图片对应的 API 改写提示词，key 为 outputImages 中的图片 id */
@@ -448,6 +689,18 @@ export interface TaskRecord {
   maskImageId?: string | null
   /** 输出图片的 image store id 列表 */
   outputImages: string[]
+  /** 本地输出图片 id 对应的服务端输出记录，用于受控分享等服务端能力 */
+  serverOutputByImageId?: Record<string, {
+    outputId: string
+    taskId?: string
+    outputIndex: number
+  }>
+  /** 作品库状态：正常 / 回收站 */
+  libraryState?: 'active' | 'trashed'
+  /** 进入回收站时间 */
+  libraryDeletedAt?: number | null
+  /** 预计永久清理时间 */
+  libraryPurgeAfter?: number | null
   /** 流式生成的中间步骤图片 id 列表，仅失败时保留供排查/下载 */
   streamPartialImageIds?: string[]
   /** API 返回的原始图片 HTTP URL（非 base64 时记录） */

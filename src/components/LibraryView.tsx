@@ -26,39 +26,30 @@ export default function LibraryView() {
 
   const taskMetrics = useMemo(() => {
     const visibleTasks = tasks.filter((task) => isTaskVisibleForAccount(task, account))
-    const all = visibleTasks.filter((task) => task.status === 'done' && task.outputImages.length > 0).length
-    const favorites = visibleTasks.filter((task) => task.status === 'done' && task.isFavorite && task.outputImages.length > 0).length
-    return { all, favorites }
+    const activeTasks = visibleTasks.filter((task) => task.status === 'done' && task.outputImages.length > 0 && task.libraryState !== 'trashed')
+    const trashedTasks = visibleTasks.filter((task) => task.outputImages.length > 0 && task.libraryState === 'trashed')
+    const favorites = activeTasks.filter((task) => task.isFavorite).length
+    return { all: activeTasks.length, favorites, trash: trashedTasks.length }
   }, [account, tasks])
-  const accountScopeLabel = useMemo(() => {
-    if (!account.isLoggedIn) return ''
-    const email = account.email?.trim()
-    const userId = account.userId?.trim()
-    const userIdSuffix = userId ? userId.slice(-6) : ''
-    if (email) return `${email}${userIdSuffix ? ` · ${userIdSuffix}` : ''}`
-    if (userIdSuffix) return `账号 ${userIdSuffix}`
-    return account.displayName
-  }, [account.displayName, account.email, account.isLoggedIn, account.userId])
-
-  const activeLabel = libraryViewMode === 'favorites' ? '收藏' : '作品库'
+  const activeLabel = libraryViewMode === 'favorites' ? '收藏' : libraryViewMode === 'trash' ? '回收站' : '作品库'
   const accessTitle = libraryViewMode === 'favorites' ? GUEST_VIEW_FAVORITES_LABEL : GUEST_VIEW_LIBRARY_LABEL
   const accessCopy = libraryViewMode === 'favorites'
     ? GUEST_FAVORITES_ACCESS_COPY
     : GUEST_LIBRARY_ACCESS_COPY
-  const filterSummary = [
-    searchQuery.trim() ? `关键词 ${searchQuery.trim()}` : null,
-    filterStatus !== 'all' ? `状态 ${filterStatus}` : null,
-    filterFavorite ? '仅收藏' : null,
-  ].filter(Boolean).join(' / ')
+  const loggedInHint = libraryViewMode === 'trash'
+    ? '回收站中的作品保留 7 天，到期后会永久清理。'
+    : '作品库默认保留最近 100 张正式作品，超出后会自动移入回收站保留 7 天。'
   const resultSummary = !account.isLoggedIn
     ? activeLabel
     : libraryViewMode === 'favorites'
     ? `收藏 ${taskMetrics.favorites}`
+    : libraryViewMode === 'trash'
+    ? `回收站 ${taskMetrics.trash}`
     : `作品 ${taskMetrics.all}`
 
-  const handleSwitchMode = (mode: 'all' | 'favorites') => {
+  const handleSwitchMode = (mode: 'all' | 'favorites' | 'trash') => {
     setLibraryViewMode(mode)
-    setFilterStatus('done')
+    setFilterStatus(mode === 'trash' ? 'all' : 'done')
     setFilterFavorite(false)
   }
 
@@ -95,14 +86,7 @@ export default function LibraryView() {
               <h1 className="library-view-title">{activeLabel}</h1>
               <span className="library-view-count-badge">{resultSummary}</span>
             </div>
-            <p className="library-view-inline-note">
-              {filterSummary
-                ? `当前筛选: ${filterSummary}`
-                : libraryViewMode === 'favorites'
-                ? '集中回看你主动保留下来的结果。'
-                : '按时间倒序查看最近产出的结果。'}
-            </p>
-            <p className="library-account-scope">当前账号：{accountScopeLabel}</p>
+            <p className="library-view-subtitle">{loggedInHint}</p>
           </div>
           <div className="library-results-head">
             <div className="library-toolbar">
@@ -121,8 +105,15 @@ export default function LibraryView() {
                 >
                   收藏
                 </button>
+                <button
+                  type="button"
+                  className={`library-tab-chip ${libraryViewMode === 'trash' ? 'is-active' : ''}`}
+                  onClick={() => handleSwitchMode('trash')}
+                >
+                  回收站
+                </button>
               </div>
-              <SearchBar compact showFavoriteToggle={libraryViewMode !== 'favorites'} />
+              <SearchBar compact showFavoriteToggle={libraryViewMode === 'all'} />
             </div>
           </div>
           <TaskGrid limit={0} />

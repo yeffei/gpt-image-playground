@@ -34,6 +34,8 @@ export class AdminApiError extends Error {
   }
 }
 
+const BACKEND_UNAVAILABLE_MESSAGE = '本地服务未启动或暂不可用，请确认后端服务已运行后重试。'
+
 const ADMIN_API_BASE_URL = (import.meta.env.VITE_ADMIN_API_BASE_URL ?? '').trim().replace(/\/$/, '')
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -58,6 +60,22 @@ function parseAdminError(value: unknown) {
   return {
     error: typeof value.error === 'string' ? value.error : undefined,
     message: typeof value.message === 'string' ? value.message : undefined,
+  }
+}
+
+function isLikelyBackendUnavailable(response: Response, body: unknown) {
+  return [500, 502, 503, 504].includes(response.status) && body == null
+}
+
+function toBackendUnavailableError() {
+  return new AdminApiError(BACKEND_UNAVAILABLE_MESSAGE, 'backend_unavailable')
+}
+
+async function fetchAdmin(input: RequestInfo | URL, init?: RequestInit) {
+  try {
+    return await fetch(input, init)
+  } catch {
+    throw toBackendUnavailableError()
   }
 }
 
@@ -87,9 +105,10 @@ function parseAdminLoginPayload(value: unknown): AdminLoginPayload {
 async function adminFetch(path: string, options: RequestInit = {}, token?: string | null) {
   const headers = new Headers(options.headers)
   if (token?.trim()) headers.set('Authorization', `Bearer ${token.trim()}`)
-  const response = await fetch(buildAdminApiUrl(path), { ...options, headers })
+  const response = await fetchAdmin(buildAdminApiUrl(path), { ...options, headers })
   const body = await readJson(response)
   if (!response.ok) {
+    if (isLikelyBackendUnavailable(response, body)) throw toBackendUnavailableError()
     const errorPayload = parseAdminError(body)
     throw new AdminApiError(errorPayload.message || '后台请求失败，请稍后重试', errorPayload.error)
   }

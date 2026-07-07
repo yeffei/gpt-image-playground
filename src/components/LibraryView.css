@@ -98,23 +98,23 @@
 .library-view-title {
   margin: 0;
   color: var(--text);
-  font-size: 24px;
+  font-size: var(--frontend-page-title-size);
   font-weight: 830;
-  letter-spacing: -0.04em;
+  letter-spacing: var(--frontend-title-tracking);
 }
 
 .library-view-subtitle {
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: var(--frontend-body-size);
+  line-height: 1.6;
 }
 
 .library-view-inline-note {
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: var(--frontend-body-size);
+  line-height: 1.6;
 }
 
 .library-account-scope {
@@ -181,9 +181,9 @@
 .library-access-card h2 {
   margin: 0;
   color: var(--text);
-  font-size: 24px;
+  font-size: var(--frontend-page-title-size);
   font-weight: 820;
-  letter-spacing: -0.03em;
+  letter-spacing: var(--frontend-title-tracking);
 }
 
 .library-access-card p {
@@ -221,4 +221,157 @@
     padding: 16px;
     border-radius: 20px;
   }
+}
+
+.library-view-shell {
+  gap: 10px;
+}
+
+.library-results-shell {
+  gap: 10px;
+  padding: 14px;
+  border-radius: 20px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.58), rgba(240, 249, 255, 0.42));
+  box-shadow:
+    0 10px 26px rgba(54, 38, 94, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.64);
+}
+
+.library-results-topbar {
+  gap: 0;
+}
+
+.library-view-title-row {
+  gap: 8px;
+}
+
+.library-view-title {
+  font-size: 24px;
+  line-height: 1.1;
+}
+
+.library-view-count-badge {
+  min-height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.library-results-head {
+  gap: 4px;
+}
+
+.library-toolbar {
+  gap: 4px 8px;
+}
+
+.library-tab-row {
+  gap: 6px;
+}
+
+.library-tab-chip {
+  min-height: 32px;
+  padding: 0 11px;
+  border-radius: 12px;
+  font-size: 11.5px;
+}
+
+.library-tab-chip.is-active {
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.1);
+}
+
+.library-results-head .studio-filterbar-compact {
+  gap: 6px;
+}
+
+.library-results-head .studio-filterbar-compact .studio-filter-actions {
+  gap: 6px;
+}
+
+.library-results-head .studio-filterbar-compact .studio-filter-actions > .relative {
+  width: 96px;
+}
+
+.library-results-head .studio-filterbar-compact .studio-search-input,
+.library-results-head .studio-filterbar-compact .studio-filter-select,
+.library-results-head .studio-filterbar-compact .studio-favorite-toggle {
+  min-height: 34px;
+  height: 34px;
+  border-radius: 12px;
+  font-size: 11.5px;
+}
+
+.library-results-head .studio-filterbar-compact .studio-favorite-toggle {
+  min-width: 82px;
+}
+
+.task-grid-library {
+  gap: 16px !important;
+  padding-bottom: 12px !important;
+}
+
+.task-grid-library .prototype-result-card .prototype-result-media {
+  height: 158px;
+  min-height: 158px;
+}
+
+.task-grid-library .prototype-result-card .prototype-result-body {
+  padding: 7px 9px 8px;
+  gap: 4px;
+}
+
+.task-grid-library .prototype-result-card .prototype-result-copy {
+  margin-bottom: 0;
+}
+
+.task-grid-library .prototype-result-card .prototype-result-copy p.text-\[15px\] {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.28;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+.task-grid-library .prototype-result-card .prototype-result-summary {
+  min-height: 12px;
+  font-size: 9.5px;
+  line-height: 1.2;
+}
+
+.task-grid-library .prototype-result-card .task-mini-action {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
+}
+
+/* Stage B compact text pass. */
+.library-view-count-badge,
+.library-tab-chip,
+.library-results-head .studio-filterbar-compact .studio-search-input,
+.library-results-head .studio-filterbar-compact .studio-filter-select,
+.library-results-head .studio-filterbar-compact .studio-favorite-toggle {
+  font-size: 12px;
+  letter-spacing: 0;
+}
+
+.library-results-head .studio-filterbar-compact .studio-favorite-toggle {
+  min-width: 88px;
+}
+
+.task-grid-library .prototype-result-card .prototype-result-summary,
+.task-grid-library .prototype-result-meta span,
+.task-grid-library .task-image-preview-button {
+  font-size: 11px !important;
+  line-height: 1.35;
+  letter-spacing: 0 !important;
+}
+
+.task-grid-library .prototype-result-card .task-mini-action {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
 }

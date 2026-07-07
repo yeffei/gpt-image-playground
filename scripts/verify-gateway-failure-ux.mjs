@@ -81,13 +81,8 @@ export function buildPersistedState(options) {
         planName: options.planName,
       },
       billing: {
-        lastRechargeAmount: null,
-        lastRechargeStatus: 'idle',
-        lastRechargeAt: null,
         pendingRechargeAmount: 30,
-        selectedPaymentMethod: 'wechat',
         rechargeFlowStatus: 'idle',
-        rechargeReturnView: 'plan',
         rechargeHistory: [],
         usageHistory: [],
       },

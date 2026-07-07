@@ -83,6 +83,17 @@ async function getRouteHealth(routeId, modelSkuId) {
   }
 }
 
+async function setRouteMaxSupportedLongEdge(routeId, maxSupportedLongEdge) {
+  const databaseUrl = resolveDatabaseUrl()
+  if (!databaseUrl) throw new Error('DATABASE_URL is required to seed route resolution capability')
+  const pool = new Pool({ connectionString: databaseUrl })
+  try {
+    await pool.query('UPDATE gateway_routes SET max_supported_long_edge = $1 WHERE id = $2', [maxSupportedLongEdge, routeId])
+  } finally {
+    await pool.end()
+  }
+}
+
 function startMockImageApi() {
   const state = {
     successCalls: 0,
@@ -161,7 +172,12 @@ function startMockImageApi() {
       state.limitedSuccessCalls += 1
       const requestedCount = Math.min(Math.max(Math.trunc(Number(requestPayload.n) || 1), 1), 4)
       state.limitedSuccessRequestNs.push(requestedCount)
-      const outputCount = Math.max(requestedCount - 1, 0)
+      if (state.limitedSuccessCalls > 1) {
+        response.writeHead(500, { 'Content-Type': 'application/json' })
+        response.end(JSON.stringify({ error: { message: 'limited route failed after first image' } }))
+        return
+      }
+      const outputCount = 1
       response.writeHead(200, { 'Content-Type': 'application/json' })
       response.end(JSON.stringify({
         data: Array.from({ length: outputCount }, (_, index) => ({
@@ -261,6 +277,7 @@ async function createGatewayRoute(adminToken, input) {
     },
   })
   assert(result.response.status === 201, `${input.name} route create failed: ${result.response.status} ${JSON.stringify(result.payload)}`)
+  await setRouteMaxSupportedLongEdge(result.payload.route.id, input.maxSupportedLongEdge ?? 3840)
   return result.payload.route
 }
 
@@ -397,6 +414,7 @@ async function main() {
       },
     })
     assert(routeResult.response.status === 201, `route create failed: ${routeResult.response.status} ${JSON.stringify(routeResult.payload)}`)
+    await setRouteMaxSupportedLongEdge(routeResult.payload.route.id, 3840)
 
     const modelResult = await request('/api/admin/model-skus', {
       token: adminToken,
@@ -444,7 +462,7 @@ async function main() {
       },
     })
     assert(generate.response.status === 200, `generate failed: ${generate.response.status} ${JSON.stringify(generate.payload)}`)
-    assert(generate.payload.billing?.chargedPoints === 4, `expected 4 charged points for 2K/high, got ${JSON.stringify(generate.payload.billing)}`)
+    assert(generate.payload.billing?.chargedPoints === 3, `expected 3 charged points for 2K, got ${JSON.stringify(generate.payload.billing)}`)
     assert(Array.isArray(generate.payload.images) && generate.payload.images[0]?.startsWith('/api/generated-images/'), `generate did not return persisted image url: ${JSON.stringify(generate.payload.images)}`)
     assert(generate.payload.persistedImages?.[0]?.storageProvider === 'local', `generate did not return persisted image metadata: ${JSON.stringify(generate.payload.persistedImages)}`)
     assert(generate.payload.persistedImages?.[0]?.byteSize > 0, `persisted image byte size missing: ${JSON.stringify(generate.payload.persistedImages)}`)
@@ -457,17 +475,17 @@ async function main() {
 
     const account = await request('/api/account/me', { token: userToken })
     assert(account.response.status === 200, `account read failed: ${account.response.status} ${JSON.stringify(account.payload)}`)
-    assert(account.payload.user.balance === 1, `expected balance 1, got ${account.payload.user.balance}`)
+    assert(account.payload.user.balance === 2, `expected balance 2, got ${account.payload.user.balance}`)
     assert(account.payload.user.frozenBalance === 0, `expected frozen balance 0, got ${account.payload.user.frozenBalance}`)
 
     const ledger = await request('/api/billing/ledger?limit=10&offset=0', { token: userToken })
     assert(ledger.response.status === 200, `ledger read failed: ${ledger.response.status} ${JSON.stringify(ledger.payload)}`)
-    assert(ledger.payload.ledger.some((item) => item.type === 'generation_charge' && item.amount === -4), '2K/high generation charge ledger missing')
+    assert(ledger.payload.ledger.some((item) => item.type === 'generation_charge' && item.amount === -3), '2K generation charge ledger missing')
 
     const adminTasksSummary = await request('/api/admin/tasks/summary', { token: adminToken })
     assert(adminTasksSummary.response.status === 200, `admin tasks summary failed: ${adminTasksSummary.response.status} ${JSON.stringify(adminTasksSummary.payload)}`)
     assert(adminTasksSummary.payload.summary?.totalTaskCount >= 1, `admin tasks summary missing task count: ${JSON.stringify(adminTasksSummary.payload)}`)
-    assert(adminTasksSummary.payload.summary?.chargedPoints >= 4, `admin tasks summary missing charged points: ${JSON.stringify(adminTasksSummary.payload)}`)
+    assert(adminTasksSummary.payload.summary?.chargedPoints >= 3, `admin tasks summary missing charged points: ${JSON.stringify(adminTasksSummary.payload)}`)
 
     const adminTasks = await request(`/api/admin/tasks?userId=${encodeURIComponent(userId)}&status=succeeded&limit=10&offset=0`, { token: adminToken })
     assert(adminTasks.response.status === 200, `admin tasks list failed: ${adminTasks.response.status} ${JSON.stringify(adminTasks.payload)}`)
@@ -476,7 +494,7 @@ async function main() {
     assert(adminSuccessTask.userId === userId, `admin task user mismatch: ${JSON.stringify(adminSuccessTask)}`)
     assert(adminSuccessTask.modelSku === modelResult.payload.model.id, `admin task model mismatch: ${JSON.stringify(adminSuccessTask)}`)
     assert(adminSuccessTask.routeId === routeResult.payload.route.id, `admin task route mismatch: ${JSON.stringify(adminSuccessTask)}`)
-    assert(adminSuccessTask.chargedPoints === 4, `admin task charged points mismatch: ${JSON.stringify(adminSuccessTask)}`)
+    assert(adminSuccessTask.chargedPoints === 3, `admin task charged points mismatch: ${JSON.stringify(adminSuccessTask)}`)
 
     const adminTaskDetail = await request(`/api/admin/tasks/${encodeURIComponent(generate.payload.taskId)}`, { token: adminToken })
     assert(adminTaskDetail.response.status === 200, `admin task detail failed: ${adminTaskDetail.response.status} ${JSON.stringify(adminTaskDetail.payload)}`)
@@ -484,12 +502,12 @@ async function main() {
     assert(adminTaskDetail.payload.task?.user?.email === register.payload.user.email, `admin task detail user missing: ${JSON.stringify(adminTaskDetail.payload)}`)
     assert(adminTaskDetail.payload.task?.modelLabel, `admin task detail model label missing: ${JSON.stringify(adminTaskDetail.payload)}`)
     assert(adminTaskDetail.payload.task?.routeLabel, `admin task detail route label missing: ${JSON.stringify(adminTaskDetail.payload)}`)
-    assert(adminTaskDetail.payload.ledger?.some((item) => item.id === generate.payload.billing.ledgerId && item.amount === -4), `admin task detail ledger missing: ${JSON.stringify(adminTaskDetail.payload)}`)
+    assert(adminTaskDetail.payload.ledger?.some((item) => item.id === generate.payload.billing.ledgerId && item.amount === -3), `admin task detail ledger missing: ${JSON.stringify(adminTaskDetail.payload)}`)
     assert(adminTaskDetail.payload.outputs?.[0]?.publicUrl === generate.payload.images[0], `admin task detail output missing: ${JSON.stringify(adminTaskDetail.payload.outputs)}`)
 
     const matrixTopUp = await request(`/api/admin/users/${encodeURIComponent(userId)}/balance-adjustments`, {
       token: adminToken,
-      body: { amount: 4, reason: `image billing matrix verify ${stamp}` },
+      body: { amount: 1, reason: `image billing matrix verify ${stamp}` },
     })
     assert(matrixTopUp.response.status === 200, `matrix top up failed: ${matrixTopUp.response.status} ${JSON.stringify(matrixTopUp.payload)}`)
     const successRequestNsBeforeMediumBatch = mock.getState().successRequestNs
@@ -511,11 +529,11 @@ async function main() {
     })
     assert(mediumBatchGenerate.response.status === 200, `medium batch generate failed: ${mediumBatchGenerate.response.status} ${JSON.stringify(mediumBatchGenerate.payload)}`)
     const successRequestNsAfterMediumBatch = mock.getState().successRequestNs
-    assert(successRequestNsAfterMediumBatch.length === successRequestNsBeforeMediumBatch.length + 1, `expected one upstream request for n=2, got ${JSON.stringify(successRequestNsAfterMediumBatch)}`)
-    assert(successRequestNsAfterMediumBatch.at(-1) === 2, `expected upstream request n=2, got ${JSON.stringify(successRequestNsAfterMediumBatch)}`)
-    assert(mediumBatchGenerate.payload.billing?.chargedPoints === 4, `expected 4 charged points for 1K/medium x2, got ${JSON.stringify(mediumBatchGenerate.payload.billing)}`)
+    assert(successRequestNsAfterMediumBatch.length === successRequestNsBeforeMediumBatch.length + 2, `expected two single-image upstream requests for n=2, got ${JSON.stringify(successRequestNsAfterMediumBatch)}`)
+    assert(successRequestNsAfterMediumBatch.slice(-2).join(',') === '1,1', `expected upstream request n sequence 1,1, got ${JSON.stringify(successRequestNsAfterMediumBatch)}`)
+    assert(mediumBatchGenerate.payload.billing?.chargedPoints === 2, `expected 2 charged points for 1K x2, got ${JSON.stringify(mediumBatchGenerate.payload.billing)}`)
     assert(mediumBatchGenerate.payload.billing?.outputCount === 2, `expected 2 output images, got ${JSON.stringify(mediumBatchGenerate.payload.billing)}`)
-    assert(mediumBatchGenerate.payload.billing?.billingBasis?.unitPoints === 2, `expected 2 unit points for 1K/medium, got ${JSON.stringify(mediumBatchGenerate.payload.billing)}`)
+    assert(mediumBatchGenerate.payload.billing?.billingBasis?.unitPoints === 1, `expected 1 unit point for 1K, got ${JSON.stringify(mediumBatchGenerate.payload.billing)}`)
     assert(mediumBatchGenerate.payload.images?.length === 2 && mediumBatchGenerate.payload.images.every((image) => image.startsWith('/api/generated-images/')), `medium batch persisted image urls missing: ${JSON.stringify(mediumBatchGenerate.payload.images)}`)
     const mediumTaskOutputs = await getTaskOutputs(mediumBatchGenerate.payload.taskId)
     assert(mediumTaskOutputs.length === 2, `expected two persisted medium task outputs, got ${JSON.stringify(mediumTaskOutputs)}`)
@@ -523,7 +541,7 @@ async function main() {
     assert(accountAfterMatrix.response.status === 200, `account after matrix read failed: ${accountAfterMatrix.response.status} ${JSON.stringify(accountAfterMatrix.payload)}`)
     assert(accountAfterMatrix.payload.user.balance === 1, `expected balance 1 after matrix generate, got ${accountAfterMatrix.payload.user.balance}`)
 
-    await topUpUser(adminToken, userId, 8, `image billing n4 verify ${stamp}`)
+    await topUpUser(adminToken, userId, 4, `image billing n4 verify ${stamp}`)
     const successRequestNsBeforeFourBatch = mock.getState().successRequestNs
     const fourBatchGenerate = await request('/api/image/generate', {
       token: userToken,
@@ -543,10 +561,10 @@ async function main() {
     })
     assert(fourBatchGenerate.response.status === 200, `four batch generate failed: ${fourBatchGenerate.response.status} ${JSON.stringify(fourBatchGenerate.payload)}`)
     const successRequestNsAfterFourBatch = mock.getState().successRequestNs
-    assert(successRequestNsAfterFourBatch.length === successRequestNsBeforeFourBatch.length + 1, `expected one upstream request for n=4, got ${JSON.stringify(successRequestNsAfterFourBatch)}`)
-    assert(successRequestNsAfterFourBatch.at(-1) === 4, `expected upstream request n=4, got ${JSON.stringify(successRequestNsAfterFourBatch)}`)
+    assert(successRequestNsAfterFourBatch.length === successRequestNsBeforeFourBatch.length + 4, `expected four single-image upstream requests for n=4, got ${JSON.stringify(successRequestNsAfterFourBatch)}`)
+    assert(successRequestNsAfterFourBatch.slice(-4).join(',') === '1,1,1,1', `expected upstream request n sequence 1,1,1,1, got ${JSON.stringify(successRequestNsAfterFourBatch)}`)
     assert(fourBatchGenerate.payload.images?.length === 4, `expected four generated images, got ${JSON.stringify(fourBatchGenerate.payload.images)}`)
-    assert(fourBatchGenerate.payload.billing?.chargedPoints === 8, `expected 8 charged points for 1K/medium x4, got ${JSON.stringify(fourBatchGenerate.payload.billing)}`)
+    assert(fourBatchGenerate.payload.billing?.chargedPoints === 4, `expected 4 charged points for 1K x4, got ${JSON.stringify(fourBatchGenerate.payload.billing)}`)
     const accountAfterFourBatch = await request('/api/account/me', { token: userToken })
     assert(accountAfterFourBatch.response.status === 200, `account after four batch read failed: ${accountAfterFourBatch.response.status} ${JSON.stringify(accountAfterFourBatch.payload)}`)
     assert(accountAfterFourBatch.payload.user.balance === 1, `expected balance 1 after four batch generate, got ${accountAfterFourBatch.payload.user.balance}`)
@@ -579,12 +597,14 @@ async function main() {
       },
     )
     const limitedRequestNsAfter = mock.getState().limitedSuccessRequestNs
-    assert(limitedGenerate.response.status === 502, `expected limited multi-image failure 502, got ${limitedGenerate.response.status} ${JSON.stringify(limitedGenerate.payload)}`)
-    assert(limitedRequestNsAfter.slice(limitedRequestNsBefore.length, limitedRequestNsBefore.length + 2).join(',') === '2,1', `expected upstream retry n sequence 2,1, got ${JSON.stringify(limitedRequestNsAfter)}`)
-    assert(!limitedGenerate.payload.images?.length, `limited failure should not return partial images, got ${JSON.stringify(limitedGenerate.payload)}`)
+    assert(limitedGenerate.response.status === 200, `expected limited partial success 200, got ${limitedGenerate.response.status} ${JSON.stringify(limitedGenerate.payload)}`)
+    assert(limitedRequestNsAfter.slice(limitedRequestNsBefore.length, limitedRequestNsBefore.length + 3).join(',') === '1,1,1', `expected upstream request n sequence 1,1,1, got ${JSON.stringify(limitedRequestNsAfter)}`)
+    assert(limitedGenerate.payload.images?.length === 1, `limited partial success should return one image, got ${JSON.stringify(limitedGenerate.payload)}`)
+    assert(limitedGenerate.payload.partialSuccess === true, `limited partial success flag missing: ${JSON.stringify(limitedGenerate.payload)}`)
+    assert(limitedGenerate.payload.billing?.chargedPoints === 1, `limited partial success should charge one 1K image, got ${JSON.stringify(limitedGenerate.payload.billing)}`)
     const limitedAccountAfterFailure = await request('/api/account/me', { token: limitedUser.payload.session.token })
     assert(limitedAccountAfterFailure.response.status === 200, `limited account after failure read failed: ${limitedAccountAfterFailure.response.status} ${JSON.stringify(limitedAccountAfterFailure.payload)}`)
-    assert(limitedAccountAfterFailure.payload.user.balance === 4, `expected limited failure to refund balance, got ${JSON.stringify(limitedAccountAfterFailure.payload.user)}`)
+    assert(limitedAccountAfterFailure.payload.user.balance === 3, `expected limited partial success to refund one image and charge one image, got ${JSON.stringify(limitedAccountAfterFailure.payload.user)}`)
 
     const noBalanceUser = await request('/api/auth/register', {
       body: {
@@ -771,7 +791,7 @@ async function main() {
     const badParamsStateAfter = mock.getState()
     assert(badParamsGenerate.response.status === 502, `expected bad-params failure 502, got ${badParamsGenerate.response.status} ${JSON.stringify(badParamsGenerate.payload)}`)
     assert(badParamsGenerate.payload.error?.failureKind === 'parameter_incompatible', `expected bad-params response failure kind, got ${JSON.stringify(badParamsGenerate.payload)}`)
-    assert(badParamsStateAfter.badParamsCalls === badParamsStateBefore.badParamsCalls + 1, 'bad params route was not called exactly once')
+    assert(badParamsStateAfter.badParamsCalls === badParamsStateBefore.badParamsCalls + 2, 'bad params route should be retried once with compatibility fallback')
     assert(badParamsStateAfter.successCalls === badParamsStateBefore.successCalls, 'bad params failure unexpectedly tried fallback route')
     const badParamsTask = badParamsGenerate.payload.error?.requestId
       ? await getTaskSnapshotByRequestId(badParamsGenerate.payload.error.requestId)
@@ -792,6 +812,7 @@ async function main() {
       },
     })
     assert(serverErrorRouteResult.response.status === 201, `server-error route create failed: ${serverErrorRouteResult.response.status} ${JSON.stringify(serverErrorRouteResult.payload)}`)
+    await setRouteMaxSupportedLongEdge(serverErrorRouteResult.payload.route.id, 3840)
 
     const cooldownModelResult = await request('/api/admin/model-skus', {
       token: adminToken,

@@ -14,7 +14,7 @@ import {
 } from './lib/accessCopy'
 
 type PrototypeNavItem = {
-  key: 'workbench' | 'library' | 'promptLibrary' | 'favorites' | 'auth' | 'invite' | 'plan' | 'help' | 'settings'
+  key: 'workbench' | 'agentWorkflow' | 'library' | 'promptLibrary' | 'favorites' | 'auth' | 'plan' | 'help' | 'settings' | 'inspiration'
   label: string
   meta?: string
   tooltip: string
@@ -29,6 +29,7 @@ type PrototypeNavSection = {
 }
 
 const PlanAndBillingView = lazy(() => import('./components/PlanAndBillingView'))
+const AgentWorkflowView = lazy(() => import('./components/AgentWorkflowView'))
 const AuthView = lazy(() => import('./components/AuthView'))
 const LibraryView = lazy(() => import('./components/LibraryView'))
 const PromptLibraryView = lazy(() => import('./components/PromptLibraryView'))
@@ -42,8 +43,12 @@ const Lightbox = lazy(() => import('./components/Lightbox'))
 const SettingsModal = lazy(() => import('./components/SettingsModal'))
 const MaskEditorModal = lazy(() => import('./components/MaskEditorModal'))
 const ImageContextMenu = lazy(() => import('./components/ImageContextMenu'))
-const SupportPromptModal = lazy(() => import('./components/SupportPromptModal'))
 const TemplatesPreview = lazy(() => import('./components/TemplatesPreview'))
+const PublicShareView = lazy(() => import('./components/PublicShareView'))
+const InspirationView = lazy(() => import('./components/InspirationView'))
+const InspirationPostView = lazy(() => import('./components/InspirationPostView'))
+const InspirationTopicView = lazy(() => import('./components/InspirationTopicView'))
+const InspirationLatestView = lazy(() => import('./components/InspirationLatestView'))
 
 let appStoreInitStarted = false
 
@@ -73,11 +78,19 @@ function scheduleAppStoreInit() {
 }
 
 export default function App() {
+  const [currentPathname, setCurrentPathname] = useState(() =>
+    typeof window !== 'undefined' ? window.location.pathname : '/',
+  )
   const [navCollapsed, setNavCollapsed] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const [imageContextMenuReady, setImageContextMenuReady] = useState(false)
   const [initialImageContextMenuInfo, setInitialImageContextMenuInfo] = useState<ImageContextMenuInfo | null>(null)
   const previewMode = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('preview') : null
+  const publicShareToken = typeof window !== 'undefined' ? getPublicShareToken(currentPathname) : null
+  const inspirationTopicCategory = typeof window !== 'undefined' ? getInspirationTopicCategory(currentPathname) : null
+  const isInspirationLatestRoute = typeof window !== 'undefined' ? isInspirationLatestPath(currentPathname) : false
+  const inspirationPostId = typeof window !== 'undefined' ? getInspirationPostId(currentPathname) : null
+  const isInspirationHomeRoute = typeof window !== 'undefined' ? isInspirationHomePath(currentPathname) : false
   const setShowSettings = useStore((s) => s.setShowSettings)
   const showSettings = useStore((s) => s.showSettings)
   const galleryView = useStore((s) => s.galleryView)
@@ -88,13 +101,9 @@ export default function App() {
   const openAuthView = useStore((s) => s.openAuthView)
   const account = useStore((s) => s.account)
   const authSessionToken = useStore((s) => s.authSessionToken)
-  const setAccountState = useStore((s) => s.setAccountState)
-  const logout = useStore((s) => s.logout)
+  const refreshBackendAccount = useStore((s) => s.refreshBackendAccount)
   const openLoginDialog = useStore((s) => s.openLoginDialog)
   const tasks = useStore((s) => s.tasks)
-  const searchQuery = useStore((s) => s.searchQuery)
-  const filterStatus = useStore((s) => s.filterStatus)
-  const filterFavorite = useStore((s) => s.filterFavorite)
   const setSearchQuery = useStore((s) => s.setSearchQuery)
   const setFilterStatus = useStore((s) => s.setFilterStatus)
   const setFilterFavorite = useStore((s) => s.setFilterFavorite)
@@ -102,32 +111,22 @@ export default function App() {
   const detailTaskId = useStore((s) => s.detailTaskId)
   const lightboxImageId = useStore((s) => s.lightboxImageId)
   const maskEditorImageId = useStore((s) => s.maskEditorImageId)
-  const supportPromptOpen = useStore((s) => s.supportPromptOpen)
   useGlobalClickSuppression()
+
+  useEffect(() => {
+    const syncLocation = () => {
+      setCurrentPathname(window.location.pathname)
+    }
+
+    window.addEventListener('popstate', syncLocation)
+    return () => window.removeEventListener('popstate', syncLocation)
+  }, [])
 
   useEffect(() => {
     const token = authSessionToken?.trim()
     if (!token) return
-
-    let cancelled = false
-    import('./lib/authApi')
-      .then(({ accountFromAuthSnapshot, getCurrentAuthAccount }) =>
-        getCurrentAuthAccount(token).then((payload) => accountFromAuthSnapshot(payload)),
-      )
-      .then((payload) => {
-        if (cancelled) return
-        setAccountState(payload)
-      })
-      .catch((error) => {
-        if (cancelled) return
-        logout()
-        showToast(error instanceof Error ? error.message : '登录状态已失效，请重新登录', 'info')
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [authSessionToken, logout, setAccountState, showToast])
+    void refreshBackendAccount()
+  }, [authSessionToken, refreshBackendAccount])
 
   const { totalTasks, favoriteTasks, favoriteDoneTasks } = useMemo(() => {
     let favoriteCount = 0
@@ -148,18 +147,10 @@ export default function App() {
       favoriteDoneTasks: favoriteDoneCount,
     }
   }, [account, tasks])
-  const hasActiveFilters = Boolean(searchQuery.trim()) || filterStatus !== 'all' || filterFavorite
-  const currentViewLabel = hasActiveFilters
-    ? [
-        searchQuery.trim() ? `关键词 ${searchQuery.trim()}` : null,
-        filterStatus !== 'all' ? `状态 ${filterStatus}` : null,
-        filterFavorite ? '仅收藏' : null,
-      ]
-        .filter(Boolean)
-        .join(' / ')
-    : `${totalTasks} 条记录 / ${favoriteTasks} 条收藏`
   const authRedirectTarget = galleryView === 'plan'
     ? 'plan'
+    : galleryView === 'agentWorkflow'
+    ? 'agentWorkflow'
     : galleryView === 'library'
     ? 'library'
     : galleryView === 'promptLibrary'
@@ -175,13 +166,14 @@ export default function App() {
     showToast(account.isLoggedIn ? '已进入作品库' : '已打开作品库入口，登录后查看个人结果', 'info')
   }
   const showFavoriteWorks = () => {
+    window.history.pushState({}, '', '/')
     setGalleryView('library')
     setLibraryViewMode('favorites')
     setSearchQuery('')
     setFilterStatus('done')
     setFilterFavorite(true)
     window.scrollTo({ top: 0, behavior: 'smooth' })
-    showToast(account.isLoggedIn ? '已进入收藏' : '已打开收藏入口，登录后查看个人沉淀', 'info')
+    showToast(account.isLoggedIn ? '已进入灵感收藏' : '已打开收藏入口，登录后查看个人沉淀', 'info')
   }
   const showPromptLibrary = () => {
     setGalleryView('promptLibrary')
@@ -189,17 +181,18 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
     showToast(account.isLoggedIn ? '已进入提示词库' : '已进入提示词库，当前可先浏览官方模板', 'info')
   }
-  const openInviteRegistration = () => {
-    setGalleryView('plan')
-    window.setTimeout(() => {
-      document.getElementById('invite-registration')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }, 120)
+  const showInspiration = () => {
+    window.history.pushState({}, '', '/')
+    setGalleryView('inspiration')
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+    showToast('已进入灵感广场', 'info')
   }
   const navSections: PrototypeNavSection[] = account.isLoggedIn
     ? [
         {
           group: '创作',
           items: [
+            { key: 'agentWorkflow', label: '智能创作流', meta: '计划生成', tooltip: '进入智能创作流', icon: 'flow', onClick: () => setGalleryView('agentWorkflow') },
             { key: 'workbench', label: '工作台', meta: '生成入口', tooltip: '进入工作台', icon: 'grid', onClick: () => setGalleryView('workbench') },
           ],
         },
@@ -207,6 +200,7 @@ export default function App() {
           group: '资产',
           items: [
             { key: 'library', label: '作品库', meta: `${totalTasks} 条`, tooltip: '查看全部结果', icon: 'library', onClick: showAllWorks },
+            { key: 'inspiration', label: '灵感广场', meta: '公开展示', tooltip: '浏览灵感广场', icon: 'spark', onClick: showInspiration },
             { key: 'promptLibrary', label: '提示词库', meta: '官方模板', tooltip: '浏览和复用官方模板', icon: 'prompt', onClick: showPromptLibrary },
             { key: 'favorites', label: '收藏', meta: `${favoriteDoneTasks || favoriteTasks} 张`, tooltip: '查看收藏结果', icon: 'star', onClick: showFavoriteWorks },
           ],
@@ -214,10 +208,7 @@ export default function App() {
         {
           group: '系统',
           items: [
-            { key: 'invite', label: '邀请链接', meta: account.inviteCode ? '可复制' : '加载中', tooltip: '复制发给别人注册的邀请链接', icon: 'invite', onClick: openInviteRegistration },
             { key: 'plan', label: '计划与额度', meta: `${account.balance} 点`, tooltip: '查看计划与额度', icon: 'wallet', onClick: () => setGalleryView('plan') },
-            { key: 'help', label: '帮助', meta: '快捷说明', tooltip: '查看帮助说明', icon: 'help', onClick: () => setShowHelp(true) },
-            { key: 'settings', label: '设置', meta: '偏好配置', tooltip: '打开设置', icon: 'settings', onClick: () => setShowSettings(true) },
           ],
         },
       ]
@@ -225,27 +216,32 @@ export default function App() {
         {
           group: '公开入口',
           items: [
+            { key: 'agentWorkflow', label: '智能创作流', meta: '登录使用', tooltip: '进入智能创作流', icon: 'flow', tone: 'public', onClick: () => setGalleryView('agentWorkflow') },
             { key: 'workbench', label: '工作台', meta: '试填入口', tooltip: '进入试填入口', icon: 'grid', tone: 'public', onClick: () => setGalleryView('workbench') },
+            { key: 'inspiration', label: '灵感广场', meta: '公开展示', tooltip: '浏览灵感广场', icon: 'spark', tone: 'public', onClick: showInspiration },
             { key: 'promptLibrary', label: '提示词库', meta: '公开浏览', tooltip: '浏览官方模板', icon: 'prompt', tone: 'public', onClick: showPromptLibrary },
           ],
         },
         {
           group: '账号',
           items: [
-            { key: 'auth', label: '登录 / 注册', meta: '同步资产', tooltip: '打开登录与注册页', icon: 'account', tone: 'account', onClick: () => openAuthView({ mode: 'login', redirectTo: authRedirectTarget }) },
+            { key: 'auth', label: '登录 / 注册', meta: '继续创作', tooltip: '打开登录与注册页', icon: 'account', tone: 'account', onClick: () => openAuthView({ mode: 'login', redirectTo: authRedirectTarget }) },
           ],
         },
       ]
 
   const isNavItemActive = (key: PrototypeNavItem['key']) => {
     if (key === 'workbench') return galleryView === 'workbench'
+    if (key === 'agentWorkflow') return galleryView === 'agentWorkflow'
     if (key === 'library') return galleryView === 'library' && libraryViewMode === 'all'
     if (key === 'favorites') return galleryView === 'library' && libraryViewMode === 'favorites'
+    if (key === 'inspiration') return galleryView === 'inspiration'
     if (key === 'promptLibrary') return galleryView === 'promptLibrary'
     if (key === 'auth') return galleryView === 'auth'
     if (key === 'plan') return galleryView === 'plan'
     return false
   }
+  const isAgentWorkspace = galleryView === 'agentWorkflow'
 
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search)
@@ -259,6 +255,11 @@ export default function App() {
 
     return scheduleAppStoreInit()
   }, [openAuthView])
+
+  useEffect(() => {
+    if (!isInspirationHomeRoute) return
+    setGalleryView('inspiration')
+  }, [isInspirationHomeRoute, setGalleryView])
 
   useEffect(() => {
     const preventPageImageDrag = (e: DragEvent) => {
@@ -308,15 +309,75 @@ export default function App() {
     )
   }
 
+  if (publicShareToken) {
+    return (
+      <Suspense fallback={<LazyViewFallback title="正在打开分享..." description="正在读取共享作品。" />}>
+        <PublicShareView token={publicShareToken} />
+      </Suspense>
+    )
+  }
+
+  if (inspirationTopicCategory) {
+    return (
+      <>
+        <Header onOpenHelp={() => setShowHelp(true)} onOpenSettings={() => setShowSettings(true)} />
+        <main data-home-main data-drag-select-surface className="prototype-page-shell prototype-page-shell-public">
+          <div className="prototype-stage prototype-stage-public">
+            <div className="prototype-main">
+              <Suspense fallback={<LazyViewFallback title="正在打开专题..." description="正在读取专题内容。" />}>
+                <InspirationTopicView />
+              </Suspense>
+            </div>
+          </div>
+        </main>
+      </>
+    )
+  }
+
+  if (isInspirationLatestRoute) {
+    return (
+      <>
+        <Header onOpenHelp={() => setShowHelp(true)} onOpenSettings={() => setShowSettings(true)} />
+        <main data-home-main data-drag-select-surface className="prototype-page-shell prototype-page-shell-public">
+          <div className="prototype-stage prototype-stage-public">
+            <div className="prototype-main">
+              <Suspense fallback={<LazyViewFallback title="正在打开最新入选..." description="正在读取最新公开作品。" />}>
+                <InspirationLatestView />
+              </Suspense>
+            </div>
+          </div>
+        </main>
+      </>
+    )
+  }
+
+  if (inspirationPostId) {
+    return (
+      <>
+        <Header onOpenHelp={() => setShowHelp(true)} onOpenSettings={() => setShowSettings(true)} />
+        <main data-home-main data-drag-select-surface className="prototype-page-shell prototype-page-shell-public">
+          <div className="prototype-stage prototype-stage-public">
+            <div className="prototype-main">
+              <Suspense fallback={<LazyViewFallback title="正在打开灵感作品..." description="正在读取公开作品内容。" />}>
+                <InspirationPostView postId={inspirationPostId} />
+              </Suspense>
+            </div>
+          </div>
+        </main>
+      </>
+    )
+  }
+
   return (
     <>
-      <Header />
+      <Header onOpenHelp={() => setShowHelp(true)} onOpenSettings={() => setShowSettings(true)} />
       <main
         data-home-main
         data-drag-select-surface
-        className={`prototype-page-shell ${navCollapsed ? 'is-nav-collapsed' : ''}`}
+        className={`prototype-page-shell ${navCollapsed ? 'is-nav-collapsed' : ''} ${galleryView === 'inspiration' ? 'is-inspiration-shell' : ''} ${isAgentWorkspace ? 'is-agent-workspace-shell' : ''}`}
       >
           <div className="prototype-stage">
+            {!isAgentWorkspace ? (
             <aside id="prototype-sidebar" className="prototype-sidebar" aria-label="产品导航">
               <button
                 type="button"
@@ -353,13 +414,18 @@ export default function App() {
                 ))}
               </nav>
             </aside>
+            ) : null}
 
             <div className="prototype-main">
               <Suspense fallback={<LazyViewFallback />}>
                 {galleryView === 'plan' ? (
                   <PlanAndBillingView />
+                ) : galleryView === 'agentWorkflow' ? (
+                  <AgentWorkflowView />
                 ) : galleryView === 'library' ? (
                   <LibraryView />
+                ) : galleryView === 'inspiration' ? (
+                  <InspirationView />
                 ) : galleryView === 'promptLibrary' ? (
                   <PromptLibraryView />
                 ) : galleryView === 'auth' ? (
@@ -369,6 +435,7 @@ export default function App() {
                   <section className="prototype-prompt-panel">
                       <div className="prototype-panel-head">
                         <h3>输入</h3>
+                        <p className="prototype-panel-note">当前设备草稿会保留，生成中勿刷新。</p>
                       </div>
                       <div className="production-composer-slot">
                         <InputBar />
@@ -380,15 +447,7 @@ export default function App() {
                         <section className="prototype-results-section">
                           {account.isLoggedIn ? (
                             <>
-                              <div className="studio-results-head studio-results-head-compact">
-                                <section className="studio-topbar" aria-label="结果概览">
-                                  <div className="studio-topbar-main">
-                                    <span className="studio-topbar-title">当前结果</span>
-                                    <span className="studio-topbar-subtitle">
-                                      {currentViewLabel}
-                                    </span>
-                                  </div>
-                                </section>
+                              <div className="studio-results-head studio-results-toolbar">
                                 <SearchBar compact />
                               </div>
                               <TaskGrid limit={6} />
@@ -396,10 +455,16 @@ export default function App() {
                           ) : (
                             <div className="studio-access-card">
                               <div className="studio-access-copy">
+                                <span className="studio-access-eyebrow">访客创作流</span>
                                 <span className="studio-topbar-title">{GUEST_VIEW_YOUR_RESULTS_TITLE}</span>
                                 <p className="studio-topbar-subtitle">
-                                  你可以先填写提示词和参数，登录后提交生成并保存结果。
+                                  先把提示词、参数和参考图整理好。登录后再正式提交生成，个人结果会回到这里集中查看。
                                 </p>
+                              </div>
+                              <div className="studio-access-steps" aria-label="访客使用路径">
+                                <span>1 先在左侧试填工作台</span>
+                                <span>2 需要时去模板库挑方向</span>
+                                <span>3 登录后提交并查看账号结果</span>
                               </div>
                               <div className="studio-access-actions">
                                 <button type="button" className="studio-access-primary" onClick={openLoginDialog}>
@@ -416,6 +481,7 @@ export default function App() {
                                   浏览提示词库
                                 </button>
                               </div>
+                              <p className="studio-access-footnote">当前设备草稿会保留，登录不会打断填写节奏。</p>
                             </div>
                           )}
                         </section>
@@ -434,7 +500,7 @@ export default function App() {
                   fallback={
                     <LazyViewFallback
                       title="正在载入收藏与复用..."
-                      description="首次进入工作台时会短暂准备这部分个人资产内容。"
+                      description="首次进入工作台时会短暂准备这部分个人结果内容。"
                     />
                   }
                 >
@@ -469,11 +535,6 @@ export default function App() {
           <HelpModal onClose={() => setShowHelp(false)} />
         </Suspense>
       )}
-      {supportPromptOpen && (
-        <Suspense fallback={<LazyModalFallback title="正在打开辅助提示..." description="首次打开时会短暂准备辅助内容。" />}>
-          <SupportPromptModal />
-        </Suspense>
-      )}
       <Toast />
       {maskEditorImageId && (
         <Suspense fallback={<LazyModalFallback title="正在打开蒙版编辑器..." description="首次打开时会短暂载入编辑工具。" />}>
@@ -495,4 +556,27 @@ function isEmbeddedPage() {
   } catch {
     return true
   }
+}
+
+function getPublicShareToken(pathname: string) {
+  const match = pathname.match(/^\/share\/([^/?#]+)\/?$/)
+  return match ? decodeURIComponent(match[1]) : null
+}
+
+function getInspirationPostId(pathname: string) {
+  const match = pathname.match(/^\/inspiration\/(?!topic\/|author\/|favorites\/?$)([^/?#]+)\/?$/)
+  return match ? decodeURIComponent(match[1]) : null
+}
+
+function isInspirationLatestPath(pathname: string) {
+  return /^\/inspiration\/latest\/?$/.test(pathname)
+}
+
+function getInspirationTopicCategory(pathname: string) {
+  const match = pathname.match(/^\/inspiration\/topic\/([^/?#]+)\/?$/)
+  return match ? decodeURIComponent(match[1]) : null
+}
+
+function isInspirationHomePath(pathname: string) {
+  return /^\/inspiration\/?$/.test(pathname)
 }
