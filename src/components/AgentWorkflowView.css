@@ -31,10 +31,13 @@
 
 .agent-project-bar {
   display: grid;
-  grid-template-columns: minmax(230px, 1fr) minmax(220px, auto) auto;
+  grid-template-columns: minmax(220px, 1fr) minmax(300px, 0.72fr) auto;
+  grid-template-areas:
+    "title meta actions"
+    "title summary actions";
   align-items: center;
   gap: 12px;
-  min-height: 76px;
+  min-height: 82px;
   padding: 10px 12px;
   border-radius: 13px;
   background:
@@ -46,6 +49,7 @@
 }
 
 .agent-project-title {
+  grid-area: title;
   display: grid;
   min-width: 0;
   gap: 6px;
@@ -124,6 +128,7 @@
 }
 
 .agent-project-meta {
+  grid-area: meta;
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
@@ -132,8 +137,8 @@
 }
 
 .agent-execution-summary {
+  grid-area: summary;
   display: grid;
-  grid-column: 2 / -1;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
@@ -249,6 +254,7 @@
 }
 
 .agent-project-actions {
+  grid-area: actions;
   justify-content: flex-end;
 }
 
@@ -360,12 +366,13 @@
 
 .agent-workbench-grid {
   display: grid;
-  grid-template-columns: minmax(290px, 0.82fr) minmax(460px, 1.48fr) minmax(270px, 0.78fr);
+  grid-template-columns: minmax(300px, 340px) minmax(0, 1fr);
   grid-template-areas:
-    "mission result inspector"
-    "routes result inspector";
+    "mission result"
+    "mission routes"
+    "mission inspector";
   gap: 12px;
-  align-items: stretch;
+  align-items: start;
 }
 
 .agent-workflow-view.is-empty-agent-project .agent-project-actions {
@@ -387,6 +394,7 @@
 }
 
 .agent-panel-head h2,
+.agent-inspector-drawer h2,
 .agent-asset-column h3,
 .agent-understanding h3,
 .agent-question-list h3,
@@ -397,11 +405,13 @@
   line-height: 1.18;
 }
 
-.agent-panel-head h2 {
+.agent-panel-head h2,
+.agent-inspector-drawer h2 {
   font-size: 16px;
 }
 
 .agent-panel-head p,
+.agent-inspector-drawer p,
 .agent-route-card p,
 .agent-stage-state p,
 .agent-inspector-list p {
@@ -474,6 +484,47 @@
 .agent-inspector-panel {
   grid-area: inspector;
   align-self: start;
+}
+
+.agent-brief-checks {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.agent-brief-checks > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  cursor: pointer;
+  list-style: none;
+  border: 1px solid rgba(183, 121, 31, 0.18);
+  border-radius: 11px;
+  background: rgba(255, 250, 235, 0.66);
+  padding: 8px 10px;
+}
+
+.agent-brief-checks > summary::-webkit-details-marker {
+  display: none;
+}
+
+.agent-brief-checks > summary span {
+  color: #8a570d;
+  font-size: 11px;
+  font-weight: 840;
+  white-space: nowrap;
+}
+
+.agent-brief-checks > summary strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #70510f;
+  font-size: 12px;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-mission-input {
@@ -1673,16 +1724,17 @@
 
 .agent-route-list {
   display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 9px;
 }
 
 .agent-route-card {
   display: grid;
-  gap: 9px;
+  gap: 7px;
   border: 1px solid var(--agent-line);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.68);
-  padding: 12px;
+  padding: 10px;
 }
 
 .agent-route-card.is-recommended {
@@ -1758,14 +1810,14 @@
 }
 
 .agent-route-card h3 {
-  font-size: 15px;
+  font-size: 13px;
 }
 
 .agent-route-card p {
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
+  -webkit-line-clamp: 2;
 }
 
 .agent-route-card ul {
@@ -1788,6 +1840,7 @@
 
 .agent-route-card button {
   width: fit-content;
+  min-height: 32px;
   border-color: rgba(15, 118, 110, 0.24);
   background: var(--agent-accent);
   color: #fff;
@@ -1802,6 +1855,62 @@
 .agent-inspector-list {
   display: grid;
   gap: 9px;
+}
+
+.agent-inspector-panel {
+  padding: 10px 12px;
+}
+
+.agent-inspector-drawer {
+  min-width: 0;
+}
+
+.agent-inspector-drawer > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.agent-inspector-drawer > summary::-webkit-details-marker {
+  display: none;
+}
+
+.agent-inspector-drawer > summary > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.agent-inspector-drawer > summary h2,
+.agent-inspector-drawer > summary p {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-inspector-drawer > summary > span {
+  max-width: 170px;
+  overflow: hidden;
+  border: 1px solid rgba(15, 118, 110, 0.16);
+  border-radius: 999px;
+  background: rgba(240, 253, 250, 0.72);
+  color: var(--agent-accent-ink);
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 820;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-inspector-drawer[open] > summary {
+  margin-bottom: 10px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid rgba(22, 32, 31, 0.08);
 }
 
 .agent-inspector-priority {
@@ -2025,14 +2134,18 @@
 
 .agent-timeline-panel,
 .agent-assets-panel {
-  padding: 12px 14px;
+  padding: 11px 14px;
   box-shadow: 0 8px 22px rgba(31, 41, 35, 0.04);
+}
+
+.agent-timeline-panel .agent-panel-head {
+  margin-bottom: 8px;
 }
 
 .agent-workflow-map {
   display: grid;
-  grid-template-columns: repeat(5, minmax(104px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(5, minmax(96px, 1fr));
+  gap: 7px;
   max-width: 100%;
   overflow-x: auto;
   overscroll-behavior-inline: contain;
@@ -2041,9 +2154,9 @@
 
 .agent-workflow-node-wrap {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 16px;
+  grid-template-columns: minmax(0, 1fr) 14px;
   align-items: center;
-  min-width: 104px;
+  min-width: 96px;
 }
 
 .agent-workflow-node-wrap:last-child {
@@ -2061,18 +2174,18 @@
   grid-template-columns: auto minmax(0, 1fr);
   gap: 3px 7px;
   min-width: 0;
-  min-height: 58px;
+  min-height: 48px;
   border: 1px solid rgba(22, 32, 31, 0.1);
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.58);
-  padding: 8px;
+  padding: 7px 8px;
 }
 
 .agent-workflow-node span {
   grid-row: 1 / span 2;
   display: grid;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   place-items: center;
   border-radius: 999px;
   background: rgba(102, 115, 111, 0.1);
@@ -2091,7 +2204,7 @@
 
 .agent-workflow-node strong {
   color: var(--agent-ink);
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 860;
 }
 
@@ -2144,6 +2257,46 @@
   margin: 0;
   padding: 1px 0 2px;
   list-style: none;
+}
+
+.agent-timeline-details {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.agent-timeline-details > summary {
+  display: flex;
+  min-height: 34px;
+  cursor: pointer;
+  list-style: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid rgba(22, 32, 31, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.56);
+  padding: 0 10px;
+}
+
+.agent-timeline-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.agent-timeline-details > summary strong {
+  color: var(--agent-ink);
+  font-size: 12px;
+  font-weight: 840;
+}
+
+.agent-timeline-details > summary span {
+  color: var(--agent-soft);
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.agent-timeline-details[open] > summary {
+  margin-bottom: 8px;
 }
 
 .agent-timeline li {
@@ -2399,8 +2552,60 @@
 
 .agent-assets-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
+}
+
+.agent-assets-dock {
+  display: grid;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.agent-asset-dock-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.agent-asset-dock-tabs button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  min-width: 0;
+  border: 1px solid var(--agent-line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.58);
+  color: var(--agent-muted);
+  padding: 0 10px;
+  text-align: left;
+}
+
+.agent-asset-dock-tabs button.active {
+  border-color: rgba(15, 118, 110, 0.24);
+  background: rgba(240, 253, 250, 0.68);
+  color: var(--agent-accent-ink);
+}
+
+.agent-asset-dock-tabs span,
+.agent-asset-dock-tabs strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-asset-dock-tabs span {
+  font-size: 12px;
+  font-weight: 840;
+}
+
+.agent-asset-dock-tabs strong {
+  color: inherit;
+  font-size: 11px;
+  font-weight: 760;
 }
 
 .agent-asset-summary-row {
@@ -2556,6 +2761,16 @@
   min-width: 0;
 }
 
+.agent-asset-project-column .agent-asset-list {
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  align-items: start;
+}
+
+.agent-asset-recipe-column .agent-asset-list,
+.agent-asset-reference-column .agent-reference-asset-list {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
 .agent-asset-column-head {
   display: flex;
   align-items: center;
@@ -2566,12 +2781,15 @@
 
 .agent-project-list-head {
   display: grid;
-  gap: 9px;
+  grid-template-columns: auto minmax(360px, 0.62fr);
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .agent-project-list-filters {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 0.8fr);
   gap: 7px;
 }
 
@@ -3204,7 +3422,7 @@
 
 @media (max-width: 1280px) {
   .agent-project-bar {
-    grid-template-columns: minmax(230px, 1fr) minmax(220px, auto) auto;
+    grid-template-columns: minmax(220px, 1fr) minmax(280px, 0.72fr) auto;
   }
 
   .agent-project-actions {
@@ -3213,11 +3431,11 @@
   }
 
   .agent-workbench-grid {
-    grid-template-columns: minmax(280px, 0.9fr) minmax(420px, 1.3fr);
+    grid-template-columns: minmax(290px, 330px) minmax(0, 1fr);
     grid-template-areas:
       "mission result"
-      "routes result"
-      "inspector inspector";
+      "mission routes"
+      "mission inspector";
   }
 
   .agent-inspector-list {
@@ -3248,7 +3466,8 @@
   }
 
   .agent-inspector-list,
-  .agent-assets-grid {
+  .agent-assets-grid,
+  .agent-route-list {
     grid-template-columns: 1fr;
   }
 
@@ -3272,11 +3491,21 @@
   .agent-review-actions {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+
+  .agent-project-list-head,
+  .agent-project-list-filters {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 720px) {
   .agent-project-bar {
     grid-template-columns: 1fr;
+    grid-template-areas:
+      "title"
+      "meta"
+      "summary"
+      "actions";
     align-items: start;
     gap: 8px;
     min-height: 0;
@@ -3400,6 +3629,16 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .agent-asset-dock-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .agent-asset-project-column .agent-asset-list,
+  .agent-asset-recipe-column .agent-asset-list,
+  .agent-asset-reference-column .agent-reference-asset-list {
+    grid-template-columns: 1fr;
   }
 
   .agent-project-list-head + .agent-asset-list .agent-asset-actions {

@@ -380,7 +380,7 @@ const CONVERSION_ROUTES: Record<ConversionMode, {
   },
 }
 
-const PROJECT_ASSET_LANES = ['输出', '参考', '配方', '历史']
+type AgentAssetDockTab = 'outputs' | 'references' | 'projects' | 'recipes'
 
 const BRANCH_COPY = {
   base: { key: 'base', label: '路线探索', shortLabel: '探索', version: 'v1 路线探索', description: '原始生成路线' },
@@ -2295,6 +2295,7 @@ export default function AgentWorkflowView() {
   const [error, setError] = useState('')
   const [projectSearch, setProjectSearch] = useState('')
   const [projectFilter, setProjectFilter] = useState<ProjectListFilter>('active')
+  const [assetDockTab, setAssetDockTab] = useState<AgentAssetDockTab>('projects')
   const [projectTitleDraft, setProjectTitleDraft] = useState('')
   const [selectedOutputImageId, setSelectedOutputImageId] = useState<string | null>(null)
   const [serverGenerationTask, setServerGenerationTask] = useState<AgentGenerationTaskSummary | null>(null)
@@ -2507,7 +2508,7 @@ export default function AgentWorkflowView() {
     { key: 'references', label: '参考', value: referenceAssets.length ? `${referenceAssets.length} 个` : '待添加' },
     { key: 'projects', label: '项目', value: projectList.length ? `${projectList.length} 个` : needsLogin ? '需登录' : '暂无' },
     { key: 'recipes', label: '配方', value: activeRecipes.length ? `${activeRecipes.length} 个` : needsLogin ? '需登录' : '暂无' },
-  ]
+  ] satisfies Array<{ key: AgentAssetDockTab; label: string; value: string }>
   const inspectorPriorityItems = [
     {
       key: 'route',
@@ -4218,37 +4219,43 @@ export default function AgentWorkflowView() {
             </div>
           ) : null}
 
-          <div className="agent-understanding">
-            <h3>Agent 已理解</h3>
-            <dl>
-              <div>
-                <dt>用途</dt>
-                <dd>{planSummary.purpose}</dd>
-              </div>
-              <div>
-                <dt>主体</dt>
-                <dd>{planSummary.subject}</dd>
-              </div>
-              <div>
-                <dt>风格</dt>
-                <dd>{planSummary.style}</dd>
-              </div>
-              <div>
-                <dt>受众</dt>
-                <dd>{planSummary.audience}</dd>
-              </div>
-            </dl>
-          </div>
+          <details className="agent-brief-checks">
+            <summary>
+              <span>Agent 检查建议</span>
+              <strong>{riskList[0] ?? '等待 Brief'}</strong>
+            </summary>
+            <div className="agent-understanding">
+              <h3>已理解</h3>
+              <dl>
+                <div>
+                  <dt>用途</dt>
+                  <dd>{planSummary.purpose}</dd>
+                </div>
+                <div>
+                  <dt>主体</dt>
+                  <dd>{planSummary.subject}</dd>
+                </div>
+                <div>
+                  <dt>风格</dt>
+                  <dd>{planSummary.style}</dd>
+                </div>
+                <div>
+                  <dt>受众</dt>
+                  <dd>{planSummary.audience}</dd>
+                </div>
+              </dl>
+            </div>
 
-          <div className="agent-question-list">
-            <h3>Agent 追问</h3>
-            {riskList.slice(0, 4).map((item) => (
-              <div key={item} className="agent-question-item">
-                <span aria-hidden="true" />
-                <p>{item}</p>
-              </div>
-            ))}
-          </div>
+            <div className="agent-question-list">
+              <h3>待确认</h3>
+              {riskList.slice(0, 4).map((item) => (
+                <div key={item} className="agent-question-item">
+                  <span aria-hidden="true" />
+                  <p>{item}</p>
+                </div>
+              ))}
+            </div>
+          </details>
         </section>
 
         <section className={`agent-panel agent-result-stage is-${run?.status ?? 'draft'}`} aria-labelledby="agent-result-title">
@@ -4623,24 +4630,26 @@ export default function AgentWorkflowView() {
         </section>
 
         <aside className="agent-panel agent-inspector-panel" aria-labelledby="agent-inspector-title">
-          <div className="agent-panel-head">
-            <div>
-              <h2 id="agent-inspector-title">Inspector</h2>
-              <p>下一步判断优先，技术细节按需展开。</p>
-            </div>
-          </div>
-          <div className="agent-inspector-priority" aria-label="当前判断">
-            {inspectorPriorityItems.map((item) => (
-              <div key={item.key}>
-                <span>{item.label}</span>
-                <strong>{item.value}</strong>
-                <small>{item.detail}</small>
+          <details className="agent-inspector-drawer">
+            <summary>
+              <div>
+                <h2 id="agent-inspector-title">技术判断</h2>
+                <p>{inspectorPriorityItems[3]?.value || branchInspectorSummary.title}</p>
               </div>
-            ))}
-          </div>
-          <details className="agent-inspector-detail-disclosure" open={Boolean(run)}>
-            <summary>技术细节</summary>
-            <div className="agent-inspector-list">
+              <span>{inspectorPriorityItems[0]?.value || '待规划'}</span>
+            </summary>
+            <div className="agent-inspector-priority" aria-label="当前判断">
+              {inspectorPriorityItems.map((item) => (
+                <div key={item.key}>
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                  <small>{item.detail}</small>
+                </div>
+              ))}
+            </div>
+            <details className="agent-inspector-detail-disclosure">
+              <summary>展开技术细节</summary>
+              <div className="agent-inspector-list">
               <div className="agent-creative-review">
                 <span>创意总监评审</span>
                 <div className="agent-creative-review-list">
@@ -4723,7 +4732,8 @@ export default function AgentWorkflowView() {
                   <p>{serverGenerationTask.errorSummary || serverGenerationTask.failureKind}</p>
                 </div>
               ) : null}
-            </div>
+              </div>
+            </details>
           </details>
         </aside>
       </div>
@@ -4747,65 +4757,71 @@ export default function AgentWorkflowView() {
             </div>
           ))}
         </div>
-        <ol className="agent-timeline">
-          {visibleSteps.map((step, index) => {
-            const stepStatus = STEP_STATUS_COPY[step.status] ?? STEP_STATUS_COPY.pending
-            const stepMeta = getTimelineStepMeta(step)
-            const stepSections = buildTimelineStepSections(step)
-            const recoveryActionSummary = canRecoverFromTimelineStep(run, step)
-              ? buildRecoveryActionSummary(run, step)
-              : null
-            return (
-              <li key={step.id || step.stepKey} className={`is-${step.status}`}>
-                <details>
-                  <summary title={getStepSummary(step)}>
-                    <span className="agent-timeline-index" aria-hidden="true">{index + 1}</span>
-                    <span className="agent-timeline-copy">
-                      <strong>{STEP_LABELS[step.stepKey] ?? step.stepKey}</strong>
-                      <small>{stepMeta ? `${stepStatus.label} · ${stepMeta}` : stepStatus.label}</small>
-                    </span>
-                  </summary>
-                  <div className="agent-timeline-detail">
-                    {stepSections.map((section) => (
-                      <section key={section.key} className={section.tone === 'danger' ? 'is-danger' : undefined}>
-                        <span>{section.label}</span>
-                        {section.chips.length ? (
-                          <div className="agent-timeline-chips">
-                            {section.chips.map((chip) => (
-                              <em key={chip}>{chip}</em>
-                            ))}
+        <details className="agent-timeline-details">
+          <summary>
+            <strong>步骤日志</strong>
+            <span>{visibleSteps.length} 个步骤</span>
+          </summary>
+          <ol className="agent-timeline">
+            {visibleSteps.map((step, index) => {
+              const stepStatus = STEP_STATUS_COPY[step.status] ?? STEP_STATUS_COPY.pending
+              const stepMeta = getTimelineStepMeta(step)
+              const stepSections = buildTimelineStepSections(step)
+              const recoveryActionSummary = canRecoverFromTimelineStep(run, step)
+                ? buildRecoveryActionSummary(run, step)
+                : null
+              return (
+                <li key={step.id || step.stepKey} className={`is-${step.status}`}>
+                  <details>
+                    <summary title={getStepSummary(step)}>
+                      <span className="agent-timeline-index" aria-hidden="true">{index + 1}</span>
+                      <span className="agent-timeline-copy">
+                        <strong>{STEP_LABELS[step.stepKey] ?? step.stepKey}</strong>
+                        <small>{stepMeta ? `${stepStatus.label} · ${stepMeta}` : stepStatus.label}</small>
+                      </span>
+                    </summary>
+                    <div className="agent-timeline-detail">
+                      {stepSections.map((section) => (
+                        <section key={section.key} className={section.tone === 'danger' ? 'is-danger' : undefined}>
+                          <span>{section.label}</span>
+                          {section.chips.length ? (
+                            <div className="agent-timeline-chips">
+                              {section.chips.map((chip) => (
+                                <em key={chip}>{chip}</em>
+                              ))}
+                            </div>
+                          ) : null}
+                          {section.raw ? (
+                            <details className="agent-timeline-raw">
+                              <summary>Raw</summary>
+                              <pre>{section.raw}</pre>
+                            </details>
+                          ) : null}
+                        </section>
+                      ))}
+                      {recoveryActionSummary?.recoverable ? (
+                        <div className="agent-timeline-recovery">
+                          <div>
+                            <strong>{recoveryActionSummary.title}</strong>
+                            <small>{recoveryActionSummary.nextStep}</small>
+                            <span>
+                              {recoveryActionSummary.chips.slice(0, 4).map((chip) => (
+                                <em key={chip}>{chip}</em>
+                              ))}
+                            </span>
                           </div>
-                        ) : null}
-                        {section.raw ? (
-                          <details className="agent-timeline-raw">
-                            <summary>Raw</summary>
-                            <pre>{section.raw}</pre>
-                          </details>
-                        ) : null}
-                      </section>
-                    ))}
-                    {recoveryActionSummary?.recoverable ? (
-                      <div className="agent-timeline-recovery">
-                        <div>
-                          <strong>{recoveryActionSummary.title}</strong>
-                          <small>{recoveryActionSummary.nextStep}</small>
-                          <span>
-                            {recoveryActionSummary.chips.slice(0, 4).map((chip) => (
-                              <em key={chip}>{chip}</em>
-                            ))}
-                          </span>
+                          <button type="button" onClick={() => void handleRetryCurrentRun(step)} disabled={isBusy}>
+                            {busyAction === 'plan' ? '恢复中' : recoveryActionSummary.actionLabel}
+                          </button>
                         </div>
-                        <button type="button" onClick={() => void handleRetryCurrentRun(step)} disabled={isBusy}>
-                          {busyAction === 'plan' ? '恢复中' : recoveryActionSummary.actionLabel}
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
-                </details>
-              </li>
-            )
-          })}
-        </ol>
+                      ) : null}
+                    </div>
+                  </details>
+                </li>
+              )
+            })}
+          </ol>
+        </details>
       </section>
 
       <section className={`agent-panel agent-assets-panel ${shouldCompactAssets ? 'is-compact-empty' : ''}`} aria-labelledby="agent-assets-title">
@@ -4836,30 +4852,27 @@ export default function AgentWorkflowView() {
           </div>
         ) : null}
 
-        <div className="agent-asset-summary-row" aria-label="资产摘要">
-          {assetSummaryItems.map((item) => (
-            <div key={item.key}>
-              <span>{item.label}</span>
-              <strong>{item.value}</strong>
-            </div>
-          ))}
-        </div>
-
-        <details className="agent-assets-disclosure" open={!shouldCompactAssets}>
-          <summary>
-            <strong>{shouldCompactAssets ? '展开资产区' : '资产明细'}</strong>
-            <span>{shouldCompactAssets ? '有输出、项目或配方后会自动展开' : '输出 / 参考 / 配方 / 历史'}</span>
-          </summary>
-
-          <div className="agent-asset-lanes" aria-label="项目资产分区预留">
-            {PROJECT_ASSET_LANES.map((lane) => (
-              <span key={lane}>{lane}</span>
+        <div className="agent-assets-dock">
+          <div className="agent-asset-dock-tabs" role="tablist" aria-label="资产类型">
+            {assetSummaryItems.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                className={assetDockTab === item.key ? 'active' : undefined}
+                onClick={() => setAssetDockTab(item.key)}
+                role="tab"
+                aria-selected={assetDockTab === item.key}
+              >
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+              </button>
             ))}
           </div>
 
-          <div className="agent-assets-grid">
-          {resultHasOutputs ? (
-            <div className="agent-asset-column">
+          <div className={`agent-assets-grid is-${assetDockTab}`}>
+          {assetDockTab === 'outputs' ? (
+            resultHasOutputs ? (
+            <div className="agent-asset-column agent-asset-output-column">
               <div className="agent-asset-column-head">
                 <h3>本次输出</h3>
                 <div className="agent-branch-actions" aria-label="当前分支快捷操作">
@@ -4985,9 +4998,15 @@ export default function AgentWorkflowView() {
                   })}
               </div>
             </div>
+            ) : (
+              <div className="agent-empty-state">
+                生成完成后，本次输出会出现在这里。
+              </div>
+            )
           ) : null}
 
-          <div className="agent-asset-column">
+          {assetDockTab === 'references' ? (
+          <div className="agent-asset-column agent-asset-reference-column">
             <h3>参考素材</h3>
             {referenceAssets.length ? (
               <div className="agent-reference-asset-list">
@@ -5024,8 +5043,10 @@ export default function AgentWorkflowView() {
               </div>
             )}
           </div>
+          ) : null}
 
-          <div className="agent-asset-column">
+          {assetDockTab === 'projects' ? (
+          <div className="agent-asset-column agent-asset-project-column">
             <div className="agent-project-list-head">
               <h3>项目管理</h3>
               <div className="agent-project-list-filters" aria-label="项目筛选">
@@ -5123,8 +5144,10 @@ export default function AgentWorkflowView() {
               </div>
             )}
           </div>
+          ) : null}
 
-          <div className="agent-asset-column">
+          {assetDockTab === 'recipes' ? (
+          <div className="agent-asset-column agent-asset-recipe-column">
             <h3>图像配方</h3>
             {activeRecipes.length || archivedRecipePreview.length ? (
               <div className="agent-asset-list">
@@ -5228,8 +5251,9 @@ export default function AgentWorkflowView() {
               </div>
             )}
           </div>
+          ) : null}
           </div>
-        </details>
+        </div>
       </section>
     </section>
   )
