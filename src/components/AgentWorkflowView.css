@@ -3278,9 +3278,9 @@
   .agent-project-bar {
     grid-template-columns: 1fr;
     align-items: start;
-    gap: 9px;
+    gap: 8px;
     min-height: 0;
-    padding: 10px;
+    padding: 9px 10px 10px;
   }
 
   .agent-project-meta,
@@ -3292,14 +3292,14 @@
   .agent-project-meta {
     width: 100%;
     max-width: 100%;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    overscroll-behavior-inline: contain;
-    padding-bottom: 1px;
+    flex-wrap: wrap;
+    overflow: visible;
+    padding-bottom: 0;
   }
 
   .agent-project-meta > span {
-    flex: 0 0 auto;
+    flex: 0 1 auto;
+    min-height: 24px;
   }
 
   .agent-task-chip {
@@ -3309,7 +3309,9 @@
   .agent-execution-summary {
     grid-column: auto;
     grid-template-columns: 1fr;
+    gap: 6px;
     width: 100%;
+    padding: 8px 9px;
   }
 
   .agent-execution-summary > div:last-child {
@@ -3331,11 +3333,11 @@
 
   .agent-project-actions .agent-project-return {
     min-width: 0;
-    padding-inline: 9px;
+    min-height: 42px;
+    padding-inline: 10px;
   }
 
   .agent-project-actions .agent-project-return span {
-    width: 2em;
     overflow: hidden;
     white-space: nowrap;
   }
@@ -3350,10 +3352,12 @@
   }
 
   .agent-workflow-map {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
     max-width: 100%;
-    overflow-x: auto;
+    overflow: visible;
+    gap: 7px;
   }
 
   .agent-timeline-panel {
@@ -3362,7 +3366,22 @@
   }
 
   .agent-workflow-node-wrap {
-    flex: 0 0 104px;
+    grid-template-columns: minmax(0, 1fr);
+    min-width: 0;
+  }
+
+  .agent-workflow-node-wrap > i {
+    display: none;
+  }
+
+  .agent-workflow-node {
+    min-height: 50px;
+    padding: 7px;
+  }
+
+  .agent-workflow-node strong,
+  .agent-workflow-node small {
+    white-space: normal;
   }
 
   .agent-route-source {
@@ -3460,6 +3479,7 @@
   .agent-stage-tool {
     width: 100%;
     min-width: 0;
+    min-height: 42px;
   }
 
   .agent-stage-conversion-rail {
@@ -3483,10 +3503,14 @@
     justify-content: flex-start;
   }
 
-  .agent-panel,
-  .agent-project-bar {
+  .agent-panel {
     border-radius: 12px;
     padding: 11px;
+  }
+
+  .agent-project-bar {
+    border-radius: 12px;
+    padding: 10px;
   }
 
   .agent-project-title h1 {
@@ -3505,5 +3529,13 @@
 
   .agent-stage-state strong {
     font-size: 19px;
+  }
+
+  .agent-project-actions button,
+  .agent-mission-primary,
+  .agent-route-card button,
+  .agent-assets-refresh button,
+  .agent-asset-actions button {
+    min-height: 42px;
   }
 }
