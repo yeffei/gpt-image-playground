@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { appendReviewTagToNote, buildAgentReferencePayload, buildBranchInspectorSummary, buildCreativeReviewItems, buildDerivedRoutePlanInput, buildExecutionAssetActionNotice, buildExecutionControlSummary, buildHistoryAssetNextStepSummary, buildLocalEditDraftSummary, buildOutputActionSummary, buildOutputAssetActionNotice, buildOutputAssetActions, buildRecoverableAssetSummary, buildRecoveryActionSummary, buildRetryPromptFromRun, buildRouteSourceSummary, buildTimelineStepSections, buildVersionComparisonSummary, buildWorkflowNodeStates, filterAgentProjects, findAgentLibraryDetailTask, findOutputSelectionTarget, getActiveOutputReviewSummary, getInlineReferenceAssetFromRecipe, getInputImageFromReferenceAsset, getLocalEditDraftCopy, getPlanOverrideState, getProjectVersionHistory, getRecipeSourceReferenceRole, getReviewIterationOutputReference, getReviewIterationRouteState, getRouteLifecycleCopy, getRunPrimaryOutput, getRunStatusCopy, getSelectedOutputOpenTarget, getStageVersionStripItems, loadServerOutputAsLocalImage, mergeAgentReferenceImages, summarizeAgentWorkflowErrorText } from './AgentWorkflowView'
+import { appendReviewTagToNote, buildAgentReferencePayload, buildBranchInspectorSummary, buildCreativeReviewItems, buildDerivedRoutePlanInput, buildExecutionAssetActionNotice, buildExecutionControlSummary, buildFailureRecoverySuggestion, buildHistoryAssetNextStepSummary, buildLocalEditDraftSummary, buildOutputActionSummary, buildOutputAssetActionNotice, buildOutputAssetActions, buildRecipeReadinessSummary, buildRecoverableAssetSummary, buildRecoveryActionSummary, buildRetryPromptFromRun, buildRouteSourceSummary, buildTimelineStepSections, buildVersionComparisonSummary, buildWorkflowNodeStates, filterAgentProjects, findAgentLibraryDetailTask, findOutputSelectionTarget, getActiveOutputReviewSummary, getAssetStatusSummary, getInlineReferenceAssetFromRecipe, getInputImageFromReferenceAsset, getLocalEditDraftCopy, getPlanOverrideState, getProjectVersionHistory, getRecipeSourceReferenceRole, getReviewIterationOutputReference, getReviewIterationRouteState, getRouteLifecycleCopy, getRunPrimaryOutput, getRunStatusCopy, getSelectedOutputOpenTarget, getStageVersionStripItems, loadServerOutputAsLocalImage, mergeAgentReferenceImages, summarizeAgentWorkflowErrorText } from './AgentWorkflowView'
 import { storeImage } from '../lib/db'
 import type { AgentRun, AgentRunOutput, AgentStep } from '../lib/agentWorkflowApi'
 
@@ -201,6 +201,7 @@ describe('AgentWorkflowView creative review helpers', () => {
     expect(summary).toContain('已自动尝试 2 条线路')
     expect(summary).toContain('上游超时')
     expect(summary).not.toContain('route_a')
+    expect(summary).not.toContain('upstream_timeout')
   })
 
   it('describes local edit draft states', () => {
@@ -811,6 +812,7 @@ describe('AgentWorkflowView project version history helpers', () => {
     updatedAt: overrides.updatedAt,
     createdAt: overrides.createdAt,
     sourceType: overrides.sourceType,
+    projectStatus: overrides.projectStatus,
   })
 
   it('prioritizes the active run, ancestors, descendants, same-root runs, then recent runs', () => {
@@ -1142,7 +1144,7 @@ describe('AgentWorkflowView project version history helpers', () => {
     }))).toEqual({
       title: '失败恢复',
       detail: '上游线路不支持该尺寸',
-      chips: ['Run run_failed', 'upstream_invalid_request'],
+      chips: ['Run run_failed', '上游参数不支持'],
     })
   })
 
@@ -1164,7 +1166,7 @@ describe('AgentWorkflowView project version history helpers', () => {
       recoverable: true,
       title: '可恢复失败路线',
       detail: '创建任务 · 线路不支持该尺寸',
-      chips: ['失败', '创建任务', 'upstream_invalid_request'],
+      chips: ['失败', '创建任务', '上游参数不支持'],
     })
   })
 
@@ -1199,7 +1201,7 @@ describe('AgentWorkflowView project version history helpers', () => {
       recoverable: true,
       title: '可恢复失败路线',
       detail: '等待生成 · 等待生成超时',
-      chips: ['失败', '等待生成', 'upstream_timeout', '按阶段恢复', '重新规划'],
+      chips: ['失败', '等待生成', '上游超时', '按阶段恢复', '重新规划'],
       actionLabel: '从该阶段恢复',
       nextStep: '会创建一条新的待确认路线，确认费用后才会启动生成。',
     })
@@ -1216,6 +1218,31 @@ describe('AgentWorkflowView project version history helpers', () => {
     })
   })
 
+  it('recommends concrete recovery actions by failure type', () => {
+    expect(buildFailureRecoverySuggestion(makeRun({
+      id: 'run_timeout',
+      status: 'failed',
+      failureKind: 'upstream_timeout',
+      errorSummary: '4K 生成超时',
+    }))).toEqual({
+      title: '建议先降低风险重试',
+      detail: '4K 生成超时',
+      actions: ['换线路重试', '降到 2K', '减少张数'],
+      tone: 'timeout',
+    })
+
+    expect(buildFailureRecoverySuggestion(makeRun({
+      id: 'run_invalid',
+      status: 'failed',
+      failureKind: 'upstream_invalid_request',
+      errorSummary: '线路不支持该尺寸',
+    }))).toMatchObject({
+      title: '参数需要重新适配',
+      actions: ['重新规划路线', '换兼容模型', '降低规格'],
+      tone: 'request',
+    })
+  })
+
   it('does not summarize successful assets as recoverable', () => {
     expect(buildRecoverableAssetSummary(makeRun({
       id: 'run_succeeded',
@@ -1225,6 +1252,87 @@ describe('AgentWorkflowView project version history helpers', () => {
       title: '无需恢复',
       detail: '当前路线不需要恢复操作。',
       chips: [],
+    })
+  })
+
+  it('summarizes asset management states for project cards', () => {
+    expect(getAssetStatusSummary(makeRun({
+      id: 'run_archived',
+      status: 'succeeded',
+      projectStatus: 'archived',
+    }))).toEqual({
+      label: '归档',
+      detail: '已从当前项目列表隐藏，可恢复继续使用。',
+      tone: 'archived',
+    })
+
+    expect(getAssetStatusSummary(makeRun({
+      id: 'run_recipe',
+      status: 'succeeded',
+      metadata: { recipeSaved: true, latestRecipeId: 'recipe_1' },
+    }))).toMatchObject({
+      label: '配方',
+      tone: 'recipe',
+    })
+
+    expect(getAssetStatusSummary(makeRun({
+      id: 'run_iteration',
+      status: 'succeeded',
+      metadata: { review: { decision: 'needs_iteration' } },
+    }))).toMatchObject({
+      label: '待迭代',
+      tone: 'iteration',
+    })
+  })
+
+  it('summarizes recipe readiness for current task state', () => {
+    const baseReview = {
+      decision: null,
+      selectedOutputId: null,
+      selectedTaskId: null,
+      note: '',
+      reviewedAt: null,
+      reviewStatus: null,
+      recipeSaved: false,
+      recipeSavedAt: null,
+      latestRecipeId: null,
+    }
+
+    expect(buildRecipeReadinessSummary({
+      run: makeRun({ id: 'run_planned', status: 'planned' }),
+      review: baseReview,
+      primaryOutput: { selectedOutputId: null, selectedTaskId: null, selectedAt: null },
+      activeOutput: null,
+      outputCount: 0,
+    })).toMatchObject({
+      title: '配方待生成',
+      canSave: false,
+      tone: 'pending',
+    })
+
+    expect(buildRecipeReadinessSummary({
+      run: makeRun({ id: 'run_done', status: 'succeeded' }),
+      review: { ...baseReview, decision: 'accepted' },
+      primaryOutput: { selectedOutputId: 'output_123456789', selectedTaskId: 'task_1', selectedAt: null },
+      activeOutput: null,
+      outputCount: 4,
+    })).toMatchObject({
+      title: '可沉淀配方',
+      canSave: true,
+      tone: 'ready',
+      chips: ['主图已定', '已验收', '4 张'],
+    })
+
+    expect(buildRecipeReadinessSummary({
+      run: makeRun({ id: 'run_saved', status: 'succeeded' }),
+      review: { ...baseReview, recipeSaved: true, latestRecipeId: 'recipe_abcdef123456' },
+      primaryOutput: { selectedOutputId: 'output_1', selectedTaskId: 'task_1', selectedAt: null },
+      activeOutput: null,
+      outputCount: 2,
+    })).toMatchObject({
+      title: '配方已保存',
+      canSave: false,
+      tone: 'saved',
     })
   })
 
@@ -1272,7 +1380,7 @@ describe('AgentWorkflowView project version history helpers', () => {
     }))).toEqual({
       title: '可恢复失败路线',
       detail: '会创建一条新的待确认路线，确认费用后才会启动生成。',
-      chips: ['探索', '失败', 'timeout', '按路线恢复', '重新规划'],
+      chips: ['探索', '失败', '请求超时', '按路线恢复', '重新规划'],
       tone: 'danger',
     })
   })
@@ -1366,7 +1474,7 @@ describe('AgentWorkflowView execution control helpers', () => {
     })).toEqual({
       title: '流程失败，可恢复',
       detail: '上游超时',
-      chips: ['失败', 'timeout', '可恢复'],
+      chips: ['失败', '请求超时', '可恢复'],
       tone: 'danger',
     })
   })
@@ -1763,7 +1871,7 @@ describe('AgentWorkflowView timeline helpers', () => {
       expect.objectContaining({
         key: 'error',
         tone: 'danger',
-        chips: ['上游生成超时', 'upstream_timeout'],
+        chips: ['上游生成超时', '上游超时'],
       }),
     ]))
   })
