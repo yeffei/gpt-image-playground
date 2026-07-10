@@ -6,6 +6,7 @@ import {
   cancelAgentRun,
   confirmAgentRun,
   createImageRecipe,
+  deleteImageRecipe,
   getAgentRun,
   listImageRecipes,
   listAgentRuns,
@@ -227,12 +228,14 @@ describe('agentWorkflowApi', () => {
     await listImageRecipes({ status: 'active', limit: 10, offset: 2 }, 'session-token')
     await archiveImageRecipe('recipe/id 1', 'session-token')
     await restoreImageRecipe('recipe/id 1', 'session-token')
+    await deleteImageRecipe('recipe/id 1', 'session-token')
 
     expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
       '/api/image-recipes',
       '/api/image-recipes?status=active&limit=10&offset=2',
       '/api/image-recipes/recipe%2Fid%201/archive',
       '/api/image-recipes/recipe%2Fid%201/restore',
+      '/api/image-recipes/recipe%2Fid%201',
     ])
     expect(fetchMock.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
       method: 'POST',
@@ -251,6 +254,9 @@ describe('agentWorkflowApi', () => {
         metadata: { savedFrom: 'test' },
         visibility: undefined,
       }),
+    }))
+    expect(fetchMock.mock.calls[4]?.[1]).toEqual(expect.objectContaining({
+      method: 'DELETE',
     }))
   })
 

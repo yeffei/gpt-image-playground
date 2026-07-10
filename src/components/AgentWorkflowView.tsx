@@ -6,6 +6,7 @@ import {
   cancelAgentRun,
   confirmAgentRun,
   createImageRecipe,
+  deleteImageRecipe,
   getAgentRun,
   listImageRecipes,
   listAgentRuns,
@@ -49,7 +50,7 @@ import {
 import './AgentWorkflowView.css'
 
 type BusyAction = 'plan' | 'replan' | 'variant' | 'localEdit' | 'layout' | 'upscaleRoute' | 'reviewIteration' | 'commerceRoute' | 'coverRoute' | 'posterRoute' | 'premiumRoute' | 'socialRoute' | 'confirm' | 'start' | 'refresh' | 'reference' | 'cancel' | 'history' | 'project' | null
-type RecipeBusyAction = 'save' | 'list' | 'archive' | 'use' | null
+type RecipeBusyAction = 'save' | 'list' | 'archive' | 'delete' | 'use' | null
 type ConversionMode = 'commerce' | 'cover' | 'poster'
 type DerivedRouteMode = 'layout' | 'upscale' | ConversionMode
 type AgentReviewDecision = 'accepted' | 'needs_iteration'
@@ -278,6 +279,7 @@ type AssetActionNotice = {
 
 type ProjectListFilter = AgentProjectStatus | 'all'
 const PROJECT_LIST_PAGE_SIZE = 6
+const RECIPE_LIST_PAGE_SIZE = 5
 
 const CATEGORY_OPTIONS = ['自动判断', '品牌广告', '产品静物', '人像摄影', '空间氛围', 'UI / 社媒视觉', '角色设定', '信息图解', '海报插画']
 const ASPECT_RATIO_OPTIONS = ['自动', '1:1', '4:5', '3:4', '16:9', '9:16']
@@ -403,6 +405,7 @@ const CONVERSION_ROUTES: Record<ConversionMode, {
 }
 
 type AgentAssetDockTab = 'outputs' | 'references' | 'projects' | 'recipes'
+type RecipeListFilter = 'active' | 'archived'
 
 const BRANCH_COPY = {
   base: { key: 'base', label: '路线探索', shortLabel: '探索', version: 'v1 路线探索', description: '原始生成路线' },
@@ -1764,6 +1767,10 @@ function mergeRunRecipes(current: ImageRecipe[], runId: string, incoming: ImageR
   return mergeRecipesById(otherRecipes, incoming)
 }
 
+function replaceRecipesByStatus(current: ImageRecipe[], status: RecipeListFilter, incoming: ImageRecipe[]) {
+  return mergeRecipesById(current.filter((recipe) => recipe.status !== status), incoming)
+}
+
 type ApplyAgentPayloadOptions = {
   resetMissingAssets?: boolean
 }
@@ -2525,9 +2532,27 @@ export default function AgentWorkflowView() {
   const [error, setError] = useState('')
   const [projectSearch, setProjectSearch] = useState('')
   const [projectFilter, setProjectFilter] = useState<ProjectListFilter>('active')
+  const [projectListMeta, setProjectListMeta] = useState<Record<ProjectListFilter, { total: number; limit: number; offset: number }>>({
+    active: { total: 0, limit: PROJECT_LIST_PAGE_SIZE, offset: 0 },
+    archived: { total: 0, limit: PROJECT_LIST_PAGE_SIZE, offset: 0 },
+    all: { total: 0, limit: PROJECT_LIST_PAGE_SIZE, offset: 0 },
+  })
+  const [projectAssetIds, setProjectAssetIds] = useState<Record<ProjectListFilter, string[]>>({
+    active: [],
+    archived: [],
+    all: [],
+  })
+  const [recipeFilter, setRecipeFilter] = useState<RecipeListFilter>('active')
+  const [recipeListMeta, setRecipeListMeta] = useState<Record<RecipeListFilter, { total: number; limit: number; offset: number }>>({
+    active: { total: 0, limit: RECIPE_LIST_PAGE_SIZE, offset: 0 },
+    archived: { total: 0, limit: RECIPE_LIST_PAGE_SIZE, offset: 0 },
+  })
+  const [recipeAssetIds, setRecipeAssetIds] = useState<Record<RecipeListFilter, string[]>>({
+    active: [],
+    archived: [],
+  })
   const [assetDockTab, setAssetDockTab] = useState<AgentAssetDockTab>('projects')
   const [assetDrawerOpen, setAssetDrawerOpen] = useState(false)
-  const [visibleProjectLimit, setVisibleProjectLimit] = useState(PROJECT_LIST_PAGE_SIZE)
   const [projectTitleDraft, setProjectTitleDraft] = useState('')
   const [selectedOutputImageId, setSelectedOutputImageId] = useState<string | null>(null)
   const [serverGenerationTask, setServerGenerationTask] = useState<AgentGenerationTaskSummary | null>(null)
@@ -2719,17 +2744,22 @@ export default function AgentWorkflowView() {
     estimatedPoints: planOverrideState.hasChanges ? '待重新估算' : planSummary.estimatedPoints,
   }
   const versionHistory = useMemo(() => getProjectVersionHistory(history, run), [history, run])
-  const projectList = useMemo(() => filterAgentProjects(history, {
+  const cachedProjectList = useMemo(() => filterAgentProjects(history, {
     query: projectSearch,
     filter: projectFilter,
   }), [history, projectFilter, projectSearch])
+  const projectList = useMemo(() => {
+    const byId = new Map(cachedProjectList.map((item) => [item.id, item]))
+    const listed = projectAssetIds[projectFilter].map((id) => byId.get(id)).filter((item): item is AgentRun => Boolean(item))
+    return listed.length ? listed : cachedProjectList
+  }, [cachedProjectList, projectAssetIds, projectFilter])
   const projectListStatusLabel = projectFilter === 'active'
     ? '当前项目'
     : projectFilter === 'archived'
       ? '归档项目'
       : '全部项目'
-  const projectListPreview = projectList.slice(0, visibleProjectLimit)
-  const hasMoreProjects = projectList.length > projectListPreview.length
+  const projectListMetaForFilter = projectListMeta[projectFilter]
+  const hasMoreProjects = projectList.length < projectListMetaForFilter.total
   const historyPreview = versionHistory.filter((entry) => (entry.run.projectStatus ?? 'active') === 'active').slice(0, 4)
   const stageVersionStripItems = useMemo(() => getStageVersionStripItems(versionHistory, run), [run, versionHistory])
   const versionComparisonSummary = useMemo(() => buildVersionComparisonSummary(versionHistory, run), [run, versionHistory])
@@ -2741,8 +2771,14 @@ export default function AgentWorkflowView() {
   const routeLifecycleCopy = useMemo(() => getRouteLifecycleCopy(run, visiblePlanSummary), [run, visiblePlanSummary])
   const activeRecipes = useMemo(() => recipes.filter((recipe) => recipe.status === 'active'), [recipes])
   const archivedRecipes = useMemo(() => recipes.filter((recipe) => recipe.status === 'archived'), [recipes])
-  const recipePreview = activeRecipes.slice(0, 3)
-  const archivedRecipePreview = archivedRecipes.slice(0, 2)
+  const recipeList = useMemo(() => {
+    const source = recipeFilter === 'archived' ? archivedRecipes : activeRecipes
+    const byId = new Map(source.map((recipe) => [recipe.id, recipe]))
+    const listed = recipeAssetIds[recipeFilter].map((id) => byId.get(id)).filter((recipe): recipe is ImageRecipe => Boolean(recipe))
+    return listed.length ? listed : source
+  }, [activeRecipes, archivedRecipes, recipeAssetIds, recipeFilter])
+  const recipeListMetaForFilter = recipeListMeta[recipeFilter]
+  const hasMoreRecipes = recipeList.length < recipeListMetaForFilter.total
   const activeLocalEditSource = localEditSource && run?.id === localEditSource.runId
     ? localEditSource
     : null
@@ -2759,7 +2795,7 @@ export default function AgentWorkflowView() {
     taskId: activeLocalEditSource?.taskId ?? null,
     maskUpdatedAt: activeLocalEditSource?.maskUpdatedAt ?? null,
   })
-  const hasProjectAssets = resultHasOutputs || referenceAssets.length > 0 || projectList.length > 0 || activeRecipes.length > 0 || archivedRecipePreview.length > 0
+  const hasProjectAssets = resultHasOutputs || referenceAssets.length > 0 || projectList.length > 0 || activeRecipes.length > 0 || archivedRecipes.length > 0
   const shouldCompactAssets = !hasProjectAssets && !assetActionNotice
   const assetSummaryItems = [
     { key: 'outputs', label: '输出', value: resultHasOutputs ? `${outputImageIds.length || serverOutputs.length} 张` : '待生成' },
@@ -2815,7 +2851,10 @@ export default function AgentWorkflowView() {
   }, [run?.id, run?.title, run?.userPrompt])
 
   useEffect(() => {
-    setVisibleProjectLimit(PROJECT_LIST_PAGE_SIZE)
+    setProjectListMeta((current) => ({
+      ...current,
+      [projectFilter]: { ...current[projectFilter], offset: 0 },
+    }))
   }, [projectFilter, projectSearch])
 
   useEffect(() => {
@@ -2886,46 +2925,100 @@ export default function AgentWorkflowView() {
     return payload.run
   }, [])
 
-  const loadHistory = useCallback(async (silent = false) => {
+  const loadHistory = useCallback(async (
+    silent = false,
+    options: { filter?: ProjectListFilter; search?: string; append?: boolean; offset?: number } = {},
+  ) => {
     if (!authSessionToken) return
     if (!silent) setBusyAction('history')
+    const filter = options.filter ?? projectFilter
+    const search = options.search ?? projectSearch
+    const offset = options.offset ?? 0
     try {
-      const [activePayload, archivedPayload]: AgentRunListPayload[] = await Promise.all([
-        listAgentRuns({ projectStatus: 'active', limit: 60 }, authSessionToken),
-        listAgentRuns({ projectStatus: 'archived', limit: 60 }, authSessionToken),
-      ])
-      const merged = new Map<string, AgentRun>()
-      ;[...activePayload.runs, ...archivedPayload.runs].forEach((item) => merged.set(item.id, item))
-      setHistory(Array.from(merged.values()).sort((left, right) => getRunUpdatedTime(right) - getRunUpdatedTime(left)))
+      const payload: AgentRunListPayload = await listAgentRuns({
+        projectStatus: filter,
+        search,
+        limit: PROJECT_LIST_PAGE_SIZE,
+        offset,
+      }, authSessionToken)
+      setHistory((current) => {
+        const merged = new Map<string, AgentRun>()
+        current.forEach((item) => merged.set(item.id, item))
+        payload.runs.forEach((item) => merged.set(item.id, item))
+        return Array.from(merged.values()).sort((left, right) => getRunUpdatedTime(right) - getRunUpdatedTime(left))
+      })
+      setProjectAssetIds((current) => {
+        const currentIds = options.append ? current[filter] : []
+        const nextIds = [...currentIds]
+        payload.runs.forEach((item) => {
+          if (!nextIds.includes(item.id)) nextIds.push(item.id)
+        })
+        return { ...current, [filter]: nextIds }
+      })
+      setProjectListMeta((current) => ({
+        ...current,
+        [filter]: { total: payload.total, limit: payload.limit, offset: payload.offset },
+      }))
     } catch (err) {
       if (!silent) setError(getErrorMessage(err))
     } finally {
       if (!silent) setBusyAction(null)
     }
-  }, [authSessionToken])
+  }, [authSessionToken, projectFilter, projectSearch])
 
-  const loadRecipes = useCallback(async (silent = false) => {
+  const loadRecipes = useCallback(async (
+    silent = false,
+    options: { filter?: RecipeListFilter; append?: boolean; offset?: number } = {},
+  ) => {
     if (!authSessionToken) return
     if (!silent) setRecipeBusyAction('list')
+    const filter = options.filter ?? recipeFilter
+    const offset = options.offset ?? 0
     try {
-      const payload = await listImageRecipes({ status: 'all', limit: 8 }, authSessionToken)
-      setRecipes(payload.recipes)
+      const payload = await listImageRecipes({ status: filter, limit: RECIPE_LIST_PAGE_SIZE, offset }, authSessionToken)
+      setRecipes((current) => options.append
+        ? mergeRecipesById(current, payload.recipes)
+        : replaceRecipesByStatus(current, filter, payload.recipes))
+      setRecipeAssetIds((current) => {
+        const currentIds = options.append ? current[filter] : []
+        const nextIds = [...currentIds]
+        payload.recipes.forEach((recipe) => {
+          if (!nextIds.includes(recipe.id)) nextIds.push(recipe.id)
+        })
+        return { ...current, [filter]: nextIds }
+      })
+      setRecipeListMeta((current) => ({
+        ...current,
+        [filter]: { total: payload.total, limit: payload.limit, offset: payload.offset },
+      }))
     } catch (err) {
       if (!silent) setError(getErrorMessage(err))
     } finally {
       if (!silent) setRecipeBusyAction(null)
     }
-  }, [authSessionToken])
+  }, [authSessionToken, recipeFilter])
 
   useEffect(() => {
     if (!authSessionToken) {
       setHistory([])
       setRecipes([])
+      setProjectAssetIds({ active: [], archived: [], all: [] })
+      setRecipeAssetIds({ active: [], archived: [] })
       return
     }
     void loadHistory(true)
     void loadRecipes(true)
   }, [authSessionToken, loadHistory, loadRecipes])
+
+  useEffect(() => {
+    if (!authSessionToken) return
+    void loadHistory(true, { filter: projectFilter, search: projectSearch, offset: 0 })
+  }, [authSessionToken, loadHistory, projectFilter, projectSearch])
+
+  useEffect(() => {
+    if (!authSessionToken) return
+    void loadRecipes(true, { filter: recipeFilter, offset: 0 })
+  }, [authSessionToken, loadRecipes, recipeFilter])
 
   useEffect(() => {
     if (!run?.id || isTerminal(run.status)) return
@@ -3731,6 +3824,38 @@ export default function AgentWorkflowView() {
       setRecipes((current) => mergeRecipesById(current, [payload.recipe]))
       await loadRecipes(true)
       showToast('配方已恢复', 'success')
+    } catch (err) {
+      setError(getErrorMessage(err))
+    } finally {
+      setRecipeBusyAction(null)
+    }
+  }
+
+  const handleDeleteRecipe = async (recipe: ImageRecipe) => {
+    if (!authSessionToken) return
+    setRecipeBusyAction('delete')
+    setError('')
+    try {
+      await deleteImageRecipe(recipe.id, authSessionToken)
+      setRecipes((current) => current.filter((item) => item.id !== recipe.id))
+      setRecipeAssetIds((current) => ({
+        active: current.active.filter((id) => id !== recipe.id),
+        archived: current.archived.filter((id) => id !== recipe.id),
+      }))
+      setRecipeListMeta((current) => ({
+        ...current,
+        [recipe.status === 'archived' ? 'archived' : 'active']: {
+          ...current[recipe.status === 'archived' ? 'archived' : 'active'],
+          total: Math.max(0, current[recipe.status === 'archived' ? 'archived' : 'active'].total - 1),
+        },
+      }))
+      setAssetActionNotice({
+        target: 'Project Assets',
+        title: '配方已删除',
+        detail: recipe.title,
+      })
+      await loadRecipes(true, { filter: recipe.status === 'archived' ? 'archived' : 'active', offset: 0 })
+      showToast('配方已删除', 'success')
     } catch (err) {
       setError(getErrorMessage(err))
     } finally {
@@ -5247,8 +5372,8 @@ export default function AgentWorkflowView() {
             <button
               type="button"
               onClick={() => {
-                void loadHistory()
-                void loadRecipes()
+                void loadHistory(false, { filter: projectFilter, search: projectSearch, offset: 0 })
+                void loadRecipes(false, { filter: recipeFilter, offset: 0 })
               }}
               disabled={isBusy || isRecipeBusy}
             >
@@ -5463,7 +5588,7 @@ export default function AgentWorkflowView() {
             <div className="agent-project-list-head">
               <div>
                 <h3>项目管理</h3>
-                <p>{projectListStatusLabel} · 当前显示最近 {projectListPreview.length}/{projectList.length} 个</p>
+                <p>{projectListStatusLabel} · 当前显示 {projectList.length}/{projectListMetaForFilter.total} 个</p>
               </div>
               <div className="agent-project-list-filters" aria-label="项目筛选">
                 <input
@@ -5489,12 +5614,12 @@ export default function AgentWorkflowView() {
             <div className="agent-project-management-note" aria-label="项目资产管理方式">
               <span>当前</span>
               <span>归档</span>
-              <span>全部会混合展示当前和归档项目，并用状态标识区分。</span>
-              <span>删除需后端硬删除与审计接口。</span>
+              <span>全部由后端分页混合展示当前和归档项目，并用状态标识区分。</span>
+              <span>项目删除采用可逆归档，避免误删生成记录和审计线索。</span>
             </div>
             {projectList.length ? (
               <div className="agent-asset-list">
-                {projectListPreview.map((item) => {
+                {projectList.map((item) => {
                   const entry = versionHistory.find((versionItem) => versionItem.run.id === item.id)
                   const itemStatus = getRunStatusCopy(item)
                   const itemBranch = getRunBranchInfo(item)
@@ -5554,14 +5679,17 @@ export default function AgentWorkflowView() {
                             归档
                           </button>
                         )}
-                        <button
-                          type="button"
-                          className="agent-asset-delete-disabled"
-                          disabled
-                          title="当前版本未提供不可逆删除接口，先使用归档管理项目。"
-                        >
-                          删除
-                        </button>
+                        {!isArchived ? (
+                          <button
+                            type="button"
+                            className="agent-asset-delete-disabled"
+                            onClick={() => void handleArchiveProject(item)}
+                            disabled={isBusy}
+                            title="项目删除策略为可逆归档，会从当前列表移出。"
+                          >
+                            移出当前
+                          </button>
+                        ) : null}
                       </div>
                     </article>
                   )
@@ -5570,9 +5698,15 @@ export default function AgentWorkflowView() {
                   <button
                     type="button"
                     className="agent-asset-more agent-asset-more-action"
-                    onClick={() => setVisibleProjectLimit((current) => current + PROJECT_LIST_PAGE_SIZE)}
+                    onClick={() => void loadHistory(false, {
+                      filter: projectFilter,
+                      search: projectSearch,
+                      append: true,
+                      offset: projectList.length,
+                    })}
+                    disabled={isBusy}
                   >
-                    加载更多项目 · 还有 {projectList.length - projectListPreview.length} 个
+                    加载更多项目 · 还有 {projectListMetaForFilter.total - projectList.length} 个
                   </button>
                 ) : null}
               </div>
@@ -5586,86 +5720,88 @@ export default function AgentWorkflowView() {
 
           {assetDockTab === 'recipes' ? (
           <div className="agent-asset-column agent-asset-recipe-column">
-            <h3>图像配方</h3>
-            {activeRecipes.length || archivedRecipePreview.length ? (
+            <div className="agent-project-list-head">
+              <div>
+                <h3>图像配方</h3>
+                <p>{recipeFilter === 'active' ? '启用配方' : '归档配方'} · 当前显示 {recipeList.length}/{recipeListMetaForFilter.total} 个</p>
+              </div>
+              <div className="agent-project-list-filters" aria-label="配方筛选">
+                <div>
+                  {(['active', 'archived'] as RecipeListFilter[]).map((filter) => (
+                    <button
+                      key={filter}
+                      type="button"
+                      className={recipeFilter === filter ? 'active' : undefined}
+                      onClick={() => setRecipeFilter(filter)}
+                    >
+                      {filter === 'active' ? '启用' : '归档'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            {recipeList.length ? (
               <div className="agent-asset-list">
-                {recipePreview.map((recipe) => {
+                {recipeList.map((recipe) => {
                   const specChips = getRecipeSpecChips(recipe)
                   const sourceSize = getRecipeSourceSize(recipe)
+                  const isArchivedRecipe = recipe.status === 'archived'
                   return (
-                    <article key={recipe.id} className="agent-recipe-card">
+                    <article key={recipe.id} className={`agent-recipe-card ${isArchivedRecipe ? 'is-archived' : ''}`.trim()}>
                       <div className="agent-recipe-thumb" aria-label="配方来源输出">
                         {recipe.sourceOutput?.url ? (
                           <img src={recipe.sourceOutput.url} alt="" loading="lazy" />
                         ) : (
-                          <span>配方</span>
+                          <span>{isArchivedRecipe ? '归档' : '配方'}</span>
                         )}
                       </div>
                       <div className="agent-recipe-main">
                         <span>{recipe.category || '未分类'}</span>
                         <strong>{recipe.title}</strong>
-                        <small>{getRecipeSummary(recipe)}</small>
-                        <div className="agent-recipe-specs" aria-label="配方规格">
-                          {specChips.map((chip) => (
-                            <em key={chip}>{chip}</em>
-                          ))}
-                        </div>
+                        <small>{isArchivedRecipe ? getRecipeSourceText(recipe) : getRecipeSummary(recipe)}</small>
+                        {!isArchivedRecipe ? (
+                          <div className="agent-recipe-specs" aria-label="配方规格">
+                            {specChips.map((chip) => (
+                              <em key={chip}>{chip}</em>
+                            ))}
+                          </div>
+                        ) : null}
                         <small>{formatTime(recipe.updatedAt)} · 使用 {recipe.useCount} 次 · {getRecipeSourceText(recipe)}</small>
                         {sourceSize ? <small>{sourceSize}</small> : null}
                       </div>
                       <div className="agent-asset-actions">
-                        <button
-                          type="button"
-                          onClick={() => void handleUseRecipe(recipe)}
-                          disabled={isRecipeBusy || isBusy}
-                        >
-                          使用
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void handleUseRecipeReferenceInBrief(recipe)}
-                          disabled={isRecipeBusy || isBusy || (!recipe.sourceOutput?.url && !getInlineReferenceAssetFromRecipe(recipe))}
-                        >
-                          参考
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void handleCopyRecipePrompt(recipe)}
-                          disabled={isRecipeBusy}
-                        >
-                          复制
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void handleArchiveRecipe(recipe)}
-                          disabled={isRecipeBusy}
-                        >
-                          归档
-                        </button>
-                      </div>
-                    </article>
-                  )
-                })}
-                {activeRecipes.length > recipePreview.length ? (
-                  <div className="agent-asset-more">还有 {activeRecipes.length - recipePreview.length} 个配方资产</div>
-                ) : null}
-                {archivedRecipePreview.length ? (
-                  <div className="agent-archived-recipes" aria-label="已归档配方">
-                    {archivedRecipePreview.map((recipe) => (
-                      <article key={recipe.id} className="agent-recipe-card is-archived">
-                        <div className="agent-recipe-thumb" aria-label="配方来源输出">
-                          {recipe.sourceOutput?.url ? (
-                            <img src={recipe.sourceOutput.url} alt="" loading="lazy" />
-                          ) : (
-                            <span>归档</span>
-                          )}
-                        </div>
-                        <div className="agent-recipe-main">
-                          <span>{recipe.category || '未分类'}</span>
-                          <strong>{recipe.title}</strong>
-                          <small>{formatTime(recipe.updatedAt)} · {getRecipeSourceText(recipe)}</small>
-                        </div>
-                        <div className="agent-asset-actions">
+                        {!isArchivedRecipe ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => void handleUseRecipe(recipe)}
+                              disabled={isRecipeBusy || isBusy}
+                            >
+                              使用
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleUseRecipeReferenceInBrief(recipe)}
+                              disabled={isRecipeBusy || isBusy || (!recipe.sourceOutput?.url && !getInlineReferenceAssetFromRecipe(recipe))}
+                            >
+                              参考
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleCopyRecipePrompt(recipe)}
+                              disabled={isRecipeBusy}
+                            >
+                              复制
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleArchiveRecipe(recipe)}
+                              disabled={isRecipeBusy}
+                            >
+                              归档
+                            </button>
+                          </>
+                        ) : (
                           <button
                             type="button"
                             onClick={() => void handleRestoreRecipe(recipe)}
@@ -5673,19 +5809,41 @@ export default function AgentWorkflowView() {
                           >
                             恢复
                           </button>
-                        </div>
-                      </article>
-                    ))}
-                  </div>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => void handleDeleteRecipe(recipe)}
+                          disabled={isRecipeBusy}
+                          title="配方删除会软删除记录，默认资产列表不再展示。"
+                        >
+                          删除
+                        </button>
+                      </div>
+                    </article>
+                  )
+                })}
+                {hasMoreRecipes ? (
+                  <button
+                    type="button"
+                    className="agent-asset-more agent-asset-more-action"
+                    onClick={() => void loadRecipes(false, {
+                      filter: recipeFilter,
+                      append: true,
+                      offset: recipeList.length,
+                    })}
+                    disabled={isRecipeBusy}
+                  >
+                    加载更多配方 · 还有 {recipeListMetaForFilter.total - recipeList.length} 个
+                  </button>
                 ) : null}
               </div>
             ) : (
               <div className="agent-empty-state">
                 {needsLogin
                   ? '登录后可以保存和查看图像配方。'
-                  : archivedRecipePreview.length
-                    ? '当前没有启用中的配方资产。'
-                    : '还没有配方资产。'}
+                  : recipeFilter === 'archived'
+                    ? '还没有归档配方。'
+                    : '还没有启用中的配方资产。'}
               </div>
             )}
           </div>

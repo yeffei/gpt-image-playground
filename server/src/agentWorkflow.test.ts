@@ -560,9 +560,10 @@ function createAgentWorkflowDb() {
     }
 
     if (text.includes('COUNT(*)::text AS total FROM agent_runs')) {
-      const projectStatus = text.includes('project_status') ? values[1] : null
+      const hasProjectStatusFilter = text.includes('project_status =')
+      const projectStatus = hasProjectStatusFilter ? values[1] : null
       const hasRunStatusFilter = text.includes(' AND status =')
-      const status = hasRunStatusFilter ? values[2] : null
+      const status = hasRunStatusFilter ? values[hasProjectStatusFilter ? 2 : 1] : null
       const search = text.includes('LIKE') ? String(values[values.length - 1]).replace(/%/g, '').toLowerCase() : ''
       const total = runs.filter((run) => {
         if (run.user_id !== values[0]) return false
@@ -575,9 +576,10 @@ function createAgentWorkflowDb() {
     }
 
     if (text.includes('FROM agent_runs') && (text.includes('ORDER BY created_at DESC') || text.includes('ORDER BY updated_at DESC'))) {
-      const projectStatus = text.includes('project_status') ? values[1] : null
+      const hasProjectStatusFilter = text.includes('project_status =')
+      const projectStatus = hasProjectStatusFilter ? values[1] : null
       const hasRunStatusFilter = text.includes(' AND status =')
-      const status = hasRunStatusFilter ? values[2] : null
+      const status = hasRunStatusFilter ? values[hasProjectStatusFilter ? 2 : 1] : null
       const search = text.includes('LIKE') ? String(values[values.length - 3]).replace(/%/g, '').toLowerCase() : ''
       const limit = values[values.length - 2] as number
       const offset = values[values.length - 1] as number
@@ -688,6 +690,14 @@ function createAgentWorkflowDb() {
       const recipe = recipes.find((item) => item.id === values[1] && item.user_id === values[2] && item.status === 'archived')
       if (!recipe) return { rows: [], rowCount: 0 }
       recipe.status = 'active'
+      recipe.updated_at = values[0] as string
+      return { rows: [{ id: recipe.id }], rowCount: 1 }
+    }
+
+    if (text.includes('UPDATE image_recipes') && text.includes("SET status = 'deleted'")) {
+      const recipe = recipes.find((item) => item.id === values[1] && item.user_id === values[2] && item.status !== 'deleted')
+      if (!recipe) return { rows: [], rowCount: 0 }
+      recipe.status = 'deleted'
       recipe.updated_at = values[0] as string
       return { rows: [{ id: recipe.id }], rowCount: 1 }
     }
@@ -2634,12 +2644,30 @@ describe('agent workflow routes', () => {
         status: 'active',
       })
 
+      const deleted = await app.inject({
+        method: 'DELETE',
+        url: `/api/image-recipes/${saved.json().recipe.id}`,
+        headers: { authorization: 'Bearer test-token' },
+      })
+      expect(deleted.statusCode).toBe(200)
+      expect(deleted.json()).toMatchObject({
+        ok: true,
+        recipeId: saved.json().recipe.id,
+      })
+
       const restoredActiveList = await app.inject({
         method: 'GET',
         url: '/api/image-recipes',
         headers: { authorization: 'Bearer test-token' },
       })
-      expect(restoredActiveList.json()).toMatchObject({ total: 1 })
+      expect(restoredActiveList.json()).toMatchObject({ total: 0 })
+
+      const deletedAllList = await app.inject({
+        method: 'GET',
+        url: '/api/image-recipes?status=all',
+        headers: { authorization: 'Bearer test-token' },
+      })
+      expect(deletedAllList.json()).toMatchObject({ total: 0 })
     } finally {
       await app.close()
     }
@@ -3079,6 +3107,14 @@ describe('agent workflow routes', () => {
       })
       expect(archivedList.json()).toMatchObject({ total: 1 })
       expect(archivedList.json().runs[0]).toMatchObject({ id: runId, projectStatus: 'archived' })
+
+      const allList = await app.inject({
+        method: 'GET',
+        url: '/api/agent-runs?projectStatus=all',
+        headers: { authorization: 'Bearer test-token' },
+      })
+      expect(allList.json()).toMatchObject({ total: 1 })
+      expect(allList.json().runs[0]).toMatchObject({ id: runId, projectStatus: 'archived' })
 
       const restored = await app.inject({
         method: 'POST',

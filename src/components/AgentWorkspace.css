@@ -95,13 +95,13 @@
 }
 
 .markdown-renderer :where(blockquote) {
-  border-left: 3px solid rgba(59, 130, 246, 0.45);
+  border-left: 3px solid rgba(123, 97, 255, 0.34);
   color: #52525b;
   padding-left: 0.85rem;
 }
 
 .markdown-renderer :where(a) {
-  color: #2563eb;
+  color: var(--platform-accent-deep, #5f49df);
   text-decoration: underline;
   text-underline-offset: 2px;
 }

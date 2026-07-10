@@ -7,13 +7,108 @@
   --agent-panel: rgba(255, 255, 255, 0.88);
   --agent-panel-strong: rgba(255, 255, 255, 0.96);
   --agent-field: #f6f4ee;
-  --agent-accent: #0f766e;
-  --agent-accent-ink: #0f5f59;
+  --agent-accent: #785cff;
+  --agent-accent-ink: #5f49df;
   --agent-warm: #b7791f;
   --agent-danger: #b42318;
   display: grid;
   gap: 12px;
   color: var(--agent-ink);
+}
+
+.agent-workflow-view {
+  --agent-ink: var(--platform-ink, #111111);
+  --agent-muted: var(--platform-muted, rgba(17, 17, 17, 0.52));
+  --agent-soft: var(--platform-soft, rgba(17, 17, 17, 0.36));
+  --agent-line: var(--platform-line, rgba(17, 17, 17, 0.06));
+  --agent-line-strong: var(--platform-line-strong, rgba(17, 17, 17, 0.13));
+  --agent-panel: var(--platform-surface, #ffffff);
+  --agent-panel-strong: var(--platform-surface, #ffffff);
+  --agent-field: var(--platform-control, #f3f2ef);
+  --agent-accent: var(--platform-accent-fill, #785cff);
+  --agent-accent-ink: var(--platform-accent-deep, #5f49df);
+  --agent-warm: var(--platform-warning, #a15c07);
+}
+
+/* Commercial workspace pass: keep workflow dense, but align colors and controls. */
+.agent-workflow-view :where(.agent-project-bar, .agent-panel) {
+  border-color: var(--agent-line) !important;
+  background: var(--platform-surface, #fff) !important;
+  box-shadow: var(--platform-shadow, 0 2px 12px rgba(17, 17, 17, 0.035)), var(--platform-inset, inset 0 1px 0 rgba(255, 255, 255, 0.9)) !important;
+}
+
+.agent-workflow-view :where(h1, h2, h3, strong) {
+  color: var(--agent-ink);
+  letter-spacing: 0;
+}
+
+.agent-workflow-view :where(button, input, textarea, select) {
+  font-family: var(--font-ui-sans);
+  letter-spacing: 0;
+}
+
+.agent-workflow-view :where(button) {
+  font-weight: 600 !important;
+  line-height: 1;
+}
+
+.agent-workflow-view :where(input, textarea, select) {
+  border-color: var(--agent-line-strong) !important;
+  background: var(--platform-surface, #fff) !important;
+  color: var(--agent-ink) !important;
+  box-shadow: none !important;
+}
+
+.agent-workflow-view :where(input:focus, textarea:focus, select:focus) {
+  border-color: rgba(123, 97, 255, 0.28) !important;
+  box-shadow: 0 0 0 3px var(--platform-accent-soft, rgba(123, 97, 255, 0.12)) !important;
+  outline: none !important;
+}
+
+.agent-workflow-view :where(
+  .agent-workflow-eyebrow,
+  .agent-panel-kicker,
+  .agent-status-badge.is-confirmed,
+  .agent-status-badge.is-running,
+  .agent-status-badge.is-succeeded,
+  .agent-recipe-readiness.is-ready,
+  .agent-recipe-readiness.is-saved
+) {
+  border-color: rgba(123, 97, 255, 0.22) !important;
+  background: var(--platform-accent-soft, rgba(123, 97, 255, 0.12)) !important;
+  color: var(--agent-accent-ink) !important;
+}
+
+.agent-workflow-view :where(
+  .agent-project-name-editor button,
+  .agent-project-actions button,
+  .agent-recipe-readiness button
+) {
+  border-color: var(--agent-line-strong) !important;
+  background: var(--platform-control, #f3f2ef) !important;
+  color: var(--agent-ink) !important;
+  box-shadow: none !important;
+}
+
+.agent-workflow-view :where(
+  .agent-project-primary,
+  .agent-project-actions button.agent-project-primary,
+  .agent-recipe-readiness button:not(:disabled)
+) {
+  border-color: var(--agent-accent) !important;
+  background: var(--agent-accent) !important;
+  color: #fff !important;
+  box-shadow: 0 14px 30px rgba(123, 97, 255, 0.18) !important;
+}
+
+.agent-workflow-view :where(.agent-status-badge.is-planned) {
+  background: rgba(161, 92, 7, 0.08) !important;
+  color: var(--platform-warning, #a15c07) !important;
+}
+
+.agent-workflow-view :where(.agent-status-badge.is-failed) {
+  background: rgba(180, 35, 24, 0.1) !important;
+  color: var(--platform-danger, #b42318) !important;
 }
 
 .agent-workflow-view *,
@@ -70,7 +165,7 @@
 .agent-workflow-eyebrow {
   min-height: 22px;
   padding: 0 8px;
-  background: rgba(15, 118, 110, 0.1);
+  background: rgba(123, 97, 255, 0.1);
   color: var(--agent-accent-ink);
 }
 
@@ -108,15 +203,15 @@
 
 .agent-project-name-editor input:focus,
 .agent-project-list-filters input:focus {
-  outline: 3px solid rgba(15, 118, 110, 0.16);
+  outline: 3px solid rgba(123, 97, 255, 0.16);
   outline-offset: 1px;
 }
 
 .agent-project-name-editor button {
   min-height: 31px;
-  border: 1px solid rgba(15, 118, 110, 0.18);
+  border: 1px solid rgba(123, 97, 255, 0.18);
   border-radius: 8px;
-  background: rgba(15, 118, 110, 0.08);
+  background: rgba(123, 97, 255, 0.08);
   color: var(--agent-accent-ink);
   padding: 0 10px;
   font-size: 12px;
@@ -156,12 +251,12 @@
 
 .agent-execution-summary.is-confirmed,
 .agent-execution-summary.is-running {
-  border-color: rgba(15, 118, 110, 0.16);
+  border-color: rgba(123, 97, 255, 0.16);
   background: rgba(240, 253, 250, 0.58);
 }
 
 .agent-execution-summary.is-done {
-  border-color: rgba(15, 118, 110, 0.12);
+  border-color: rgba(123, 97, 255, 0.12);
   background: rgba(236, 253, 245, 0.54);
 }
 
@@ -295,7 +390,7 @@
 .agent-asset-actions button:focus-visible,
 .agent-mission-input textarea:focus,
 .agent-constraint-controls select:focus {
-  outline: 3px solid rgba(15, 118, 110, 0.18);
+  outline: 3px solid rgba(123, 97, 255, 0.18);
   outline-offset: 2px;
 }
 
@@ -322,10 +417,10 @@
 
 .agent-mission-primary {
   width: 100%;
-  border-color: rgba(15, 118, 110, 0.22);
+  border-color: rgba(123, 97, 255, 0.22);
   background: var(--agent-accent);
   color: #fff;
-  box-shadow: 0 10px 18px rgba(15, 118, 110, 0.12);
+  box-shadow: 0 10px 18px rgba(123, 97, 255, 0.12);
 }
 
 .agent-project-ghost,
@@ -454,7 +549,7 @@
 }
 
 .agent-status-badge.is-succeeded {
-  background: rgba(15, 118, 110, 0.12);
+  background: rgba(123, 97, 255, 0.12);
   color: var(--agent-accent-ink);
 }
 
@@ -607,7 +702,7 @@
 .agent-mission-context-metrics button:hover,
 .agent-mission-context-head button:hover,
 .agent-mission-context-list button:hover {
-  border-color: rgba(15, 118, 110, 0.2);
+  border-color: rgba(123, 97, 255, 0.2);
   background: rgba(240, 253, 250, 0.62);
   color: var(--agent-accent-ink);
 }
@@ -647,7 +742,7 @@
 }
 
 .agent-mission-context-list button.active {
-  border-color: rgba(15, 118, 110, 0.24);
+  border-color: rgba(123, 97, 255, 0.24);
   background: rgba(240, 253, 250, 0.72);
 }
 
@@ -735,7 +830,7 @@
 }
 
 .agent-local-edit-draft.is-ready {
-  border-color: rgba(15, 118, 110, 0.22);
+  border-color: rgba(123, 97, 255, 0.22);
   background: rgba(236, 253, 245, 0.72);
 }
 
@@ -778,7 +873,7 @@
 }
 
 .agent-local-edit-draft.is-ready .agent-local-edit-chips em {
-  border-color: rgba(15, 118, 110, 0.16);
+  border-color: rgba(123, 97, 255, 0.16);
   color: var(--agent-accent-ink);
 }
 
@@ -799,7 +894,7 @@
 }
 
 .agent-local-edit-primary {
-  border: 1px solid rgba(15, 118, 110, 0.28);
+  border: 1px solid rgba(123, 97, 255, 0.28);
   background: var(--agent-accent);
   color: #fff;
 }
@@ -852,9 +947,9 @@
 
 .agent-reference-actions button {
   min-height: 30px;
-  border: 1px solid rgba(15, 118, 110, 0.2);
+  border: 1px solid rgba(123, 97, 255, 0.2);
   border-radius: 999px;
-  background: rgba(15, 118, 110, 0.08);
+  background: rgba(123, 97, 255, 0.08);
   color: var(--agent-accent-ink);
   padding: 0 10px;
   font-size: 12px;
@@ -942,7 +1037,7 @@
 }
 
 .agent-reference-card select:focus {
-  outline: 2px solid rgba(15, 118, 110, 0.18);
+  outline: 2px solid rgba(123, 97, 255, 0.18);
   outline-offset: 1px;
 }
 
@@ -1025,8 +1120,8 @@
 }
 
 .agent-constraint-controls fieldset button.active {
-  border-color: rgba(15, 118, 110, 0.28);
-  background: rgba(15, 118, 110, 0.1);
+  border-color: rgba(123, 97, 255, 0.28);
+  background: rgba(123, 97, 255, 0.1);
   color: var(--agent-accent-ink);
 }
 
@@ -1064,9 +1159,9 @@
 
 .agent-plan-edit-actions button {
   min-height: 32px;
-  border: 1px solid rgba(15, 118, 110, 0.18);
+  border: 1px solid rgba(123, 97, 255, 0.18);
   border-radius: 999px;
-  background: rgba(15, 118, 110, 0.08);
+  background: rgba(123, 97, 255, 0.08);
   color: var(--agent-accent-ink);
   padding: 0 12px;
   font-size: 12px;
@@ -1246,7 +1341,7 @@
 
 .agent-stage-output-strip span.is-primary-slot {
   border-style: solid;
-  border-color: rgba(15, 118, 110, 0.24);
+  border-color: rgba(123, 97, 255, 0.24);
   background: rgba(240, 253, 250, 0.62);
   color: var(--agent-accent-ink);
 }
@@ -1264,12 +1359,12 @@
 }
 
 .agent-stage-output-card.is-active {
-  border-color: rgba(15, 118, 110, 0.2);
+  border-color: rgba(123, 97, 255, 0.2);
   background: rgba(240, 253, 250, 0.5);
 }
 
 .agent-stage-output-card.is-primary {
-  border-color: rgba(15, 118, 110, 0.26);
+  border-color: rgba(123, 97, 255, 0.26);
   background: rgba(236, 253, 245, 0.62);
 }
 
@@ -1338,7 +1433,7 @@
 .agent-output-thumb small {
   margin-top: 3px;
   border-radius: 999px;
-  background: rgba(15, 118, 110, 0.92);
+  background: rgba(123, 97, 255, 0.92);
   color: #fff;
   padding: 3px 6px;
   font-size: 10px;
@@ -1348,8 +1443,8 @@
 
 .agent-output-thumb.active,
 .agent-output-thumb.is-primary {
-  border-color: rgba(15, 118, 110, 0.72);
-  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.12);
+  border-color: rgba(123, 97, 255, 0.72);
+  box-shadow: 0 0 0 2px rgba(123, 97, 255, 0.12);
 }
 
 .agent-output-action-summary {
@@ -1405,7 +1500,7 @@
 
 .agent-stage-output-card.is-active .agent-output-action-summary em:first-child,
 .agent-stage-output-card.is-primary .agent-output-action-summary em:first-child {
-  border-color: rgba(15, 118, 110, 0.16);
+  border-color: rgba(123, 97, 255, 0.16);
   color: var(--agent-accent-ink);
 }
 
@@ -1483,9 +1578,9 @@
 
 .agent-stage-inline-action {
   min-height: 32px;
-  border: 1px solid rgba(15, 118, 110, 0.22);
+  border: 1px solid rgba(123, 97, 255, 0.22);
   border-radius: 999px;
-  background: rgba(15, 118, 110, 0.09);
+  background: rgba(123, 97, 255, 0.09);
   color: var(--agent-accent-ink);
   padding: 0 12px;
   font-size: 12px;
@@ -1502,7 +1597,7 @@
   gap: 5px;
   width: 100%;
   max-width: 620px;
-  border: 1px solid rgba(15, 118, 110, 0.16);
+  border: 1px solid rgba(123, 97, 255, 0.16);
   border-radius: 10px;
   background: rgba(240, 253, 250, 0.48);
   padding: 9px 10px;
@@ -1585,7 +1680,7 @@
   grid-template-columns: minmax(0, 1fr) auto auto;
   max-width: none;
   margin-top: 9px;
-  border-color: rgba(15, 118, 110, 0.15);
+  border-color: rgba(123, 97, 255, 0.15);
   background: rgba(240, 253, 250, 0.42);
 }
 
@@ -1595,7 +1690,7 @@
 }
 
 .agent-recipe-readiness.is-saved {
-  border-color: rgba(15, 118, 110, 0.22);
+  border-color: rgba(123, 97, 255, 0.22);
   background: rgba(236, 253, 245, 0.68);
 }
 
@@ -1665,13 +1760,13 @@
 }
 
 .agent-recipe-readiness em:first-child {
-  border-color: rgba(15, 118, 110, 0.14);
+  border-color: rgba(123, 97, 255, 0.14);
   color: var(--agent-accent-ink);
 }
 
 .agent-recipe-readiness button {
   min-height: 30px;
-  border: 1px solid rgba(15, 118, 110, 0.2);
+  border: 1px solid rgba(123, 97, 255, 0.2);
   border-radius: 999px;
   background: var(--agent-accent);
   color: #fff;
@@ -1689,13 +1784,13 @@
 .agent-stage-large-icon {
   width: 46px;
   height: 46px;
-  color: rgba(15, 118, 110, 0.72);
+  color: rgba(123, 97, 255, 0.72);
 }
 
 .agent-stage-orbit {
   width: 52px;
   height: 52px;
-  border: 3px solid rgba(15, 118, 110, 0.14);
+  border: 3px solid rgba(123, 97, 255, 0.14);
   border-top-color: var(--agent-accent);
   border-radius: 999px;
   animation: agent-stage-spin 1s linear infinite;
@@ -1774,8 +1869,8 @@
 
 .agent-stage-version-strip > span.active,
 .agent-stage-version-strip > button.active {
-  border-color: rgba(15, 118, 110, 0.26);
-  background: rgba(15, 118, 110, 0.1);
+  border-color: rgba(123, 97, 255, 0.26);
+  background: rgba(123, 97, 255, 0.1);
   color: var(--agent-accent-ink);
 }
 
@@ -1845,7 +1940,7 @@
 }
 
 .agent-version-compare em {
-  border: 1px solid rgba(15, 118, 110, 0.14);
+  border: 1px solid rgba(123, 97, 255, 0.14);
   border-radius: 999px;
   background: rgba(240, 253, 250, 0.56);
   color: var(--agent-accent-ink);
@@ -1863,7 +1958,7 @@
   align-items: center;
   gap: 9px;
   margin-top: 10px;
-  border: 1px solid rgba(15, 118, 110, 0.16);
+  border: 1px solid rgba(123, 97, 255, 0.16);
   border-radius: 10px;
   background: rgba(240, 253, 250, 0.44);
   padding: 9px;
@@ -1917,8 +2012,8 @@
 }
 
 .agent-review-strip input:focus {
-  border-color: rgba(15, 118, 110, 0.38);
-  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.1);
+  border-color: rgba(123, 97, 255, 0.38);
+  box-shadow: 0 0 0 3px rgba(123, 97, 255, 0.1);
 }
 
 .agent-review-tags {
@@ -1942,8 +2037,8 @@
 
 .agent-review-tags button:hover:not(:disabled),
 .agent-review-tags button.is-active {
-  border-color: rgba(15, 118, 110, 0.24);
-  background: rgba(15, 118, 110, 0.08);
+  border-color: rgba(123, 97, 255, 0.24);
+  background: rgba(123, 97, 255, 0.08);
   color: var(--agent-accent-ink);
 }
 
@@ -1961,7 +2056,7 @@
 .agent-review-actions button {
   min-height: 34px;
   min-width: 0;
-  border: 1px solid rgba(15, 118, 110, 0.2);
+  border: 1px solid rgba(123, 97, 255, 0.2);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.78);
   color: var(--agent-accent-ink);
@@ -2056,7 +2151,7 @@
 .agent-stage-conversion-rail button {
   min-height: 32px;
   min-width: 0;
-  border: 1px solid rgba(15, 118, 110, 0.18);
+  border: 1px solid rgba(123, 97, 255, 0.18);
   border-radius: 9px;
   background: rgba(240, 253, 250, 0.58);
   color: var(--agent-accent-ink);
@@ -2086,7 +2181,7 @@
 }
 
 .agent-route-card.is-recommended {
-  border-color: rgba(15, 118, 110, 0.24);
+  border-color: rgba(123, 97, 255, 0.24);
   background: rgba(240, 253, 250, 0.62);
 }
 
@@ -2104,7 +2199,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  border: 1px solid rgba(15, 118, 110, 0.16);
+  border: 1px solid rgba(123, 97, 255, 0.16);
   border-radius: 10px;
   background: rgba(240, 253, 250, 0.58);
   padding: 9px 10px;
@@ -2189,7 +2284,7 @@
 .agent-route-card button {
   width: fit-content;
   min-height: 32px;
-  border-color: rgba(15, 118, 110, 0.24);
+  border-color: rgba(123, 97, 255, 0.24);
   background: var(--agent-accent);
   color: #fff;
 }
@@ -2243,7 +2338,7 @@
 .agent-inspector-drawer > summary > span {
   max-width: 170px;
   overflow: hidden;
-  border: 1px solid rgba(15, 118, 110, 0.16);
+  border: 1px solid rgba(123, 97, 255, 0.16);
   border-radius: 999px;
   background: rgba(240, 253, 250, 0.72);
   color: var(--agent-accent-ink);
@@ -2272,7 +2367,7 @@
   display: grid;
   gap: 5px;
   min-width: 0;
-  border: 1px solid rgba(15, 118, 110, 0.14);
+  border: 1px solid rgba(123, 97, 255, 0.14);
   border-radius: 10px;
   background: rgba(240, 253, 250, 0.48);
   padding: 10px;
@@ -2367,9 +2462,9 @@
 
 .agent-lineage-row button {
   min-height: 28px;
-  border: 1px solid rgba(15, 118, 110, 0.2);
+  border: 1px solid rgba(123, 97, 255, 0.2);
   border-radius: 999px;
-  background: rgba(15, 118, 110, 0.08);
+  background: rgba(123, 97, 255, 0.08);
   color: var(--agent-accent-ink);
   padding: 0 9px;
   font-size: 11px;
@@ -2419,18 +2514,18 @@
 }
 
 .agent-inspector-chips em:first-child {
-  border-color: rgba(15, 118, 110, 0.16);
+  border-color: rgba(123, 97, 255, 0.16);
   background: rgba(240, 253, 250, 0.82);
   color: var(--agent-accent-ink);
 }
 
 .agent-inspector-list > .agent-inspector-selection {
-  border-color: rgba(15, 118, 110, 0.2);
+  border-color: rgba(123, 97, 255, 0.2);
   background: rgba(240, 253, 250, 0.58);
 }
 
 .agent-inspector-list > .agent-creative-review {
-  border-color: rgba(15, 118, 110, 0.18);
+  border-color: rgba(123, 97, 255, 0.18);
   background: rgba(240, 253, 250, 0.5);
 }
 
@@ -2573,12 +2668,12 @@
 }
 
 .agent-workflow-node.is-succeeded {
-  border-color: rgba(15, 118, 110, 0.18);
+  border-color: rgba(123, 97, 255, 0.18);
   background: rgba(236, 253, 245, 0.7);
 }
 
 .agent-workflow-node.is-succeeded span {
-  background: rgba(15, 118, 110, 0.14);
+  background: rgba(123, 97, 255, 0.14);
   color: var(--agent-accent-ink);
 }
 
@@ -2720,7 +2815,7 @@
 }
 
 .agent-timeline li.is-succeeded .agent-timeline-index {
-  background: rgba(15, 118, 110, 0.12);
+  background: rgba(123, 97, 255, 0.12);
   color: var(--agent-accent-ink);
 }
 
@@ -2969,7 +3064,7 @@
 }
 
 .agent-assets-overview-metrics button:hover {
-  border-color: rgba(15, 118, 110, 0.2);
+  border-color: rgba(123, 97, 255, 0.2);
   background: rgba(240, 253, 250, 0.62);
   color: var(--agent-accent-ink);
 }
@@ -2995,7 +3090,7 @@
 
 .agent-assets-overview-action {
   min-height: 36px;
-  border: 1px solid rgba(15, 118, 110, 0.18);
+  border: 1px solid rgba(123, 97, 255, 0.18);
   border-radius: 999px;
   background: rgba(240, 253, 250, 0.72);
   color: var(--agent-accent-ink);
@@ -3077,7 +3172,7 @@
 }
 
 .agent-asset-dock-tabs button.active {
-  border-color: rgba(15, 118, 110, 0.24);
+  border-color: rgba(123, 97, 255, 0.24);
   background: rgba(240, 253, 250, 0.68);
   color: var(--agent-accent-ink);
 }
@@ -3191,7 +3286,7 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
-  border: 1px solid rgba(15, 118, 110, 0.16);
+  border: 1px solid rgba(123, 97, 255, 0.16);
   border-radius: 10px;
   background: rgba(240, 253, 250, 0.54);
   padding: 8px 10px;
@@ -3200,7 +3295,7 @@
 .agent-asset-action-notice span {
   flex: 0 0 auto;
   border-radius: 999px;
-  background: rgba(15, 118, 110, 0.1);
+  background: rgba(123, 97, 255, 0.1);
   color: var(--agent-accent-ink);
   padding: 5px 8px;
   font-size: 11px;
@@ -3319,8 +3414,8 @@
 }
 
 .agent-project-list-filters button.active {
-  border-color: rgba(15, 118, 110, 0.22);
-  background: rgba(15, 118, 110, 0.09);
+  border-color: rgba(123, 97, 255, 0.22);
+  background: rgba(123, 97, 255, 0.09);
   color: var(--agent-accent-ink);
 }
 
@@ -3351,7 +3446,7 @@
 
 .agent-project-management-note span:first-child,
 .agent-project-management-note span:nth-child(2) {
-  border: 1px solid rgba(15, 118, 110, 0.12);
+  border: 1px solid rgba(123, 97, 255, 0.12);
   color: var(--agent-accent-ink);
 }
 
@@ -3364,9 +3459,9 @@
 
 .agent-branch-actions button {
   min-height: 27px;
-  border: 1px solid rgba(15, 118, 110, 0.16);
+  border: 1px solid rgba(123, 97, 255, 0.16);
   border-radius: 999px;
-  background: rgba(15, 118, 110, 0.07);
+  background: rgba(123, 97, 255, 0.07);
   color: var(--agent-accent-ink);
   padding: 0 8px;
   font-size: 11px;
@@ -3425,7 +3520,7 @@
 }
 
 .agent-output-asset-actions button:hover:not(:disabled) {
-  border-color: rgba(15, 118, 110, 0.2);
+  border-color: rgba(123, 97, 255, 0.2);
   color: var(--agent-accent-ink);
 }
 
@@ -3505,9 +3600,9 @@
 
 .agent-reference-asset-card > button {
   min-height: 27px;
-  border: 1px solid rgba(15, 118, 110, 0.18);
+  border: 1px solid rgba(123, 97, 255, 0.18);
   border-radius: 999px;
-  background: rgba(15, 118, 110, 0.07);
+  background: rgba(123, 97, 255, 0.07);
   color: var(--agent-accent-ink);
   padding: 0 8px;
   font-size: 10.5px;
@@ -3516,8 +3611,8 @@
 }
 
 .agent-reference-asset-card > button:hover:not(:disabled) {
-  border-color: rgba(15, 118, 110, 0.28);
-  background: rgba(15, 118, 110, 0.11);
+  border-color: rgba(123, 97, 255, 0.28);
+  background: rgba(123, 97, 255, 0.11);
 }
 
 .agent-reference-asset-card > button:disabled {
@@ -3540,7 +3635,7 @@
 
 .agent-asset-list article.active,
 .agent-asset-list article:hover {
-  border-color: rgba(15, 118, 110, 0.24);
+  border-color: rgba(123, 97, 255, 0.24);
   background: rgba(255, 255, 255, 0.9);
 }
 
@@ -3626,7 +3721,7 @@
 }
 
 .agent-lineage-badge.is-current {
-  border-color: rgba(15, 118, 110, 0.18);
+  border-color: rgba(123, 97, 255, 0.18);
   background: rgba(236, 253, 245, 0.82);
   color: var(--agent-accent-ink);
 }
@@ -3660,7 +3755,7 @@
 
 .agent-asset-state-badge.is-selected,
 .agent-asset-state-badge.is-recipe {
-  border-color: rgba(15, 118, 110, 0.16);
+  border-color: rgba(123, 97, 255, 0.16);
   background: rgba(240, 253, 250, 0.82);
   color: var(--agent-accent-ink);
 }
@@ -3691,12 +3786,12 @@
 }
 
 .agent-asset-next-step.is-action {
-  border-color: rgba(15, 118, 110, 0.16);
+  border-color: rgba(123, 97, 255, 0.16);
   background: rgba(240, 253, 250, 0.5);
 }
 
 .agent-asset-next-step.is-success {
-  border-color: rgba(15, 118, 110, 0.12);
+  border-color: rgba(123, 97, 255, 0.12);
   background: rgba(236, 253, 245, 0.5);
 }
 
@@ -3751,7 +3846,7 @@
 
 .agent-asset-next-step.is-action em:first-child,
 .agent-asset-next-step.is-success em:first-child {
-  border-color: rgba(15, 118, 110, 0.14);
+  border-color: rgba(123, 97, 255, 0.14);
   color: var(--agent-accent-ink);
 }
 
@@ -3826,7 +3921,7 @@
 }
 
 .agent-branch-badge.is-layout {
-  border-color: rgba(15, 118, 110, 0.18);
+  border-color: rgba(123, 97, 255, 0.18);
   background: rgba(236, 253, 245, 0.82);
   color: var(--agent-accent-ink);
 }
@@ -3856,7 +3951,7 @@
 }
 
 .agent-branch-badge.is-recipe {
-  border-color: rgba(15, 118, 110, 0.16);
+  border-color: rgba(123, 97, 255, 0.16);
   background: rgba(240, 253, 250, 0.82);
   color: var(--agent-accent-ink);
 }
@@ -3894,7 +3989,7 @@
   grid-row: 1 / span 4;
   width: fit-content;
   border-radius: 999px;
-  background: rgba(15, 118, 110, 0.1);
+  background: rgba(123, 97, 255, 0.1);
   color: var(--agent-accent-ink);
   padding: 5px 8px;
   font-size: 11px;
@@ -4003,7 +4098,7 @@
 }
 
 .agent-asset-more-action:hover {
-  border-color: rgba(15, 118, 110, 0.2);
+  border-color: rgba(123, 97, 255, 0.2);
   background: rgba(240, 253, 250, 0.62);
   color: var(--agent-accent-ink);
 }
@@ -4398,4 +4493,182 @@
   .agent-asset-actions button {
     min-height: 42px;
   }
+}
+
+/* Final commercial platform override for agent workflow. */
+.agent-workflow-view {
+  --agent-ink: var(--platform-ink, #111111);
+  --agent-muted: var(--platform-muted, rgba(17, 17, 17, 0.52));
+  --agent-soft: var(--platform-soft, rgba(17, 17, 17, 0.36));
+  --agent-line: var(--platform-line, rgba(17, 17, 17, 0.06));
+  --agent-line-strong: var(--platform-line-strong, rgba(17, 17, 17, 0.13));
+  --agent-panel: var(--platform-surface, #ffffff);
+  --agent-panel-strong: var(--platform-surface, #ffffff);
+  --agent-field: var(--platform-control, #f3f2ef);
+  --agent-accent: var(--platform-accent-fill, #785cff);
+  --agent-accent-ink: var(--platform-accent-deep, #5f49df);
+}
+
+.agent-workflow-view :where(.agent-project-bar, .agent-panel, .agent-route-card, .agent-stage-card, .agent-recipe-card) {
+  border-color: var(--agent-line) !important;
+  background: var(--platform-surface, #fff) !important;
+  box-shadow: var(--platform-shadow, 0 2px 12px rgba(17, 17, 17, 0.035)), var(--platform-inset, inset 0 1px 0 rgba(255, 255, 255, 0.9)) !important;
+}
+
+.agent-workflow-view :where(button, input, textarea, select) {
+  font-family: var(--font-ui-sans) !important;
+  font-weight: 600 !important;
+  letter-spacing: 0 !important;
+}
+
+.agent-workflow-view :where(input, textarea, select, .agent-project-name-editor input, .agent-project-list-filters input) {
+  border-color: var(--agent-line-strong) !important;
+  background: var(--platform-surface, #fff) !important;
+  color: var(--agent-ink) !important;
+  box-shadow: none !important;
+}
+
+.agent-workflow-view :where(input:focus, textarea:focus, select:focus) {
+  border-color: rgba(123, 97, 255, 0.28) !important;
+  box-shadow: 0 0 0 3px var(--platform-accent-soft, rgba(123, 97, 255, 0.12)) !important;
+  outline: none !important;
+}
+
+.agent-workflow-view :where(
+  .agent-workflow-eyebrow,
+  .agent-panel-kicker,
+  .agent-status-badge.is-confirmed,
+  .agent-status-badge.is-running,
+  .agent-status-badge.is-succeeded,
+  .agent-stage-tab.is-active,
+  .agent-route-card.is-active,
+  .agent-recipe-readiness.is-ready,
+  .agent-recipe-readiness.is-saved
+) {
+  border-color: rgba(123, 97, 255, 0.22) !important;
+  background: var(--platform-accent-soft, rgba(123, 97, 255, 0.12)) !important;
+  color: var(--agent-accent-ink) !important;
+  box-shadow: none !important;
+}
+
+.agent-workflow-view :where(
+  .agent-project-name-editor button,
+  .agent-project-actions button,
+  .agent-route-card button,
+  .agent-assets-refresh button,
+  .agent-asset-actions button,
+  .agent-recipe-readiness button,
+  .agent-upload-button,
+  .agent-mission-secondary
+) {
+  border-color: var(--agent-line-strong) !important;
+  background: var(--platform-control, #f3f2ef) !important;
+  color: var(--agent-ink) !important;
+  box-shadow: none !important;
+}
+
+.agent-workflow-view :where(
+  .agent-project-primary,
+  .agent-mission-primary,
+  .agent-route-card button,
+  .agent-recipe-readiness button:not(:disabled)
+) {
+  border-color: var(--agent-accent) !important;
+  background: var(--agent-accent) !important;
+  color: #fff !important;
+  box-shadow: 0 14px 30px rgba(123, 97, 255, 0.18) !important;
+}
+
+.agent-workflow-view :where(svg, .agent-stage-state svg, .agent-route-card svg) {
+  color: var(--agent-accent-ink) !important;
+}
+
+.agent-workflow-view :where(.agent-status-badge.is-planned) {
+  background: rgba(161, 92, 7, 0.08) !important;
+  color: var(--platform-warning, #a15c07) !important;
+}
+
+.agent-workflow-view :where(.agent-status-badge.is-failed) {
+  background: rgba(180, 35, 24, 0.1) !important;
+  color: var(--platform-danger, #b42318) !important;
+}
+
+.agent-workflow-view .agent-reference-actions button {
+  border-color: var(--agent-line-strong) !important;
+  background: var(--platform-control, #f3f2ef) !important;
+  color: var(--agent-ink) !important;
+  box-shadow: none !important;
+}
+
+.agent-workflow-view .agent-reference-actions button:hover:not(:disabled) {
+  background: var(--platform-control-hover, #ebe9e5) !important;
+}
+
+.agent-workflow-view .agent-stage-version-strip > span.active,
+.agent-workflow-view .agent-stage-version-strip > button.active {
+  border-color: rgba(123, 97, 255, 0.22) !important;
+  background: var(--platform-accent-soft, rgba(123, 97, 255, 0.12)) !important;
+  color: var(--agent-accent-ink) !important;
+  box-shadow: none !important;
+}
+
+.agent-workflow-view .agent-stage-version-strip > button.active span,
+.agent-workflow-view .agent-stage-version-strip > button.is-current span {
+  background: rgba(123, 97, 255, 0.12) !important;
+  color: var(--agent-accent-ink) !important;
+}
+
+.agent-workflow-view :where(
+  .agent-execution-summary.is-confirmed,
+  .agent-execution-summary.is-running,
+  .agent-execution-summary.is-done,
+  .agent-local-edit-draft.is-ready,
+  .agent-mission-context-list button.active,
+  .agent-stage-output-strip span.active,
+  .agent-stage-output-strip span.is-active,
+  .agent-workflow-node.is-running,
+  .agent-workflow-node.is-succeeded,
+  .agent-lineage-badge.is-current,
+  .agent-asset-state-badge.is-selected,
+  .agent-asset-state-badge.is-recipe,
+  .agent-asset-next-step.is-action,
+  .agent-asset-next-step.is-success,
+  .agent-branch-badge.is-layout,
+  .agent-branch-badge.is-recipe,
+  .agent-recipe-main > span
+) {
+  border-color: rgba(123, 97, 255, 0.22) !important;
+  background: var(--platform-accent-soft, rgba(123, 97, 255, 0.12)) !important;
+  color: var(--agent-accent-ink) !important;
+  box-shadow: none !important;
+}
+
+.agent-workflow-view :where(
+  .agent-reference-card select,
+  .agent-constraint-strip span,
+  .agent-task-chip,
+  .agent-stage-output-strip span,
+  .agent-stage-action-reservations span,
+  .agent-route-source em,
+  .agent-recipe-specs em
+) {
+  border-color: var(--agent-line-strong) !important;
+  background: var(--platform-control, #f3f2ef) !important;
+  color: var(--agent-ink) !important;
+  box-shadow: none !important;
+}
+
+.agent-workflow-view :where(
+  .agent-stage-frame,
+  .agent-stage-main-preview,
+  .agent-stage-context-card,
+  .agent-version-compare,
+  .agent-review-strip,
+  .agent-asset-next-step,
+  .agent-asset-recovery,
+  .agent-reference-asset-card
+) {
+  border-color: var(--agent-line) !important;
+  background: var(--platform-surface, #fff) !important;
+  box-shadow: var(--platform-shadow, 0 2px 12px rgba(17, 17, 17, 0.035)), var(--platform-inset, inset 0 1px 0 rgba(255, 255, 255, 0.9)) !important;
 }

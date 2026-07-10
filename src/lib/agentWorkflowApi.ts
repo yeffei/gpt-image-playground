@@ -2,6 +2,7 @@ export type AgentRunStatus = 'draft' | 'planned' | 'confirmed' | 'running' | 'su
 export type AgentSourceType = 'text' | 'reference_image' | 'recipe' | 'rerun'
 export type AgentStepStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'canceled'
 export type AgentProjectStatus = 'active' | 'archived'
+export type AgentProjectListStatus = AgentProjectStatus | 'all'
 export type ImageRecipeStatus = 'active' | 'archived' | 'deleted'
 export type ImageRecipeVisibility = 'private' | 'shared'
 
@@ -165,6 +166,11 @@ export interface ImageRecipePayload {
   recipe: ImageRecipe
 }
 
+export interface DeleteImageRecipePayload {
+  ok?: boolean
+  recipeId: string
+}
+
 export interface ImageRecipeListPayload {
   ok?: boolean
   recipes: ImageRecipe[]
@@ -219,7 +225,7 @@ export interface SelectAgentRunPrimaryOutputInput {
 
 export interface ListAgentRunsInput {
   status?: AgentRunStatus
-  projectStatus?: AgentProjectStatus
+  projectStatus?: AgentProjectListStatus
   search?: string | null
   limit?: number
   offset?: number
@@ -297,7 +303,7 @@ function parseErrorPayload(value: unknown) {
 }
 
 async function requestAgentWorkflow<T>(path: string, options: {
-  method?: 'GET' | 'POST' | 'PATCH'
+  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'
   sessionToken?: string | null
   payload?: Record<string, unknown>
 } = {}): Promise<T> {
@@ -513,5 +519,12 @@ export async function restoreImageRecipe(recipeId: string, sessionToken?: string
     method: 'POST',
     sessionToken,
     payload: { reason: 'user_restore' },
+  })
+}
+
+export async function deleteImageRecipe(recipeId: string, sessionToken?: string | null): Promise<DeleteImageRecipePayload> {
+  return requestAgentWorkflow<DeleteImageRecipePayload>(`/api/image-recipes/${encodeURIComponent(recipeId)}`, {
+    method: 'DELETE',
+    sessionToken,
   })
 }

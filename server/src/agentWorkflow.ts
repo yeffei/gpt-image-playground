@@ -457,8 +457,10 @@ function normalizeReviewDecision(value: unknown): AgentRunReviewDecision {
   throw new ApiError(400, 'invalid_agent_review_decision', '请选择有效的评审结论')
 }
 
-function normalizeAgentProjectStatus(value: unknown): 'active' | 'archived' {
-  return value === 'archived' ? 'archived' : 'active'
+function normalizeAgentProjectStatus(value: unknown): 'active' | 'archived' | 'all' {
+  if (value === 'archived') return 'archived'
+  if (value === 'all') return 'all'
+  return 'active'
 }
 
 function inferCategory(prompt: string, preference?: string | null) {
@@ -2266,8 +2268,10 @@ export function registerAgentWorkflowRoutes(app: FastifyInstance, db: Pool, env:
       const useStatus = allowedStatuses.includes(status as AgentRunStatus)
       const values: unknown[] = [session.user_id]
       const where = ['user_id = $1']
-      values.push(projectStatus)
-      where.push(`project_status = $${values.length}`)
+      if (projectStatus !== 'all') {
+        values.push(projectStatus)
+        where.push(`project_status = $${values.length}`)
+      }
       if (useStatus) {
         values.push(status)
         where.push(`status = $${values.length}`)
@@ -2486,6 +2490,26 @@ export function registerAgentWorkflowRoutes(app: FastifyInstance, db: Pool, env:
       const recipeDetail = await getOwnedRecipeById(db, recipe.id, session.user_id)
       if (!recipeDetail) throw new ApiError(404, 'image_recipe_not_found', '配方不存在或未归档')
       return reply.send({ ok: true, recipe: serializeImageRecipe(recipeDetail) })
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
+  app.delete('/api/image-recipes/:id', async (request, reply) => {
+    try {
+      const session = await requireUserSession(db, request.headers.authorization)
+      const params = isRecord(request.params) ? request.params : {}
+      const recipeId = typeof params.id === 'string' ? params.id.trim() : ''
+      if (!recipeId) throw new ApiError(400, 'missing_image_recipe_id', '缺少配方编号')
+      const deletedAt = nowIso()
+      const recipe = (await db.query<{ id: string }>(`
+        UPDATE image_recipes
+        SET status = 'deleted', updated_at = $1
+        WHERE id = $2 AND user_id = $3 AND status <> 'deleted'
+        RETURNING id
+      `, [deletedAt, recipeId, session.user_id])).rows[0]
+      if (!recipe) throw new ApiError(404, 'image_recipe_not_found', '配方不存在')
+      return reply.send({ ok: true, recipeId: recipe.id })
     } catch (error) {
       return sendError(reply, error)
     }
