@@ -22,6 +22,11 @@ import {
   UpstreamAsyncTaskError,
   type UpstreamImageExtractionOptions,
 } from './upstreamImageResponse.js'
+import {
+  DEFAULT_GATEWAY_RECOVERY_PROBE_SETTINGS,
+  loadGatewayRecoveryProbeSettings,
+  type GatewayRecoveryProbeSettings,
+} from './gatewayRecoverySettings.js'
 
 const DEFAULT_UPSTREAM_MODEL = 'gpt-image-2'
 const MAX_OUTPUT_COUNT = 4
@@ -33,11 +38,6 @@ const UPSTREAM_OUTPUT_COUNT_PER_REQUEST = 1
 const DEFAULT_ROUTE_HEALTH_SCORE = 80
 const MAX_ROUTE_HEALTH_SCORE = 100
 const MIN_ROUTE_HEALTH_SCORE = 0
-const OBSERVING_SUCCESS_THRESHOLD = 2
-const OBSERVING_PROBE_DELAY_SECONDS = 10 * 60
-const MAX_RECOVERY_PROBES_PER_TRIGGER = 2
-const RECOVERY_PROBE_BUDGET_WINDOW_SECONDS = 24 * 60 * 60
-const MAX_RECOVERY_PROBES_PER_ROUTE_WINDOW = 3
 const TASK_ABORT_REASON_CANCELLED = 'task_cancelled'
 const GPT_IMAGE_2_SUPPORTED_SIZES = ['*']
 export const LIBRARY_ACTIVE_OUTPUT_LIMIT = 100
@@ -655,6 +655,22 @@ function addSeconds(date: Date, seconds: number) {
   return new Date(date.getTime() + seconds * 1000).toISOString()
 }
 
+function getObservingProbeDelaySeconds(settings: GatewayRecoveryProbeSettings) {
+  return settings.observingProbeDelayMinutes * 60
+}
+
+function getRecoveryProbeBudgetWindowSeconds(settings: GatewayRecoveryProbeSettings) {
+  return settings.budgetWindowHours * 60 * 60
+}
+
+async function loadGatewayRecoveryProbeSettingsSafe(db: Db) {
+  try {
+    return await loadGatewayRecoveryProbeSettings(db)
+  } catch {
+    return DEFAULT_GATEWAY_RECOVERY_PROBE_SETTINGS
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
@@ -1209,6 +1225,8 @@ async function recordRouteSuccess(db: Db, input: {
   modelSkuId: string
 }) {
   const updatedAt = nowIso()
+  const recoverySettings = await loadGatewayRecoveryProbeSettingsSafe(db)
+  const observingProbeDelaySeconds = getObservingProbeDelaySeconds(recoverySettings)
   await db.query(`
     INSERT INTO gateway_route_health (
       route_id, model_sku_id, consecutive_failures, last_success_at, last_failure_at,
@@ -1245,8 +1263,8 @@ async function recordRouteSuccess(db: Db, input: {
     input.modelSkuId,
     updatedAt,
     DEFAULT_ROUTE_HEALTH_SCORE + 8,
-    OBSERVING_SUCCESS_THRESHOLD,
-    addSeconds(new Date(updatedAt), OBSERVING_PROBE_DELAY_SECONDS),
+    recoverySettings.observingSuccessThreshold,
+    addSeconds(new Date(updatedAt), observingProbeDelaySeconds),
   ])
 }
 
@@ -1496,19 +1514,24 @@ function getProbeReadyAt(route: RuntimeRouteRow) {
   return candidates.length ? Math.max(...candidates) : 0
 }
 
-export function getRecoveryProbeBudgetResetAt(route: Pick<RuntimeRouteRow, 'recovery_probe_window_started_at' | 'recovery_probe_count'>, now = new Date()) {
+export function getRecoveryProbeBudgetResetAt(
+  route: Pick<RuntimeRouteRow, 'recovery_probe_window_started_at' | 'recovery_probe_count'>,
+  now = new Date(),
+  settings: GatewayRecoveryProbeSettings = DEFAULT_GATEWAY_RECOVERY_PROBE_SETTINGS,
+) {
   const windowStartedAt = route.recovery_probe_window_started_at ? new Date(route.recovery_probe_window_started_at).getTime() : 0
   if (!Number.isFinite(windowStartedAt) || windowStartedAt <= 0) return 0
-  const resetAt = windowStartedAt + RECOVERY_PROBE_BUDGET_WINDOW_SECONDS * 1000
+  const resetAt = windowStartedAt + getRecoveryProbeBudgetWindowSeconds(settings) * 1000
   const probeCount = Math.max(0, Number(route.recovery_probe_count ?? 0))
-  return probeCount >= MAX_RECOVERY_PROBES_PER_ROUTE_WINDOW && resetAt > now.getTime() ? resetAt : 0
+  return probeCount >= settings.maxProbesPerRouteWindow && resetAt > now.getTime() ? resetAt : 0
 }
 
-function isRouteRecoveryProbeDue(route: RuntimeRouteRow, now = new Date()) {
+function isRouteRecoveryProbeDue(route: RuntimeRouteRow, now = new Date(), settings: GatewayRecoveryProbeSettings = DEFAULT_GATEWAY_RECOVERY_PROBE_SETTINGS) {
   const state = normalizeRouteHealthState(route, now)
   if (state === 'primary' || state === 'isolated') return false
   if (state === 'cooling' && isRouteCoolingDown(route, now)) return false
-  if (getRecoveryProbeBudgetResetAt(route, now) > 0) return false
+  if (settings.maxProbesPerRouteWindow <= 0 || settings.maxProbesPerTrigger <= 0) return false
+  if (getRecoveryProbeBudgetResetAt(route, now, settings) > 0) return false
   const readyAt = getProbeReadyAt(route)
   return readyAt > 0 && readyAt <= now.getTime()
 }
@@ -1516,9 +1539,13 @@ function isRouteRecoveryProbeDue(route: RuntimeRouteRow, now = new Date()) {
 async function markRouteProbeStarted(db: Db, input: {
   routeId: string
   modelSkuId: string
+  settings: GatewayRecoveryProbeSettings
 }): Promise<'started' | 'budget_exhausted' | 'not_started'> {
   const startedAt = nowIso()
-  const budgetWindowCutoff = addSeconds(new Date(startedAt), -RECOVERY_PROBE_BUDGET_WINDOW_SECONDS)
+  if (input.settings.maxProbesPerRouteWindow <= 0) return 'budget_exhausted'
+  const budgetWindowSeconds = getRecoveryProbeBudgetWindowSeconds(input.settings)
+  const observingProbeDelaySeconds = getObservingProbeDelaySeconds(input.settings)
+  const budgetWindowCutoff = addSeconds(new Date(startedAt), -budgetWindowSeconds)
   const result = await db.query(`
     UPDATE gateway_route_health
     SET state = 'probing',
@@ -1543,11 +1570,11 @@ async function markRouteProbeStarted(db: Db, input: {
       )
   `, [
     startedAt,
-    addSeconds(new Date(startedAt), OBSERVING_PROBE_DELAY_SECONDS),
+    addSeconds(new Date(startedAt), observingProbeDelaySeconds),
     budgetWindowCutoff,
     input.routeId,
     input.modelSkuId,
-    MAX_RECOVERY_PROBES_PER_ROUTE_WINDOW,
+    input.settings.maxProbesPerRouteWindow,
   ])
   if ((result.rowCount ?? 0) > 0) return 'started'
 
@@ -1562,12 +1589,12 @@ async function markRouteProbeStarted(db: Db, input: {
       AND recovery_probe_window_started_at > $5::timestamptz
       AND recovery_probe_count >= $6
   `, [
-    RECOVERY_PROBE_BUDGET_WINDOW_SECONDS,
+    budgetWindowSeconds,
     startedAt,
     input.routeId,
     input.modelSkuId,
     budgetWindowCutoff,
-    MAX_RECOVERY_PROBES_PER_ROUTE_WINDOW,
+    input.settings.maxProbesPerRouteWindow,
   ])
   return (exhausted.rowCount ?? 0) > 0 ? 'budget_exhausted' : 'not_started'
 }
@@ -1577,8 +1604,10 @@ async function recordRouteProbeSuccess(db: Db, input: {
   modelSkuId: string
   upstreamModel: string
   latencyMs: number
+  settings: GatewayRecoveryProbeSettings
 }) {
   const capturedAt = nowIso()
+  const observingProbeDelaySeconds = getObservingProbeDelaySeconds(input.settings)
   const result = {
     ok: true,
     upstreamModel: input.upstreamModel,
@@ -1617,10 +1646,10 @@ async function recordRouteProbeSuccess(db: Db, input: {
     input.routeId,
     input.modelSkuId,
     capturedAt,
-    addSeconds(new Date(capturedAt), OBSERVING_PROBE_DELAY_SECONDS),
+    addSeconds(new Date(capturedAt), observingProbeDelaySeconds),
     DEFAULT_ROUTE_HEALTH_SCORE + 10,
     JSON.stringify(result),
-    OBSERVING_SUCCESS_THRESHOLD,
+    input.settings.observingSuccessThreshold,
   ])
 }
 
@@ -1629,6 +1658,7 @@ async function recordRouteProbeFailure(db: Db, input: {
   modelSkuId: string
   error: unknown
   latencyMs: number
+  settings: GatewayRecoveryProbeSettings
 }) {
   const failureKind = classifyGatewayFailure(input.error)
   const capturedAt = new Date()
@@ -1645,7 +1675,7 @@ async function recordRouteProbeFailure(db: Db, input: {
   const consecutiveFailures = Math.max(0, Number(existing?.consecutive_failures ?? 0)) + 1
   const probeFailureCount = Math.max(0, Number(existing?.probe_failure_count ?? 0)) + 1
   const cooldownSeconds = getCooldownSeconds(Math.max(consecutiveFailures, probeFailureCount), input.error)
-  const cooldownUntil = cooldownSeconds > 0 ? addSeconds(capturedAt, cooldownSeconds) : addSeconds(capturedAt, OBSERVING_PROBE_DELAY_SECONDS)
+  const cooldownUntil = cooldownSeconds > 0 ? addSeconds(capturedAt, cooldownSeconds) : addSeconds(capturedAt, getObservingProbeDelaySeconds(input.settings))
   const isolated = shouldIsolateRouteFailure(failureKind)
   const result = {
     ok: false,
@@ -1691,9 +1721,9 @@ async function recordRouteProbeFailure(db: Db, input: {
   ])
 }
 
-async function runRouteRecoveryProbe(db: Db, route: RuntimeRouteRow, modelSkuId: string) {
+async function runRouteRecoveryProbe(db: Db, route: RuntimeRouteRow, modelSkuId: string, settings: GatewayRecoveryProbeSettings) {
   const startedAt = Date.now()
-  const startStatus = await markRouteProbeStarted(db, { routeId: route.route_id, modelSkuId })
+  const startStatus = await markRouteProbeStarted(db, { routeId: route.route_id, modelSkuId, settings })
   if (startStatus !== 'started') return
   try {
     const result = await callUpstream(route, {
@@ -1714,6 +1744,7 @@ async function runRouteRecoveryProbe(db: Db, route: RuntimeRouteRow, modelSkuId:
       modelSkuId,
       upstreamModel: result.upstreamModel,
       latencyMs: Date.now() - startedAt,
+      settings,
     })
   } catch (error) {
     await recordRouteProbeFailure(db, {
@@ -1721,25 +1752,28 @@ async function runRouteRecoveryProbe(db: Db, route: RuntimeRouteRow, modelSkuId:
       modelSkuId,
       error,
       latencyMs: Date.now() - startedAt,
+      settings,
     })
   }
 }
 
-function scheduleDueRouteRecoveryProbes(db: Db, modelSkuId: string, routes: RuntimeRouteRow[], now = new Date()) {
+async function scheduleDueRouteRecoveryProbes(db: Db, modelSkuId: string, routes: RuntimeRouteRow[], now = new Date()) {
+  const settings = await loadGatewayRecoveryProbeSettingsSafe(db)
+  if (settings.maxProbesPerRouteWindow <= 0 || settings.maxProbesPerTrigger <= 0) return
   const dueRoutes = routes
-    .filter((route) => isRouteRecoveryProbeDue(route, now))
+    .filter((route) => isRouteRecoveryProbeDue(route, now, settings))
     .sort((left, right) => (
       getProbeReadyAt(left) - getProbeReadyAt(right)
       || (left.probe_failure_count ?? 0) - (right.probe_failure_count ?? 0)
       || (right.score ?? DEFAULT_ROUTE_HEALTH_SCORE) - (left.score ?? DEFAULT_ROUTE_HEALTH_SCORE)
     ))
-    .slice(0, MAX_RECOVERY_PROBES_PER_TRIGGER)
+    .slice(0, settings.maxProbesPerTrigger)
 
   for (const route of dueRoutes) {
     const key = `${modelSkuId}:${route.route_id}`
     if (activeRouteRecoveryProbes.has(key)) continue
     activeRouteRecoveryProbes.add(key)
-    void runRouteRecoveryProbe(db, route, modelSkuId)
+    void runRouteRecoveryProbe(db, route, modelSkuId, settings)
       .catch(() => undefined)
       .finally(() => activeRouteRecoveryProbes.delete(key))
   }
@@ -3001,7 +3035,7 @@ export async function submitGenerationTaskFromWorkflow(db: Pool, env: ServerEnv,
     params: normalizeRequestedParamsForModel(payload.params, model),
   }
   const loadedRoutes = filterRoutesForRequestedSize(await loadRoutesForModel(db, modelSku), normalizedPayload.params?.size)
-  scheduleDueRouteRecoveryProbes(db, modelSku, loadedRoutes)
+  void scheduleDueRouteRecoveryProbes(db, modelSku, loadedRoutes).catch(() => undefined)
   const routes = selectRoutesForUserTraffic(loadedRoutes)
   const routeStages = buildRouteExecutionStages(routes, normalizedPayload)
   if (!routeStages.length) throw new ApiError(503, 'no_route', '没有可用的生图线路')
@@ -3109,7 +3143,7 @@ export function registerImageGatewayRoutes(app: FastifyInstance, db: Pool, env: 
         params: normalizeRequestedParamsForModel(payload.params, model),
       }
       const loadedRoutes = filterRoutesForRequestedSize(await loadRoutesForModel(db, modelSku), normalizedPayload.params?.size)
-      scheduleDueRouteRecoveryProbes(db, modelSku, loadedRoutes)
+      void scheduleDueRouteRecoveryProbes(db, modelSku, loadedRoutes).catch(() => undefined)
       const routes = selectRoutesForUserTraffic(loadedRoutes)
       const routeStages = buildRouteExecutionStages(routes, normalizedPayload)
       if (!routeStages.length) throw new ApiError(503, 'no_route', '没有可用的生图线路')
@@ -3176,7 +3210,7 @@ export function registerImageGatewayRoutes(app: FastifyInstance, db: Pool, env: 
         params: normalizeRequestedParamsForModel(payload.params, model),
       }
       const loadedRoutes = filterRoutesForRequestedSize(await loadRoutesForModel(db, modelSku), normalizedPayload.params?.size)
-      scheduleDueRouteRecoveryProbes(db, modelSku, loadedRoutes)
+      void scheduleDueRouteRecoveryProbes(db, modelSku, loadedRoutes).catch(() => undefined)
       const routes = selectRoutesForUserTraffic(loadedRoutes)
       const routeStages = buildRouteExecutionStages(routes, normalizedPayload)
       if (!routeStages.length) throw new ApiError(503, 'no_route', '没有可用的生图线路')

@@ -3,6 +3,13 @@ import type { FastifyInstance } from 'fastify'
 import { ApiError, requireAdminSession, sendError } from './adminAuth.js'
 import type { Db } from './db.js'
 import { normalizeProbeSizes, probeGatewayRoute, summarizeProbeBatch } from './gatewayRouteProbe.js'
+import {
+  DEFAULT_GATEWAY_RECOVERY_PROBE_SETTINGS,
+  GATEWAY_RECOVERY_PROBE_SETTINGS_KEY,
+  loadGatewayRecoveryProbeSettings,
+  normalizeGatewayRecoveryProbeSettings,
+  type GatewayRecoveryProbeSettings,
+} from './gatewayRecoverySettings.js'
 
 type RoutePreflightStatus =
   | 'missing_base_url'
@@ -45,6 +52,8 @@ interface GatewayRouteRow {
   observing_success_count?: number | null
   last_probe_at?: string | null
   last_probe_result?: unknown
+  recovery_probe_window_started_at?: string | null
+  recovery_probe_count?: number | null
 }
 
 type ProbeRouteRow = GatewayRouteRow & {
@@ -125,6 +134,8 @@ interface ModelRouteBindingRow {
   observing_success_count?: number | null
   last_probe_at?: string | null
   last_probe_result?: unknown
+  recovery_probe_window_started_at?: string | null
+  recovery_probe_count?: number | null
 }
 
 type BindingHealthAction = 'schedule_probe' | 'force_observing' | 'isolate' | 'restore_primary'
@@ -139,6 +150,24 @@ function nowIso() {
 
 function addMinutesIso(value: string, minutes: number) {
   return new Date(Date.parse(value) + minutes * 60 * 1000).toISOString()
+}
+
+async function loadGatewayRecoveryProbeSettingsSafe(db: Db) {
+  try {
+    return await loadGatewayRecoveryProbeSettings(db)
+  } catch {
+    return DEFAULT_GATEWAY_RECOVERY_PROBE_SETTINGS
+  }
+}
+
+function getRecoveryProbeBudgetResetAt(row: Pick<ModelRouteBindingRow, 'recovery_probe_window_started_at' | 'recovery_probe_count'>, settings: GatewayRecoveryProbeSettings) {
+  const startedAt = row.recovery_probe_window_started_at ? new Date(row.recovery_probe_window_started_at).getTime() : 0
+  if (!Number.isFinite(startedAt) || startedAt <= 0) return null
+  const resetAt = startedAt + settings.budgetWindowHours * 60 * 60 * 1000
+  const probeCount = Math.max(0, Number(row.recovery_probe_count ?? 0))
+  return probeCount >= settings.maxProbesPerRouteWindow && resetAt > Date.now()
+    ? new Date(resetAt).toISOString()
+    : null
 }
 
 function createId(prefix: string) {
@@ -352,7 +381,7 @@ function serializeModel(row: ModelSkuRow) {
   }
 }
 
-function serializeBinding(row: ModelRouteBindingRow) {
+function serializeBinding(row: ModelRouteBindingRow, recoverySettings: GatewayRecoveryProbeSettings = DEFAULT_GATEWAY_RECOVERY_PROBE_SETTINGS) {
   const consecutiveFailures = Number(row.consecutive_failures ?? 0)
   const cooldownActive = isFutureIso(row.cooldown_until)
   const routeEnabled = row.route_enabled ?? true
@@ -397,6 +426,9 @@ function serializeBinding(row: ModelRouteBindingRow) {
     observingSuccessCount: Number(row.observing_success_count ?? 0),
     lastProbeAt: row.last_probe_at ?? null,
     lastProbeResult: row.last_probe_result ?? null,
+    recoveryProbeWindowStartedAt: row.recovery_probe_window_started_at ?? null,
+    recoveryProbeCount: Number(row.recovery_probe_count ?? 0),
+    recoveryProbeBudgetResetAt: getRecoveryProbeBudgetResetAt(row, recoverySettings),
     consecutiveFailures,
     lastSuccessAt: row.last_success_at ?? null,
     lastFailureAt: row.last_failure_at ?? null,
@@ -529,7 +561,9 @@ async function getBinding(db: Db, id: string) {
       COALESCE(h.score, 80) AS score,
       COALESCE(h.observing_success_count, 0) AS observing_success_count,
       h.last_probe_at::text,
-      h.last_probe_result
+      h.last_probe_result,
+      h.recovery_probe_window_started_at::text,
+      COALESCE(h.recovery_probe_count, 0) AS recovery_probe_count
     FROM model_route_bindings b
     JOIN model_skus m ON m.id = b.model_sku_id
     JOIN gateway_routes r ON r.id = b.route_id
@@ -557,6 +591,8 @@ async function applyBindingHealthAction(db: Db, input: {
   action: BindingHealthAction
 }) {
   const updatedAt = nowIso()
+  const recoverySettings = await loadGatewayRecoveryProbeSettingsSafe(db)
+  const observingProbeDelayMinutes = recoverySettings.observingProbeDelayMinutes
   const probeResult = {
     manualAction: input.action,
     capturedAt: updatedAt,
@@ -592,7 +628,7 @@ async function applyBindingHealthAction(db: Db, input: {
       lastError: null,
       cooldownUntil: null,
       state: 'observing',
-      nextProbeAt: addMinutesIso(updatedAt, 10),
+      nextProbeAt: addMinutesIso(updatedAt, observingProbeDelayMinutes),
       probeFailureCount: 0,
       score: Math.max(60, currentScore),
       observingSuccessCount: 1,
@@ -1091,7 +1127,9 @@ export function registerGatewayModelRoutes(app: FastifyInstance, db: Db) {
           COALESCE(h.score, 80) AS score,
           COALESCE(h.observing_success_count, 0) AS observing_success_count,
           h.last_probe_at::text,
-          h.last_probe_result
+          h.last_probe_result,
+          h.recovery_probe_window_started_at::text,
+          COALESCE(h.recovery_probe_count, 0) AS recovery_probe_count
         FROM model_route_bindings b
         JOIN model_skus m ON m.id = b.model_sku_id
         JOIN gateway_routes r ON r.id = b.route_id
@@ -1100,9 +1138,10 @@ export function registerGatewayModelRoutes(app: FastifyInstance, db: Db) {
         ORDER BY m.sort_order ASC, b.enabled DESC, b.priority ASC, b.weight DESC
         LIMIT $${values.length + 1} OFFSET $${values.length + 2}
       `, [...values, String(limit), String(offset)])
+      const recoverySettings = await loadGatewayRecoveryProbeSettingsSafe(db)
       return reply.send({
         ok: true,
-        bindings: result.rows.map(serializeBinding),
+        bindings: result.rows.map((row) => serializeBinding(row, recoverySettings)),
         pagination: {
           limit,
           offset,
@@ -1122,7 +1161,8 @@ export function registerGatewayModelRoutes(app: FastifyInstance, db: Db) {
       if (!id) throw new ApiError(400, 'missing_binding_id', '缺少可用线路编号')
       const binding = await getBinding(db, id)
       if (!binding) throw new ApiError(404, 'binding_not_found', '绑定不存在')
-      return reply.send({ ok: true, binding: serializeBinding(binding) })
+      const recoverySettings = await loadGatewayRecoveryProbeSettingsSafe(db)
+      return reply.send({ ok: true, binding: serializeBinding(binding, recoverySettings) })
     } catch (error) {
       return sendError(reply, error)
     }
@@ -1151,14 +1191,15 @@ export function registerGatewayModelRoutes(app: FastifyInstance, db: Db) {
         createdAt,
       ])).rows[0]
       const created = await getBinding(db, binding.id)
+      const recoverySettings = await loadGatewayRecoveryProbeSettingsSafe(db)
       await writeAuditLog(db, {
         adminUserId: admin.admin_user_id,
         action: 'model_route_binding_create',
         targetType: 'model_route_binding',
         targetId: binding.id,
-        afterSnapshot: serializeBinding(created),
+        afterSnapshot: serializeBinding(created, recoverySettings),
       })
-      return reply.status(201).send({ ok: true, binding: serializeBinding(created) })
+      return reply.status(201).send({ ok: true, binding: serializeBinding(created, recoverySettings) })
     } catch (error) {
       return sendError(reply, error)
     }
@@ -1191,15 +1232,16 @@ export function registerGatewayModelRoutes(app: FastifyInstance, db: Db) {
         id,
       ])
       const after = await getBinding(db, id)
+      const recoverySettings = await loadGatewayRecoveryProbeSettingsSafe(db)
       await writeAuditLog(db, {
         adminUserId: admin.admin_user_id,
         action: 'model_route_binding_update',
         targetType: 'model_route_binding',
         targetId: id,
-        beforeSnapshot: serializeBinding(before),
-        afterSnapshot: serializeBinding(after),
+        beforeSnapshot: serializeBinding(before, recoverySettings),
+        afterSnapshot: serializeBinding(after, recoverySettings),
       })
-      return reply.send({ ok: true, binding: serializeBinding(after) })
+      return reply.send({ ok: true, binding: serializeBinding(after, recoverySettings) })
     } catch (error) {
       return sendError(reply, error)
     }
@@ -1217,15 +1259,16 @@ export function registerGatewayModelRoutes(app: FastifyInstance, db: Db) {
       const action = normalizeBindingHealthAction(payload.action)
       await applyBindingHealthAction(db, { binding: before, action })
       const after = await getBinding(db, id)
+      const recoverySettings = await loadGatewayRecoveryProbeSettingsSafe(db)
       await writeAuditLog(db, {
         adminUserId: admin.admin_user_id,
         action: `model_route_binding_health_${action}`,
         targetType: 'model_route_binding',
         targetId: id,
-        beforeSnapshot: serializeBinding(before),
-        afterSnapshot: serializeBinding(after),
+        beforeSnapshot: serializeBinding(before, recoverySettings),
+        afterSnapshot: serializeBinding(after, recoverySettings),
       })
-      return reply.send({ ok: true, binding: serializeBinding(after), action })
+      return reply.send({ ok: true, binding: serializeBinding(after, recoverySettings), action })
     } catch (error) {
       return sendError(reply, error)
     }
@@ -1262,14 +1305,18 @@ export function registerGatewayModelRoutes(app: FastifyInstance, db: Db) {
         WHERE key = 'gateway_failover_enabled'
         LIMIT 1
       `)).rows[0]
+      const failoverEnabled = typeof row?.value_json === 'boolean' ? row.value_json : true
+      const recoveryProbeSettings = await loadGatewayRecoveryProbeSettingsSafe(db)
       return reply.send({
         ok: true,
         strategy: {
-          failoverEnabled: typeof row?.value_json === 'boolean' ? row.value_json : true,
+          failoverEnabled,
+          recoveryProbeSettings,
         },
         strategies: [{
           id: 'gateway-strategy',
-          failoverEnabled: typeof row?.value_json === 'boolean' ? row.value_json : true,
+          failoverEnabled,
+          ...recoveryProbeSettings,
         }],
       })
     } catch (error) {
@@ -1284,6 +1331,11 @@ export function registerGatewayModelRoutes(app: FastifyInstance, db: Db) {
       if (typeof payload.failoverEnabled !== 'boolean') {
         throw new ApiError(400, 'missing_failover_enabled', '请提供 failoverEnabled')
       }
+      const recoveryProbeSettings = normalizeGatewayRecoveryProbeSettings(
+        isRecord(payload.recoveryProbeSettings)
+          ? payload.recoveryProbeSettings
+          : payload,
+      )
       const updatedAt = nowIso()
       await db.query(`
         INSERT INTO system_settings (key, value_json, updated_by_admin_id, created_at, updated_at)
@@ -1293,14 +1345,27 @@ export function registerGatewayModelRoutes(app: FastifyInstance, db: Db) {
           updated_by_admin_id = EXCLUDED.updated_by_admin_id,
           updated_at = EXCLUDED.updated_at
       `, [JSON.stringify(payload.failoverEnabled), admin.admin_user_id, updatedAt])
+      await db.query(`
+        INSERT INTO system_settings (key, value_json, updated_by_admin_id, created_at, updated_at)
+        VALUES ($1, $2::jsonb, $3, $4, $4)
+        ON CONFLICT (key)
+        DO UPDATE SET value_json = EXCLUDED.value_json,
+          updated_by_admin_id = EXCLUDED.updated_by_admin_id,
+          updated_at = EXCLUDED.updated_at
+      `, [
+        GATEWAY_RECOVERY_PROBE_SETTINGS_KEY,
+        JSON.stringify(recoveryProbeSettings),
+        admin.admin_user_id,
+        updatedAt,
+      ])
       await writeAuditLog(db, {
         adminUserId: admin.admin_user_id,
         action: 'gateway_strategy_update',
         targetType: 'system_setting',
-        targetId: 'gateway_failover_enabled',
-        afterSnapshot: { failoverEnabled: payload.failoverEnabled },
+        targetId: 'gateway_strategy',
+        afterSnapshot: { failoverEnabled: payload.failoverEnabled, recoveryProbeSettings },
       })
-      return reply.send({ ok: true, strategy: { failoverEnabled: payload.failoverEnabled } })
+      return reply.send({ ok: true, strategy: { failoverEnabled: payload.failoverEnabled, recoveryProbeSettings } })
     } catch (error) {
       return sendError(reply, error)
     }

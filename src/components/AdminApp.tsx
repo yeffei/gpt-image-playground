@@ -625,6 +625,11 @@ const GATEWAY_MODULES: Record<GatewaySubsectionKey, AdminModuleConfig> = {
     columns: [
       { key: 'id', label: '项目' },
       { key: 'failoverEnabled', label: '故障切换' },
+      { key: 'budgetWindowHours', label: '预算窗口(小时)' },
+      { key: 'maxProbesPerRouteWindow', label: '单线窗口上限' },
+      { key: 'maxProbesPerTrigger', label: '单次触发上限' },
+      { key: 'observingSuccessThreshold', label: '恢复成功阈值' },
+      { key: 'observingProbeDelayMinutes', label: '观察间隔(分钟)' },
     ],
   },
 }
@@ -2645,6 +2650,9 @@ function AdminGatewayBindingDetailView(props: { detail: Record<string, unknown>;
             { key: 'nextProbeAt', label: '下次探测' },
             { key: 'probeFailureCount', label: '探测失败数' },
             { key: 'observingSuccessCount', label: '观察成功数' },
+            { key: 'recoveryProbeWindowStartedAt', label: '预算窗口开始' },
+            { key: 'recoveryProbeCount', label: '窗口已探测' },
+            { key: 'recoveryProbeBudgetResetAt', label: '预算重置时间' },
           ]}
         />
       </section>
@@ -5403,6 +5411,45 @@ function GatewayStrategyActions(props: {
   onRun: (actionName: string, action: () => Promise<void>) => Promise<void>
 }) {
   const [failoverEnabled, setFailoverEnabled] = useState(true)
+  const [budgetWindowHours, setBudgetWindowHours] = useState('24')
+  const [maxProbesPerRouteWindow, setMaxProbesPerRouteWindow] = useState('3')
+  const [maxProbesPerTrigger, setMaxProbesPerTrigger] = useState('2')
+  const [observingSuccessThreshold, setObservingSuccessThreshold] = useState('2')
+  const [observingProbeDelayMinutes, setObservingProbeDelayMinutes] = useState('10')
+  const [settingsError, setSettingsError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    setSettingsError('')
+    ;(async () => {
+      try {
+        const payload = await adminGet('/api/admin/gateway-strategy', props.token)
+        if (cancelled) return
+        const strategy = isRecord(getValueByPath(payload, 'strategy')) ? getValueByPath(payload, 'strategy') as Record<string, unknown> : {}
+        const settings = isRecord(getValueByPath(strategy, 'recoveryProbeSettings')) ? getValueByPath(strategy, 'recoveryProbeSettings') as Record<string, unknown> : strategy
+        setFailoverEnabled(readRecordBoolean(strategy, 'failoverEnabled', true))
+        setBudgetWindowHours(readRecordString(settings, 'budgetWindowHours', '24'))
+        setMaxProbesPerRouteWindow(readRecordString(settings, 'maxProbesPerRouteWindow', '3'))
+        setMaxProbesPerTrigger(readRecordString(settings, 'maxProbesPerTrigger', '2'))
+        setObservingSuccessThreshold(readRecordString(settings, 'observingSuccessThreshold', '2'))
+        setObservingProbeDelayMinutes(readRecordString(settings, 'observingProbeDelayMinutes', '10'))
+      } catch (error) {
+        if (!cancelled) setSettingsError(getErrorMessage(error))
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [props.token])
+
+  const buildRecoveryProbeSettings = () => ({
+    budgetWindowHours: Number(budgetWindowHours),
+    maxProbesPerRouteWindow: Number(maxProbesPerRouteWindow),
+    maxProbesPerTrigger: Number(maxProbesPerTrigger),
+    observingSuccessThreshold: Number(observingSuccessThreshold),
+    observingProbeDelayMinutes: Number(observingProbeDelayMinutes),
+  })
+
   return (
     <div className="admin-action-grid">
       <section className="admin-action-form">
@@ -5419,16 +5466,44 @@ function GatewayStrategyActions(props: {
         onSubmit={(event) => {
           event.preventDefault()
           void props.onRun('更新线路策略', async () => {
-            await adminPatch('/api/admin/gateway-strategy', props.token, { failoverEnabled })
+            await adminPatch('/api/admin/gateway-strategy', props.token, {
+              failoverEnabled,
+              recoveryProbeSettings: buildRecoveryProbeSettings(),
+            })
           })
         }}
       >
         <h3>故障切换</h3>
+        {settingsError ? <p className="admin-form-error">{settingsError}</p> : null}
         <label className="admin-checkbox-row">
           <input type="checkbox" checked={failoverEnabled} onChange={(event) => setFailoverEnabled(event.target.checked)} disabled={props.disabled} />
           <span>线路失败时切换到其它可用线路</span>
         </label>
-        <p className="admin-form-hint">更细的策略已经分布在“模型可用线路”里：线路顺序、分流比例和等待秒数。后续如要做健康探测、成本优先、成功率优先，可以在这里继续扩展。</p>
+        <div className="admin-form-row">
+          <label>
+            <span>预算窗口(小时)</span>
+            <input type="number" min="1" max="336" value={budgetWindowHours} onChange={(event) => setBudgetWindowHours(event.target.value)} disabled={props.disabled} />
+          </label>
+          <label>
+            <span>单线路窗口 probe 上限</span>
+            <input type="number" min="0" max="100" value={maxProbesPerRouteWindow} onChange={(event) => setMaxProbesPerRouteWindow(event.target.value)} disabled={props.disabled} />
+          </label>
+        </div>
+        <div className="admin-form-row">
+          <label>
+            <span>单次触发线路数</span>
+            <input type="number" min="0" max="20" value={maxProbesPerTrigger} onChange={(event) => setMaxProbesPerTrigger(event.target.value)} disabled={props.disabled} />
+          </label>
+          <label>
+            <span>恢复成功阈值</span>
+            <input type="number" min="1" max="20" value={observingSuccessThreshold} onChange={(event) => setObservingSuccessThreshold(event.target.value)} disabled={props.disabled} />
+          </label>
+        </div>
+        <label>
+          <span>观察探测间隔(分钟)</span>
+          <input type="number" min="1" max="1440" value={observingProbeDelayMinutes} onChange={(event) => setObservingProbeDelayMinutes(event.target.value)} disabled={props.disabled} />
+        </label>
+        <p className="admin-form-hint">把单线路窗口 probe 上限或单次触发线路数设为 0，可临时停止自动恢复探测；手动隔离和恢复主力仍然可用。</p>
         <button type="submit" disabled={props.disabled}>保存策略</button>
       </form>
     </div>

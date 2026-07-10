@@ -730,3 +730,98 @@ describe('gateway model binding health actions', () => {
     }
   })
 })
+
+describe('gateway strategy recovery probe settings', () => {
+  it('persists configurable recovery probe limits', async () => {
+    const settings = new Map<string, unknown>([
+      ['gateway_failover_enabled', true],
+      ['gateway_recovery_probe_settings', {
+        budgetWindowHours: 24,
+        maxProbesPerRouteWindow: 3,
+        maxProbesPerTrigger: 2,
+        observingSuccessThreshold: 2,
+        observingProbeDelayMinutes: 10,
+      }],
+    ])
+    const auditActions: string[] = []
+    const db = {
+      async query(text: string, values?: unknown[]) {
+        if (text.includes('FROM admin_sessions')) {
+          return {
+            rows: values?.[0] === 'admin_sess'
+              ? [{
+                  token: 'admin_sess',
+                  admin_user_id: 'admin_1',
+                  id: 'admin_1',
+                  email: 'admin@example.com',
+                  display_name: 'Admin',
+                  status: 'active',
+                }]
+              : [],
+          }
+        }
+        if (text.includes('FROM system_settings')) {
+          const key = values?.[0] ? String(values[0]) : text.includes('gateway_failover_enabled') ? 'gateway_failover_enabled' : ''
+          return { rows: key && settings.has(key) ? [{ value_json: settings.get(key) }] : [] }
+        }
+        if (text.includes('INSERT INTO system_settings')) {
+          if (values?.[0] === 'gateway_recovery_probe_settings') {
+            settings.set('gateway_recovery_probe_settings', JSON.parse(String(values[1])))
+          } else {
+            settings.set('gateway_failover_enabled', JSON.parse(String(values?.[0] ?? 'true')))
+          }
+          return { rows: [], rowCount: 1 }
+        }
+        if (text.includes('INSERT INTO admin_audit_logs')) {
+          auditActions.push(String(values?.[2] ?? ''))
+          return { rows: [], rowCount: 1 }
+        }
+        throw new Error(`Unhandled query: ${text}`)
+      },
+    } as unknown as Pool
+
+    const app = buildTestApp(db)
+    try {
+      const patchResponse = await app.inject({
+        method: 'PATCH',
+        url: '/api/admin/gateway-strategy',
+        headers: { Authorization: 'Bearer admin_sess' },
+        payload: {
+          failoverEnabled: true,
+          recoveryProbeSettings: {
+            budgetWindowHours: 12,
+            maxProbesPerRouteWindow: 1,
+            maxProbesPerTrigger: 1,
+            observingSuccessThreshold: 3,
+            observingProbeDelayMinutes: 30,
+          },
+        },
+      })
+
+      expect(patchResponse.statusCode).toBe(200)
+      expect(patchResponse.json().strategy.recoveryProbeSettings).toMatchObject({
+        budgetWindowHours: 12,
+        maxProbesPerRouteWindow: 1,
+        maxProbesPerTrigger: 1,
+        observingSuccessThreshold: 3,
+        observingProbeDelayMinutes: 30,
+      })
+      expect(auditActions).toContain('gateway_strategy_update')
+
+      const getResponse = await app.inject({
+        method: 'GET',
+        url: '/api/admin/gateway-strategy',
+        headers: { Authorization: 'Bearer admin_sess' },
+      })
+
+      expect(getResponse.statusCode).toBe(200)
+      expect(getResponse.json().strategies[0]).toMatchObject({
+        id: 'gateway-strategy',
+        maxProbesPerRouteWindow: 1,
+        observingProbeDelayMinutes: 30,
+      })
+    } finally {
+      await app.close()
+    }
+  })
+})
