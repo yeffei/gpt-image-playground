@@ -36,7 +36,7 @@
 }
 
 .admin-kicker {
-  color: #0f9f95;
+  color: var(--platform-accent-fill, #785cff);
   font-size: 12px;
   font-weight: 760;
   text-transform: uppercase;
@@ -87,7 +87,7 @@
 }
 
 .admin-login-form input:focus {
-  border-color: #0f9f95;
+  border-color: var(--platform-accent-fill, #785cff);
   box-shadow: 0 0 0 3px rgba(15, 159, 149, 0.12);
 }
 
@@ -96,7 +96,7 @@
   min-height: 44px;
   border: 0;
   border-radius: 6px;
-  background: #0f9f95;
+  background: var(--platform-accent-fill, #785cff);
   color: #fff;
   font-weight: 760;
 }
@@ -104,6 +104,66 @@
 .admin-login-form button:disabled {
   cursor: not-allowed;
   opacity: 0.62;
+}
+
+/* Commercial workspace pass: admin uses the same neutral platform language. */
+.admin-shell,
+.admin-login-shell {
+  background: var(--platform-bg, #f5f5f2);
+  color: var(--platform-ink, #111);
+  font-family: var(--font-ui-sans);
+}
+
+.admin-login-card,
+.admin-card,
+.admin-panel,
+.admin-table-card,
+.admin-section,
+.admin-form-card {
+  border-color: var(--platform-line, rgba(17, 17, 17, 0.06)) !important;
+  background: var(--platform-surface, #fff) !important;
+  box-shadow: var(--platform-shadow, 0 2px 12px rgba(17, 17, 17, 0.035)), var(--platform-inset, inset 0 1px 0 rgba(255, 255, 255, 0.9)) !important;
+}
+
+.admin-login-copy {
+  border-right: 1px solid var(--platform-line, rgba(17, 17, 17, 0.06));
+  background: var(--platform-control, #f3f2ef);
+  color: var(--platform-ink, #111);
+}
+
+.admin-kicker,
+.admin-shell a {
+  color: var(--platform-accent-deep, #5f49df);
+}
+
+.admin-login-copy p,
+.admin-section-head p {
+  color: var(--platform-muted, rgba(17, 17, 17, 0.52));
+}
+
+.admin-login-form input {
+  border-color: var(--platform-line-strong, rgba(17, 17, 17, 0.13));
+  background: var(--platform-surface, #fff);
+  color: var(--platform-ink, #111);
+}
+
+.admin-login-form input:focus {
+  border-color: rgba(123, 97, 255, 0.28);
+  box-shadow: 0 0 0 3px var(--platform-accent-soft, rgba(123, 97, 255, 0.12));
+}
+
+.admin-login-form button,
+.admin-logout,
+.admin-shell button {
+  font-family: var(--font-ui-sans);
+  font-weight: 600 !important;
+  letter-spacing: 0 !important;
+}
+
+.admin-login-form button,
+.admin-logout {
+  background: var(--platform-accent-fill, #785cff);
+  color: #fff;
 }
 
 .admin-form-error {
@@ -154,7 +214,7 @@
   width: 36px;
   height: 36px;
   border-radius: 8px;
-  background: linear-gradient(135deg, #152033, #0f9f95);
+  background: linear-gradient(135deg, #111111, var(--platform-accent-fill, #785cff));
 }
 
 .admin-brand strong,
@@ -199,9 +259,9 @@
 }
 
 .admin-nav button.is-active {
-  border-color: #c7eee9;
-  background: #eefbf9;
-  color: #0f766e;
+  border-color: rgba(123, 97, 255, 0.24);
+  background: rgba(123, 97, 255, 0.12);
+  color: #5f49df;
 }
 
 .admin-logout {
@@ -553,7 +613,7 @@
 }
 
 .admin-inline-workbench-switch button.is-active {
-  background: #0f766e;
+  background: #5f49df;
   color: #fff;
 }
 
@@ -744,7 +804,7 @@
 
 .admin-workflow-strip div.is-primary {
   border-color: #bdebe5;
-  background: #eefbf9;
+  background: rgba(123, 97, 255, 0.12);
 }
 
 .admin-workflow-strip span {
@@ -872,12 +932,12 @@
 }
 
 .admin-module-status.is-ready {
-  border-color: #c7eee9;
+  border-color: rgba(123, 97, 255, 0.24);
   background: #f2fcfa;
 }
 
 .admin-module-status.is-ready strong {
-  color: #0f766e;
+  color: #5f49df;
 }
 
 .admin-module-status.is-neutral {
@@ -1278,11 +1338,12 @@
 
 .admin-gateway-data-layout .admin-side-column {
   max-height: none;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .admin-gateway-data-layout .admin-side-column .admin-action-panel {
-  max-height: calc(100dvh - 96px);
+  max-height: none;
+  overflow: visible;
 }
 
 .admin-gateway-data-layout .admin-gateway-action-grid {
@@ -1605,7 +1666,7 @@
 
 .admin-copyable-button:hover {
   border-color: #9ccfc8;
-  color: #0f766e;
+  color: #5f49df;
 }
 
 .admin-copyable-icon {
@@ -1892,7 +1953,7 @@
 }
 
 .admin-table tr.is-selected td {
-  background: #eefbf9;
+  background: rgba(123, 97, 255, 0.12);
 }
 
 .admin-status-badge {
@@ -1929,11 +1990,11 @@
 
 .admin-link-button {
   min-height: 30px;
-  border: 1px solid #c7eee9;
+  border: 1px solid rgba(123, 97, 255, 0.24);
   border-radius: 5px;
-  background: #eefbf9;
+  background: rgba(123, 97, 255, 0.12);
   padding: 0 10px;
-  color: #0f766e;
+  color: #5f49df;
   font-size: 12px;
   font-weight: 760;
 }
@@ -1961,9 +2022,9 @@
 }
 
 .admin-tabs button.is-active {
-  border-color: #0f9f95;
-  background: #eefbf9;
-  color: #0f766e;
+  border-color: var(--platform-accent-fill, #785cff);
+  background: rgba(123, 97, 255, 0.12);
+  color: #5f49df;
 }
 
 .admin-summary-view,
@@ -2206,7 +2267,7 @@
 }
 
 .admin-template-visibility-head a {
-  color: #0f766e;
+  color: #5f49df;
   font-size: 12px;
   font-weight: 760;
   text-decoration: none;
@@ -2488,7 +2549,7 @@
 
 .admin-filter-grid input:focus,
 .admin-filter-grid select:focus {
-  border-color: #0f9f95;
+  border-color: var(--platform-accent-fill, #785cff);
   box-shadow: 0 0 0 3px rgba(15, 159, 149, 0.12);
 }
 
@@ -2513,8 +2574,8 @@
 }
 
 .admin-filter-actions button[type='submit'] {
-  border-color: #0f9f95;
-  background: #0f9f95;
+  border-color: var(--platform-accent-fill, #785cff);
+  background: var(--platform-accent-fill, #785cff);
   color: #fff;
 }
 
@@ -2683,11 +2744,11 @@
 }
 
 .admin-form-hint.is-strong {
-  border: 1px solid #c7eee9;
+  border: 1px solid rgba(123, 97, 255, 0.24);
   border-radius: 8px;
   background: #f0fdfa;
   padding: 8px 10px;
-  color: #0f766e;
+  color: #5f49df;
   font-weight: 700;
 }
 
@@ -2736,7 +2797,7 @@
   width: 22px;
   height: 22px;
   border-radius: 999px;
-  background: #0f766e;
+  background: #5f49df;
   color: #fff;
   font-size: 12px;
   font-weight: 800;
@@ -2774,9 +2835,9 @@
 }
 
 .admin-preset-group button:hover:not(:disabled) {
-  border-color: #0f9f95;
+  border-color: var(--platform-accent-fill, #785cff);
   background: #ecfdf9;
-  color: #0f766e;
+  color: #5f49df;
 }
 
 .admin-action-form label {
@@ -2818,7 +2879,7 @@
 .admin-action-form input:focus,
 .admin-action-form select:focus,
 .admin-action-form textarea:focus {
-  border-color: #0f9f95;
+  border-color: var(--platform-accent-fill, #785cff);
   box-shadow: 0 0 0 3px rgba(15, 159, 149, 0.12);
 }
 
@@ -2831,6 +2892,12 @@
   color: #fff;
   font-size: 13px;
   font-weight: 760;
+}
+
+.admin-action-button-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .admin-action-form-danger {
@@ -2932,6 +2999,7 @@
 }
 
 .admin-action-form button:disabled,
+.admin-action-button-row button:disabled,
 .admin-button-row button:disabled {
   cursor: not-allowed;
   opacity: 0.58;
@@ -2984,7 +3052,7 @@
 
 .admin-model-option-head small {
   flex: 0 0 auto;
-  color: #0f766e;
+  color: #5f49df;
   font-size: 12px;
   font-weight: 760;
 }
@@ -3008,14 +3076,14 @@
 
 .admin-action-form .admin-model-option-pill:hover:not(:disabled) {
   border-color: #9dded7;
-  background: #eefbf9;
-  color: #0f766e;
+  background: rgba(123, 97, 255, 0.12);
+  color: #5f49df;
 }
 
 .admin-action-form .admin-model-option-pill.is-selected {
-  border-color: #0f9f95;
+  border-color: var(--platform-accent-fill, #785cff);
   background: #e6faf7;
-  color: #0f766e;
+  color: #5f49df;
   box-shadow: inset 0 0 0 1px rgba(15, 159, 149, 0.14);
 }
 
@@ -3061,7 +3129,7 @@
 
 .admin-route-picker-head small {
   flex: 0 0 auto;
-  color: #0f766e;
+  color: #5f49df;
   font-size: 12px;
   font-weight: 760;
 }
@@ -3085,9 +3153,9 @@
 }
 
 .admin-route-option.is-selected {
-  border-color: #0f9f95;
+  border-color: var(--platform-accent-fill, #785cff);
   background: #e6faf7;
-  color: #0f766e;
+  color: #5f49df;
   box-shadow: inset 0 0 0 1px rgba(15, 159, 149, 0.14);
 }
 
@@ -3114,7 +3182,7 @@
 }
 
 .admin-route-option.is-selected .admin-route-option-name {
-  color: #0f766e;
+  color: #5f49df;
 }
 
 .admin-route-option.is-bound .admin-route-option-name {
@@ -3132,7 +3200,7 @@
 }
 
 .admin-route-option.is-selected small {
-  background: #0f9f95;
+  background: var(--platform-accent-fill, #785cff);
   color: #fff;
 }
 
@@ -3386,4 +3454,114 @@
   .admin-metric-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* Final commercial platform override for the admin surface. */
+.admin-shell,
+.admin-login-shell {
+  background: var(--platform-bg, #f5f5f2) !important;
+  color: var(--platform-ink, #111) !important;
+  font-family: var(--font-ui-sans) !important;
+}
+
+.admin-login-card,
+.admin-shell :where(section, article, aside, form, .admin-card, .admin-panel, .admin-table-card, .admin-section, .admin-form-card) {
+  border-color: var(--platform-line, rgba(17, 17, 17, 0.06)) !important;
+  background-color: var(--platform-surface, #fff) !important;
+  box-shadow: var(--platform-shadow, 0 2px 12px rgba(17, 17, 17, 0.035)), var(--platform-inset, inset 0 1px 0 rgba(255, 255, 255, 0.9)) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.admin-login-copy {
+  border-right: 1px solid var(--platform-line, rgba(17, 17, 17, 0.06)) !important;
+  background: var(--platform-control, #f3f2ef) !important;
+  color: var(--platform-ink, #111) !important;
+}
+
+.admin-shell :where(h1, h2, h3, strong),
+.admin-login-copy h1 {
+  color: var(--platform-ink, #111) !important;
+  letter-spacing: 0 !important;
+}
+
+.admin-shell :where(p, small, label span),
+.admin-login-copy p {
+  color: var(--platform-muted, rgba(17, 17, 17, 0.52)) !important;
+}
+
+.admin-kicker,
+.admin-shell a {
+  color: var(--platform-accent-deep, #5f49df) !important;
+}
+
+.admin-shell :where(input, textarea, select) {
+  border-color: var(--platform-line-strong, rgba(17, 17, 17, 0.13)) !important;
+  background: var(--platform-surface, #fff) !important;
+  color: var(--platform-ink, #111) !important;
+  box-shadow: none !important;
+}
+
+.admin-shell :where(input:focus, textarea:focus, select:focus) {
+  border-color: rgba(123, 97, 255, 0.28) !important;
+  box-shadow: 0 0 0 3px var(--platform-accent-soft, rgba(123, 97, 255, 0.12)) !important;
+  outline: none !important;
+}
+
+.admin-shell :where(button),
+.admin-login-form button,
+.admin-logout {
+  font-family: var(--font-ui-sans) !important;
+  font-weight: 600 !important;
+  letter-spacing: 0 !important;
+}
+
+.admin-login-form button,
+.admin-logout,
+.admin-shell :where(.admin-primary, .admin-submit, .is-primary) {
+  border-color: var(--platform-accent-fill, #785cff) !important;
+  background: var(--platform-accent-fill, #785cff) !important;
+  color: #fff !important;
+  box-shadow: 0 14px 30px rgba(123, 97, 255, 0.18) !important;
+}
+
+.admin-shell :where(
+  .admin-tabs button,
+  .admin-filter-chip,
+  .admin-route-option,
+  .admin-home-action-card button,
+  .admin-table-action,
+  .admin-secondary,
+  .admin-login-form input
+) {
+  border-color: var(--platform-line-strong, rgba(17, 17, 17, 0.13)) !important;
+  background: var(--platform-control, #f3f2ef) !important;
+  color: var(--platform-ink, #111) !important;
+  box-shadow: none !important;
+}
+
+.admin-shell :where(
+  .admin-tabs button.active,
+  .admin-filter-chip.is-active,
+  .admin-route-option.is-selected,
+  .admin-route-option.is-bound,
+  .admin-badge.is-success,
+  .admin-badge.is-active
+) {
+  border-color: rgba(123, 97, 255, 0.24) !important;
+  background: var(--platform-accent-soft, rgba(123, 97, 255, 0.12)) !important;
+  color: var(--platform-accent-deep, #5f49df) !important;
+  box-shadow: none !important;
+}
+
+.admin-shell :where(.admin-danger, .admin-badge.is-danger, .admin-badge.is-failed) {
+  border-color: rgba(180, 35, 24, 0.16) !important;
+  background: rgba(180, 35, 24, 0.08) !important;
+  color: var(--platform-danger, #b42318) !important;
+}
+
+.admin-shell :where(.admin-warning, .admin-badge.is-warning, .admin-badge.is-pending) {
+  border-color: rgba(161, 92, 7, 0.18) !important;
+  background: rgba(161, 92, 7, 0.08) !important;
+  color: var(--platform-warning, #a15c07) !important;
 }

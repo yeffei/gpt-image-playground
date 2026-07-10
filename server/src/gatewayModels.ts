@@ -38,6 +38,13 @@ interface GatewayRouteRow {
   last_failure_kind?: string | null
   last_error?: string | null
   cooldown_until?: string | null
+  health_state?: string | null
+  next_probe_at?: string | null
+  probe_failure_count?: number | null
+  score?: number | null
+  observing_success_count?: number | null
+  last_probe_at?: string | null
+  last_probe_result?: unknown
 }
 
 type ProbeRouteRow = GatewayRouteRow & {
@@ -111,7 +118,16 @@ interface ModelRouteBindingRow {
   last_failure_kind?: string | null
   last_error?: string | null
   cooldown_until?: string | null
+  health_state?: string | null
+  next_probe_at?: string | null
+  probe_failure_count?: number | null
+  score?: number | null
+  observing_success_count?: number | null
+  last_probe_at?: string | null
+  last_probe_result?: unknown
 }
+
+type BindingHealthAction = 'schedule_probe' | 'force_observing' | 'isolate' | 'restore_primary'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -119,6 +135,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function nowIso() {
   return new Date().toISOString()
+}
+
+function addMinutesIso(value: string, minutes: number) {
+  return new Date(Date.parse(value) + minutes * 60 * 1000).toISOString()
 }
 
 function createId(prefix: string) {
@@ -337,7 +357,20 @@ function serializeBinding(row: ModelRouteBindingRow) {
   const cooldownActive = isFutureIso(row.cooldown_until)
   const routeEnabled = row.route_enabled ?? true
   const effectiveEnabled = row.enabled && routeEnabled
-  const healthStatus = !effectiveEnabled ? 'disabled' : cooldownActive ? 'cooling' : consecutiveFailures > 0 ? 'degraded' : 'healthy'
+  const healthState = row.health_state ?? (cooldownActive ? 'cooling' : consecutiveFailures > 0 ? 'observing' : 'primary')
+  const healthStatus = !effectiveEnabled
+    ? 'disabled'
+    : healthState === 'isolated'
+      ? 'isolated'
+      : healthState === 'probing'
+        ? 'probing'
+        : healthState === 'cooling' || cooldownActive
+          ? 'cooling'
+          : healthState === 'observing'
+            ? 'observing'
+            : consecutiveFailures > 0
+              ? 'degraded'
+              : 'healthy'
   return {
     id: row.id,
     modelSkuId: row.model_sku_id,
@@ -345,6 +378,7 @@ function serializeBinding(row: ModelRouteBindingRow) {
     modelDisplayName: row.model_display_name,
     routeId: row.route_id,
     routeName: row.route_name,
+    modelAlias: row.upstream_model ?? null,
     upstreamModel: row.upstream_model ?? null,
     priority: row.priority,
     weight: row.weight,
@@ -353,9 +387,16 @@ function serializeBinding(row: ModelRouteBindingRow) {
     bindingEnabled: row.enabled,
     routeEnabled,
     healthStatus,
+    healthState,
     cooldownActive,
     cooldownUntil: row.cooldown_until ?? null,
     restoresAt: cooldownActive ? row.cooldown_until ?? null : null,
+    nextProbeAt: row.next_probe_at ?? null,
+    score: Number(row.score ?? 80),
+    probeFailureCount: Number(row.probe_failure_count ?? 0),
+    observingSuccessCount: Number(row.observing_success_count ?? 0),
+    lastProbeAt: row.last_probe_at ?? null,
+    lastProbeResult: row.last_probe_result ?? null,
     consecutiveFailures,
     lastSuccessAt: row.last_success_at ?? null,
     lastFailureAt: row.last_failure_at ?? null,
@@ -481,7 +522,14 @@ async function getBinding(db: Db, id: string) {
       b.timeout_seconds, b.enabled, r.enabled AS route_enabled, b.created_at::text, b.updated_at::text,
       COALESCE(h.consecutive_failures, 0) AS consecutive_failures,
       h.last_success_at::text, h.last_failure_at::text, h.last_failure_kind, h.last_error,
-      h.cooldown_until::text
+      h.cooldown_until::text,
+      COALESCE(h.state, 'primary') AS health_state,
+      h.next_probe_at::text,
+      COALESCE(h.probe_failure_count, 0) AS probe_failure_count,
+      COALESCE(h.score, 80) AS score,
+      COALESCE(h.observing_success_count, 0) AS observing_success_count,
+      h.last_probe_at::text,
+      h.last_probe_result
     FROM model_route_bindings b
     JOIN model_skus m ON m.id = b.model_sku_id
     JOIN gateway_routes r ON r.id = b.route_id
@@ -489,6 +537,127 @@ async function getBinding(db: Db, id: string) {
     WHERE b.id = $1
     LIMIT 1
   `, [id])).rows[0]
+}
+
+function normalizeBindingHealthAction(value: unknown): BindingHealthAction {
+  const action = typeof value === 'string' ? value.trim() : ''
+  if (
+    action === 'schedule_probe'
+    || action === 'force_observing'
+    || action === 'isolate'
+    || action === 'restore_primary'
+  ) {
+    return action
+  }
+  throw new ApiError(400, 'invalid_health_action', '不支持的线路健康操作')
+}
+
+async function applyBindingHealthAction(db: Db, input: {
+  binding: ModelRouteBindingRow
+  action: BindingHealthAction
+}) {
+  const updatedAt = nowIso()
+  const probeResult = {
+    manualAction: input.action,
+    capturedAt: updatedAt,
+  }
+  const currentScore = Number(input.binding.score ?? 80)
+  const currentProbeFailureCount = Number(input.binding.probe_failure_count ?? 0)
+  const currentConsecutiveFailures = Number(input.binding.consecutive_failures ?? 0)
+  const paramsByAction: Record<BindingHealthAction, {
+    consecutiveFailures: number
+    lastFailureKind: string | null
+    lastError: string | null
+    cooldownUntil: string | null
+    state: string
+    nextProbeAt: string | null
+    probeFailureCount: number
+    score: number
+    observingSuccessCount: number
+  }> = {
+    schedule_probe: {
+      consecutiveFailures: Math.max(1, currentConsecutiveFailures),
+      lastFailureKind: input.binding.last_failure_kind ?? 'manual_probe_requested',
+      lastError: input.binding.last_error ?? '管理员安排恢复探测',
+      cooldownUntil: updatedAt,
+      state: 'cooling',
+      nextProbeAt: updatedAt,
+      probeFailureCount: currentProbeFailureCount,
+      score: currentScore,
+      observingSuccessCount: 0,
+    },
+    force_observing: {
+      consecutiveFailures: 0,
+      lastFailureKind: null,
+      lastError: null,
+      cooldownUntil: null,
+      state: 'observing',
+      nextProbeAt: addMinutesIso(updatedAt, 10),
+      probeFailureCount: 0,
+      score: Math.max(60, currentScore),
+      observingSuccessCount: 1,
+    },
+    isolate: {
+      consecutiveFailures: Math.max(1, currentConsecutiveFailures),
+      lastFailureKind: input.binding.last_failure_kind ?? 'manual_isolated',
+      lastError: input.binding.last_error ?? '管理员隔离线路',
+      cooldownUntil: null,
+      state: 'isolated',
+      nextProbeAt: null,
+      probeFailureCount: currentProbeFailureCount,
+      score: Math.min(10, currentScore),
+      observingSuccessCount: 0,
+    },
+    restore_primary: {
+      consecutiveFailures: 0,
+      lastFailureKind: null,
+      lastError: null,
+      cooldownUntil: null,
+      state: 'primary',
+      nextProbeAt: null,
+      probeFailureCount: 0,
+      score: Math.max(80, currentScore),
+      observingSuccessCount: 0,
+    },
+  }
+  const next = paramsByAction[input.action]
+
+  await db.query(`
+    INSERT INTO gateway_route_health (
+      route_id, model_sku_id, consecutive_failures, last_success_at, last_failure_at,
+      last_failure_kind, last_error, cooldown_until, state, next_probe_at,
+      probe_failure_count, score, observing_success_count, last_probe_at,
+      last_probe_result, updated_at
+    ) VALUES ($1, $2, $3, NULL, $4, $5, $6, $7::timestamptz, $8, $9::timestamptz, $10, $11, $12, $4, $13::jsonb, $4)
+    ON CONFLICT (route_id, model_sku_id) DO UPDATE SET
+      consecutive_failures = EXCLUDED.consecutive_failures,
+      last_failure_at = CASE WHEN EXCLUDED.last_failure_kind IS NULL THEN gateway_route_health.last_failure_at ELSE EXCLUDED.last_failure_at END,
+      last_failure_kind = EXCLUDED.last_failure_kind,
+      last_error = EXCLUDED.last_error,
+      cooldown_until = EXCLUDED.cooldown_until,
+      state = EXCLUDED.state,
+      next_probe_at = EXCLUDED.next_probe_at,
+      probe_failure_count = EXCLUDED.probe_failure_count,
+      score = EXCLUDED.score,
+      observing_success_count = EXCLUDED.observing_success_count,
+      last_probe_at = EXCLUDED.last_probe_at,
+      last_probe_result = EXCLUDED.last_probe_result,
+      updated_at = EXCLUDED.updated_at
+  `, [
+    input.binding.route_id,
+    input.binding.model_sku_id,
+    next.consecutiveFailures,
+    updatedAt,
+    next.lastFailureKind,
+    next.lastError,
+    next.cooldownUntil,
+    next.state,
+    next.nextProbeAt,
+    next.probeFailureCount,
+    next.score,
+    next.observingSuccessCount,
+    JSON.stringify(probeResult),
+  ])
 }
 
 export function registerGatewayModelRoutes(app: FastifyInstance, db: Db) {
@@ -915,7 +1084,14 @@ export function registerGatewayModelRoutes(app: FastifyInstance, db: Db) {
           b.timeout_seconds, b.enabled, r.enabled AS route_enabled, b.created_at::text, b.updated_at::text,
           COALESCE(h.consecutive_failures, 0) AS consecutive_failures,
           h.last_success_at::text, h.last_failure_at::text, h.last_failure_kind, h.last_error,
-          h.cooldown_until::text
+          h.cooldown_until::text,
+          COALESCE(h.state, 'primary') AS health_state,
+          h.next_probe_at::text,
+          COALESCE(h.probe_failure_count, 0) AS probe_failure_count,
+          COALESCE(h.score, 80) AS score,
+          COALESCE(h.observing_success_count, 0) AS observing_success_count,
+          h.last_probe_at::text,
+          h.last_probe_result
         FROM model_route_bindings b
         JOIN model_skus m ON m.id = b.model_sku_id
         JOIN gateway_routes r ON r.id = b.route_id
@@ -967,7 +1143,7 @@ export function registerGatewayModelRoutes(app: FastifyInstance, db: Db) {
         createId('binding'),
         normalizeText(payload.modelSkuId, 'model_sku_id', 120),
         normalizeText(payload.routeId, 'route_id', 120),
-        normalizeOptionalText(payload.upstreamModel, 160),
+        normalizeOptionalText(payload.modelAlias ?? payload.upstreamModel, 160),
         normalizePositiveInteger(payload.priority, 100, { min: 0, max: 10_000 }),
         normalizePositiveInteger(payload.weight, 1, { min: 1, max: 10_000 }),
         normalizePositiveInteger(payload.timeoutSeconds, 60, { min: 1, max: 600 }),
@@ -1004,7 +1180,9 @@ export function registerGatewayModelRoutes(app: FastifyInstance, db: Db) {
           enabled = $5, updated_at = $6
         WHERE id = $7
       `, [
-        payload.upstreamModel === undefined ? before.upstream_model : normalizeOptionalText(payload.upstreamModel, 160),
+        payload.modelAlias === undefined && payload.upstreamModel === undefined
+          ? before.upstream_model
+          : normalizeOptionalText(payload.modelAlias ?? payload.upstreamModel, 160),
         normalizePositiveInteger(payload.priority, before.priority, { min: 0, max: 10_000 }),
         normalizePositiveInteger(payload.weight, before.weight, { min: 1, max: 10_000 }),
         normalizePositiveInteger(payload.timeoutSeconds, before.timeout_seconds, { min: 1, max: 600 }),
@@ -1022,6 +1200,32 @@ export function registerGatewayModelRoutes(app: FastifyInstance, db: Db) {
         afterSnapshot: serializeBinding(after),
       })
       return reply.send({ ok: true, binding: serializeBinding(after) })
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
+  app.post('/api/admin/model-route-bindings/:id/health-state', async (request, reply) => {
+    try {
+      const admin = await requireAdminSession(db, request.headers.authorization)
+      const params = isRecord(request.params) ? request.params : {}
+      const id = typeof params.id === 'string' ? params.id.trim() : ''
+      if (!id) throw new ApiError(400, 'missing_binding_id', '缺少可用线路编号')
+      const before = await getBinding(db, id)
+      if (!before) throw new ApiError(404, 'binding_not_found', '绑定不存在')
+      const payload = isRecord(request.body) ? request.body : {}
+      const action = normalizeBindingHealthAction(payload.action)
+      await applyBindingHealthAction(db, { binding: before, action })
+      const after = await getBinding(db, id)
+      await writeAuditLog(db, {
+        adminUserId: admin.admin_user_id,
+        action: `model_route_binding_health_${action}`,
+        targetType: 'model_route_binding',
+        targetId: id,
+        beforeSnapshot: serializeBinding(before),
+        afterSnapshot: serializeBinding(after),
+      })
+      return reply.send({ ok: true, binding: serializeBinding(after), action })
     } catch (error) {
       return sendError(reply, error)
     }

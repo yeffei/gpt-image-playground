@@ -10,16 +10,38 @@ import { requireUserSession } from './userAuth.js'
 import { buildGeminiGenerateContentBody, buildGeminiModelPath, parseGeminiNativeImagePayload } from './geminiNativeImageApi.js'
 import { createImageDeliveryPlan, type ImageDeliveryPlan } from './imageDeliveryPlan.js'
 import { applyDeliveryPlanToImage, createSharpResizeExecutor } from './imageDeliveryProcessor.js'
+import {
+  getBaseUpstreamModelCandidates,
+  getOrderedUpstreamModelCandidates,
+  prioritizeSizeSpecificModelAliases as orderSizeSpecificModelAliases,
+} from './gatewayModelAlias.js'
+import {
+  extractImagesFromPayload,
+  extractImagesFromResponse,
+  extractImagesFromEventStream as readImagesFromEventStream,
+  UpstreamAsyncTaskError,
+  type UpstreamImageExtractionOptions,
+} from './upstreamImageResponse.js'
 
 const DEFAULT_UPSTREAM_MODEL = 'gpt-image-2'
 const MAX_OUTPUT_COUNT = 4
 const MAX_OUTPUT_SLOT_RETRY_ROUNDS = 2
+const MAX_PARALLEL_OUTPUT_SLOTS = 4
+const DEFAULT_ROUTE_PARALLELISM = 2
+const MAX_ROUTE_PARALLELISM = 3
 const UPSTREAM_OUTPUT_COUNT_PER_REQUEST = 1
+const DEFAULT_ROUTE_HEALTH_SCORE = 80
+const MAX_ROUTE_HEALTH_SCORE = 100
+const MIN_ROUTE_HEALTH_SCORE = 0
+const OBSERVING_SUCCESS_THRESHOLD = 2
+const OBSERVING_PROBE_DELAY_SECONDS = 10 * 60
+const MAX_RECOVERY_PROBES_PER_TRIGGER = 2
 const TASK_ABORT_REASON_CANCELLED = 'task_cancelled'
 const GPT_IMAGE_2_SUPPORTED_SIZES = ['*']
 export const LIBRARY_ACTIVE_OUTPUT_LIMIT = 100
 export const LIBRARY_TRASH_RETENTION_DAYS = 7
 const activeGenerationTaskControllers = new Map<string, AbortController>()
+const activeRouteRecoveryProbes = new Set<string>()
 
 export type TaskParams = {
   size?: string
@@ -91,6 +113,13 @@ type RuntimeRouteRow = {
   timeout_seconds: number
   consecutive_failures: number
   cooldown_until?: string | null
+  state?: RouteHealthState | null
+  next_probe_at?: string | null
+  probe_failure_count?: number | null
+  score?: number | null
+  observing_success_count?: number | null
+  last_probe_at?: string | null
+  last_probe_result?: unknown
 }
 
 type BillingReservation = {
@@ -122,14 +151,36 @@ type PartialGenerationInfo = {
   partialFailureMessage?: string
 }
 
+type GeneratedOutputSlot = {
+  image: string
+  revisedPrompt?: string
+  rawImageUrl?: string
+  routeId: string
+  upstreamModel: string
+  actualParams?: Record<string, unknown>
+}
+
+type OutputSlotAttemptResult =
+  | {
+      success: true
+      output: GeneratedOutputSlot
+    }
+  | {
+      success: false
+      lastError: unknown
+      shouldStopGeneration?: boolean
+    }
+
 type SizeTier = '1K' | '2K' | '4K'
 type BillingQuality = 'auto'
+type RouteHealthState = 'primary' | 'observing' | 'cooling' | 'probing' | 'isolated'
 type GatewayFailureKind =
   | 'no_route'
   | 'route_exhausted'
   | 'upstream_timeout'
   | 'upstream_rate_limited'
   | 'upstream_server_error'
+  | 'upstream_async_queued'
   | 'upstream_bad_request'
   | 'upstream_auth_error'
   | 'content_policy_violation'
@@ -272,14 +323,12 @@ function getUpstreamModelForRoute(route: RuntimeRouteRow) {
 }
 
 export function getUpstreamModelCandidatesForRoute(route: Pick<RuntimeRouteRow, 'upstream_model' | 'default_upstream_model' | 'model_name'>) {
-  return Array.from(new Set([
-    route.upstream_model,
-    route.default_upstream_model,
-    route.model_name,
-    DEFAULT_UPSTREAM_MODEL,
-  ]
-    .map((value) => typeof value === 'string' ? value.trim() : '')
-    .filter(Boolean)))
+  return getBaseUpstreamModelCandidates({
+    bindingModelAlias: route.upstream_model,
+    routeDefaultModel: route.default_upstream_model,
+    platformModel: route.model_name,
+    systemDefaultModel: DEFAULT_UPSTREAM_MODEL,
+  })
 }
 
 export function extractRequiredModelAlias(error: unknown) {
@@ -289,24 +338,8 @@ export function extractRequiredModelAlias(error: unknown) {
   return match?.[1]?.trim() || ''
 }
 
-function getSizeSpecificModelAlias(model: string, size?: string | null, options: { allowRelayAlias?: boolean } = {}) {
-  if (!options.allowRelayAlias) return ''
-  const normalizedModel = model.trim().toLowerCase()
-  if (normalizedModel !== 'gpt-image-2') return ''
-  const longestEdge = parseRequestedLongestEdge(size)
-  if (longestEdge >= 3840) return 'gpt-image-2-4k'
-  if (longestEdge >= 2560) return 'gpt-image-2-2k'
-  return ''
-}
-
 export function prioritizeSizeSpecificModelAliases(models: string[], size?: string | null, options: { allowRelayAlias?: boolean } = {}) {
-  const output: string[] = []
-  for (const model of models) {
-    const alias = getSizeSpecificModelAlias(model, size, options)
-    if (alias && !output.includes(alias)) output.push(alias)
-    if (model && !output.includes(model)) output.push(model)
-  }
-  return output
+  return orderSizeSpecificModelAliases(models, size, options)
 }
 
 function normalizeRouteMaxSupportedLongEdge(route: RuntimeRouteRow) {
@@ -853,53 +886,12 @@ async function readGatewayError(response: Response) {
   }
 }
 
-function normalizeBase64Image(value: string, fallbackMime: string) {
-  return value.startsWith('data:') ? value : `data:${fallbackMime};base64,${value}`
+export async function extractImages(payload: unknown, fallbackMime: string) {
+  return await extractImagesFromPayload(payload, fallbackMime)
 }
 
-async function fetchImageAsDataUrl(url: string, fallbackMime: string) {
-  const response = await fetch(url)
-  if (!response.ok) throw new Error(`图片链接下载失败：HTTP ${response.status}`)
-  const blob = await response.blob()
-  const bytes = Buffer.from(await blob.arrayBuffer())
-  return `data:${blob.type || fallbackMime};base64,${bytes.toString('base64')}`
-}
-
-async function extractImages(payload: unknown, fallbackMime: string) {
-  const data = isRecord(payload) && Array.isArray(payload.data) ? payload.data : []
-  const images: string[] = []
-  const revisedPrompts: Array<string | undefined> = []
-  const rawImageUrls: string[] = []
-
-  for (const item of data) {
-    if (!isRecord(item)) continue
-    const b64 = typeof item.b64_json === 'string' ? item.b64_json : ''
-    const url = typeof item.url === 'string' ? item.url : ''
-    if (b64) {
-      images.push(normalizeBase64Image(b64, fallbackMime))
-    } else if (url.startsWith('http://') || url.startsWith('https://')) {
-      rawImageUrls.push(url)
-      images.push(await fetchImageAsDataUrl(url, fallbackMime))
-    } else if (url.startsWith('data:')) {
-      images.push(url)
-    }
-    revisedPrompts.push(typeof item.revised_prompt === 'string' ? item.revised_prompt : undefined)
-  }
-
-  if (!images.length) throw new Error('接口没有返回可识别的图片数据')
-  return {
-    images,
-    revisedPrompts,
-    rawImageUrls,
-    actualParams: isRecord(payload) ? {
-      size: typeof payload.size === 'string' ? payload.size : undefined,
-      quality: typeof payload.quality === 'string' ? payload.quality : undefined,
-      output_format: typeof payload.output_format === 'string' ? payload.output_format : undefined,
-      output_compression: typeof payload.output_compression === 'number' ? payload.output_compression : undefined,
-      moderation: typeof payload.moderation === 'string' ? payload.moderation : undefined,
-      n: typeof payload.n === 'number' ? payload.n : images.length,
-    } : { n: images.length },
-  }
+export async function extractImagesFromEventStream(response: Response, fallbackMime: string) {
+  return await readImagesFromEventStream(response, fallbackMime)
 }
 
 function serializePublicModel(row: ModelRow, routeIds: string[]) {
@@ -967,15 +959,30 @@ async function loadRoutesForModel(db: Db, modelSkuId: string) {
       r.compatibility_strategy,
       r.default_upstream_model, r.is_official, r.max_supported_long_edge, b.upstream_model, b.priority, b.weight, b.timeout_seconds,
       COALESCE(h.consecutive_failures, 0) AS consecutive_failures,
-      h.cooldown_until::text
+      h.cooldown_until::text,
+      COALESCE(h.state, 'primary') AS state,
+      h.next_probe_at::text,
+      COALESCE(h.probe_failure_count, 0) AS probe_failure_count,
+      COALESCE(h.score, ${DEFAULT_ROUTE_HEALTH_SCORE}) AS score,
+      COALESCE(h.observing_success_count, 0) AS observing_success_count,
+      h.last_probe_at::text,
+      h.last_probe_result
     FROM model_route_bindings b
     JOIN gateway_routes r ON r.id = b.route_id
     JOIN model_skus m ON m.id = b.model_sku_id
     LEFT JOIN gateway_route_health h ON h.route_id = r.id AND h.model_sku_id = b.model_sku_id
     WHERE b.model_sku_id = $1 AND b.enabled = true AND r.enabled = true AND m.enabled = true
     ORDER BY
+      CASE COALESCE(h.state, 'primary')
+        WHEN 'primary' THEN 0
+        WHEN 'observing' THEN 1
+        WHEN 'cooling' THEN 2
+        WHEN 'probing' THEN 3
+        ELSE 4
+      END ASC,
       CASE WHEN h.cooldown_until IS NOT NULL AND h.cooldown_until > now() THEN 1 ELSE 0 END ASC,
       b.priority ASC,
+      COALESCE(h.score, ${DEFAULT_ROUTE_HEALTH_SCORE}) DESC,
       COALESCE(h.consecutive_failures, 0) ASC,
       b.weight DESC,
       b.created_at ASC
@@ -1003,8 +1010,26 @@ export function filterRoutesForRequestedSize(routes: RuntimeRouteRow[], requeste
   })
 }
 
+function normalizeRouteHealthState(route: Pick<RuntimeRouteRow, 'state' | 'cooldown_until' | 'consecutive_failures'>, now = new Date()): RouteHealthState {
+  if (route.state === 'isolated' || route.state === 'probing' || route.state === 'observing' || route.state === 'cooling') {
+    return route.state
+  }
+  if (route.cooldown_until && new Date(route.cooldown_until).getTime() > now.getTime()) return 'cooling'
+  if (route.consecutive_failures > 0) return 'observing'
+  return 'primary'
+}
+
 function isRouteCoolingDown(route: RuntimeRouteRow, now = new Date()) {
   return route.cooldown_until ? new Date(route.cooldown_until).getTime() > now.getTime() : false
+}
+
+function isRouteEligibleForUserTraffic(route: RuntimeRouteRow, now = new Date()) {
+  const state = normalizeRouteHealthState(route, now)
+  return (state === 'primary' || state === 'observing') && !isRouteCoolingDown(route, now)
+}
+
+function selectRoutesForUserTraffic(routes: RuntimeRouteRow[], now = new Date()) {
+  return routes.filter((route) => isRouteEligibleForUserTraffic(route, now))
 }
 
 function getRouteCooldownTimestamp(route: RuntimeRouteRow) {
@@ -1015,13 +1040,48 @@ function getRouteCooldownTimestamp(route: RuntimeRouteRow) {
 
 function isRecoveredRouteProbeCandidate(route: RuntimeRouteRow, now: Date) {
   const cooldownTimestamp = getRouteCooldownTimestamp(route)
-  return Boolean(cooldownTimestamp && cooldownTimestamp <= now.getTime() && route.consecutive_failures > 0)
+  return normalizeRouteHealthState(route, now) === 'observing'
+    || Boolean(cooldownTimestamp && cooldownTimestamp <= now.getTime() && route.consecutive_failures > 0)
+}
+
+function getRouteParallelismLimit(route: Pick<RuntimeRouteRow, 'weight'>) {
+  const weightedLimit = Number.isFinite(route.weight) ? Math.trunc(route.weight) : DEFAULT_ROUTE_PARALLELISM
+  return Math.min(MAX_ROUTE_PARALLELISM, Math.max(DEFAULT_ROUTE_PARALLELISM, weightedLimit))
+}
+
+function getRouteUsage(routeUsage: Map<string, number> | undefined, routeId: string) {
+  return Math.max(0, routeUsage?.get(routeId) ?? 0)
+}
+
+function hasRouteCapacity(route: RuntimeRouteRow, routeUsage?: Map<string, number>) {
+  return getRouteUsage(routeUsage, route.route_id) < getRouteParallelismLimit(route)
+}
+
+function claimRouteCapacity(route: RuntimeRouteRow, routeUsage: Map<string, number>) {
+  if (!hasRouteCapacity(route, routeUsage)) return null
+  routeUsage.set(route.route_id, getRouteUsage(routeUsage, route.route_id) + 1)
+  return () => {
+    const nextUsage = getRouteUsage(routeUsage, route.route_id) - 1
+    if (nextUsage > 0) {
+      routeUsage.set(route.route_id, nextUsage)
+    } else {
+      routeUsage.delete(route.route_id)
+    }
+  }
+}
+
+export function getOutputSlotConcurrency(routes: RuntimeRouteRow[], requestedOutputCount: number, now = new Date()) {
+  const normalizedOutputCount = Math.max(1, Math.min(MAX_OUTPUT_COUNT, Math.trunc(requestedOutputCount) || 1))
+  const capacityRoutes = routes.filter((route) => isRouteEligibleForUserTraffic(route, now))
+  const routeCapacity = capacityRoutes.reduce((total, route) => total + getRouteParallelismLimit(route), 0)
+  return Math.max(1, Math.min(normalizedOutputCount, MAX_PARALLEL_OUTPUT_SLOTS, routeCapacity || 1))
 }
 
 function rotateRoutesByWeight(routes: RuntimeRouteRow[], slotIndex: number) {
   if (routes.length <= 1) return routes
   const sorted = [...routes].sort((left, right) => (
-    right.weight - left.weight
+    (right.score ?? DEFAULT_ROUTE_HEALTH_SCORE) - (left.score ?? DEFAULT_ROUTE_HEALTH_SCORE)
+    || right.weight - left.weight
     || left.route_id.localeCompare(right.route_id)
   ))
   const totalWeight = sorted.reduce((total, route) => total + Math.max(1, route.weight), 0)
@@ -1037,10 +1097,18 @@ function rotateRoutesByWeight(routes: RuntimeRouteRow[], slotIndex: number) {
   return [...sorted.slice(startIndex), ...sorted.slice(0, startIndex)]
 }
 
-function orderRoutesForSlot(routes: RuntimeRouteRow[], slotIndex: number, now: Date, skippedRouteIds: Set<string>) {
-  const candidates = routes.filter((route) => !skippedRouteIds.has(route.route_id))
-  const activeRoutes = candidates.filter((route) => !isRouteCoolingDown(route, now))
-  const routesToRank = activeRoutes.length ? activeRoutes : candidates
+export function orderRoutesForSlot(
+  routes: RuntimeRouteRow[],
+  slotIndex: number,
+  now: Date,
+  skippedRouteIds: Set<string>,
+  routeUsage?: Map<string, number>,
+) {
+  const candidates = routes
+    .filter((route) => !skippedRouteIds.has(route.route_id))
+    .filter((route) => hasRouteCapacity(route, routeUsage))
+    .filter((route) => isRouteEligibleForUserTraffic(route, now))
+  const routesToRank = candidates
   const groups = new Map<number, RuntimeRouteRow[]>()
   for (const route of routesToRank) {
     const group = groups.get(route.priority) ?? []
@@ -1053,10 +1121,16 @@ function orderRoutesForSlot(routes: RuntimeRouteRow[], slotIndex: number, now: D
       const recovered = group
         .filter((route) => isRecoveredRouteProbeCandidate(route, now))
         .sort((left, right) => (
-          getRouteCooldownTimestamp(left) - getRouteCooldownTimestamp(right)
+          (right.score ?? DEFAULT_ROUTE_HEALTH_SCORE) - (left.score ?? DEFAULT_ROUTE_HEALTH_SCORE)
+          || getRouteCooldownTimestamp(left) - getRouteCooldownTimestamp(right)
           || right.consecutive_failures - left.consecutive_failures
         ))
-      const normal = group.filter((route) => !isRecoveredRouteProbeCandidate(route, now))
+      const normal = group
+        .filter((route) => !isRecoveredRouteProbeCandidate(route, now))
+        .sort((left, right) => (
+          (right.score ?? DEFAULT_ROUTE_HEALTH_SCORE) - (left.score ?? DEFAULT_ROUTE_HEALTH_SCORE)
+          || left.consecutive_failures - right.consecutive_failures
+        ))
       return [...recovered, ...rotateRoutesByWeight(normal, slotIndex)]
     })
 }
@@ -1095,10 +1169,33 @@ function getCooldownSeconds(consecutiveFailures: number, error: unknown) {
   const failureKind = classifyGatewayFailure(error)
   if (!shouldAffectRouteHealth(error)) return 0
   if (failureKind === 'upstream_bad_request') return 0
-  if (failureKind === 'route_exhausted' || failureKind === 'upstream_auth_error' || failureKind === 'unsupported_model') return 30 * 60
+  if (failureKind === 'route_exhausted' || failureKind === 'upstream_auth_error' || failureKind === 'unsupported_model') {
+    const steps = [30 * 60, 60 * 60, 2 * 60 * 60, 6 * 60 * 60]
+    return steps[Math.min(Math.max(consecutiveFailures - 1, 0), steps.length - 1)]
+  }
   if (failureKind === 'upstream_rate_limited') return 15 * 60
   const steps = [60, 5 * 60, 15 * 60, 30 * 60]
   return steps[Math.min(Math.max(consecutiveFailures - 1, 0), steps.length - 1)]
+}
+
+function clampRouteScore(score: number) {
+  if (!Number.isFinite(score)) return DEFAULT_ROUTE_HEALTH_SCORE
+  return Math.max(MIN_ROUTE_HEALTH_SCORE, Math.min(MAX_ROUTE_HEALTH_SCORE, Math.round(score)))
+}
+
+function getFailureScorePenalty(failureKind: GatewayFailureKind) {
+  if (failureKind === 'upstream_async_queued' || failureKind === 'upstream_auth_error' || failureKind === 'unsupported_model') return 60
+  if (failureKind === 'route_exhausted') return 35
+  if (failureKind === 'upstream_timeout') return 25
+  if (failureKind === 'upstream_rate_limited') return 18
+  if (failureKind === 'upstream_server_error' || failureKind === 'network') return 15
+  return 10
+}
+
+function shouldIsolateRouteFailure(failureKind: GatewayFailureKind) {
+  return failureKind === 'upstream_async_queued'
+    || failureKind === 'upstream_auth_error'
+    || failureKind === 'unsupported_model'
 }
 
 async function recordRouteSuccess(db: Db, input: {
@@ -1109,14 +1206,42 @@ async function recordRouteSuccess(db: Db, input: {
   await db.query(`
     INSERT INTO gateway_route_health (
       route_id, model_sku_id, consecutive_failures, last_success_at, last_failure_at,
-      last_failure_kind, last_error, cooldown_until, updated_at
-    ) VALUES ($1, $2, 0, $3, NULL, NULL, NULL, NULL, $3)
+      last_failure_kind, last_error, cooldown_until, state, next_probe_at,
+      probe_failure_count, score, observing_success_count, updated_at
+    ) VALUES ($1, $2, 0, $3, NULL, NULL, NULL, NULL, 'primary', NULL, 0, $4, 0, $3)
     ON CONFLICT (route_id, model_sku_id) DO UPDATE SET
       consecutive_failures = 0,
       last_success_at = EXCLUDED.last_success_at,
+      state = CASE
+        WHEN gateway_route_health.state = 'observing'
+          AND gateway_route_health.observing_success_count + 1 >= $5 THEN 'primary'
+        WHEN gateway_route_health.state IN ('cooling', 'probing') THEN 'observing'
+        WHEN gateway_route_health.state = 'isolated' THEN 'isolated'
+        ELSE 'primary'
+      END,
       cooldown_until = NULL,
+      next_probe_at = CASE
+        WHEN gateway_route_health.state = 'observing'
+          AND gateway_route_health.observing_success_count + 1 < $5 THEN $6::timestamptz
+        WHEN gateway_route_health.state IN ('cooling', 'probing') THEN $6::timestamptz
+        ELSE NULL
+      END,
+      probe_failure_count = 0,
+      score = LEAST(100, GREATEST(0, gateway_route_health.score + 8)),
+      observing_success_count = CASE
+        WHEN gateway_route_health.state = 'observing' THEN gateway_route_health.observing_success_count + 1
+        WHEN gateway_route_health.state IN ('cooling', 'probing') THEN 1
+        ELSE 0
+      END,
       updated_at = EXCLUDED.updated_at
-  `, [input.routeId, input.modelSkuId, updatedAt])
+  `, [
+    input.routeId,
+    input.modelSkuId,
+    updatedAt,
+    DEFAULT_ROUTE_HEALTH_SCORE + 8,
+    OBSERVING_SUCCESS_THRESHOLD,
+    addSeconds(new Date(updatedAt), OBSERVING_PROBE_DELAY_SECONDS),
+  ])
 }
 
 async function recordRouteFailure(db: Db, input: {
@@ -1127,8 +1252,8 @@ async function recordRouteFailure(db: Db, input: {
   if (!shouldAffectRouteHealth(input.error)) return
   const failureKind = classifyGatewayFailure(input.error)
   const updatedAt = new Date()
-  const existing = (await db.query<{ consecutive_failures: number }>(`
-    SELECT consecutive_failures
+  const existing = (await db.query<{ consecutive_failures: number; probe_failure_count?: number | null; score?: number | null }>(`
+    SELECT consecutive_failures, probe_failure_count, score
     FROM gateway_route_health
     WHERE route_id = $1 AND model_sku_id = $2
     LIMIT 1
@@ -1136,17 +1261,25 @@ async function recordRouteFailure(db: Db, input: {
   const consecutiveFailures = Math.max(0, Number(existing?.consecutive_failures ?? 0)) + 1
   const cooldownSeconds = getCooldownSeconds(consecutiveFailures, input.error)
   const cooldownUntil = cooldownSeconds > 0 ? addSeconds(updatedAt, cooldownSeconds) : null
+  const isolated = shouldIsolateRouteFailure(failureKind)
+  const nextScore = clampRouteScore(Number(existing?.score ?? DEFAULT_ROUTE_HEALTH_SCORE) - getFailureScorePenalty(failureKind))
   await db.query(`
     INSERT INTO gateway_route_health (
       route_id, model_sku_id, consecutive_failures, last_success_at, last_failure_at,
-      last_failure_kind, last_error, cooldown_until, updated_at
-    ) VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $4)
+      last_failure_kind, last_error, cooldown_until, state, next_probe_at,
+      probe_failure_count, score, observing_success_count, updated_at
+    ) VALUES ($1, $2, $3, NULL, $4, $5, $6, $7::timestamptz, $8, $9::timestamptz, $10, $11, 0, $4)
     ON CONFLICT (route_id, model_sku_id) DO UPDATE SET
       consecutive_failures = EXCLUDED.consecutive_failures,
       last_failure_at = EXCLUDED.last_failure_at,
       last_failure_kind = EXCLUDED.last_failure_kind,
       last_error = EXCLUDED.last_error,
       cooldown_until = EXCLUDED.cooldown_until,
+      state = EXCLUDED.state,
+      next_probe_at = EXCLUDED.next_probe_at,
+      probe_failure_count = EXCLUDED.probe_failure_count,
+      score = EXCLUDED.score,
+      observing_success_count = 0,
       updated_at = EXCLUDED.updated_at
   `, [
     input.routeId,
@@ -1156,6 +1289,10 @@ async function recordRouteFailure(db: Db, input: {
     failureKind,
     getErrorMessage(input.error).slice(0, 500),
     cooldownUntil,
+    isolated ? 'isolated' : cooldownUntil ? 'cooling' : 'observing',
+    isolated ? null : cooldownUntil,
+    Math.max(0, Number(existing?.probe_failure_count ?? 0)),
+    nextScore,
   ])
 }
 
@@ -1286,7 +1423,10 @@ async function callUpstream(route: RuntimeRouteRow, input: GatewayRequest, exter
       }
       const result = route.provider === 'gemini-native' || isGeminiModel(upstreamModel)
         ? await parseGeminiNativeImagePayload(await response.json())
-        : await extractImages(await response.json(), effectiveFallbackMime)
+        : await extractImagesFromResponse(response, effectiveFallbackMime, {
+          signal: controller.signal,
+          downloadHeadersForUrl: () => ({ Authorization: `Bearer ${resolveApiKey(route.api_key_ref)}` }),
+        })
       return {
         ...result,
         upstreamModel,
@@ -1340,6 +1480,215 @@ async function callUpstream(route: RuntimeRouteRow, input: GatewayRequest, exter
   } finally {
     clearTimeout(timeout)
     externalSignal?.removeEventListener('abort', relayExternalAbort)
+  }
+}
+
+function getProbeReadyAt(route: RuntimeRouteRow) {
+  const candidates = [route.next_probe_at, route.cooldown_until]
+    .map((value) => value ? new Date(value).getTime() : 0)
+    .filter((value) => Number.isFinite(value) && value > 0)
+  return candidates.length ? Math.max(...candidates) : 0
+}
+
+function isRouteRecoveryProbeDue(route: RuntimeRouteRow, now = new Date()) {
+  const state = normalizeRouteHealthState(route, now)
+  if (state === 'primary' || state === 'isolated') return false
+  if (state === 'cooling' && isRouteCoolingDown(route, now)) return false
+  const readyAt = getProbeReadyAt(route)
+  return readyAt > 0 && readyAt <= now.getTime()
+}
+
+async function markRouteProbeStarted(db: Db, input: {
+  routeId: string
+  modelSkuId: string
+}) {
+  const startedAt = nowIso()
+  await db.query(`
+    UPDATE gateway_route_health
+    SET state = 'probing',
+      last_probe_at = $1,
+      next_probe_at = $2::timestamptz,
+      updated_at = $1
+    WHERE route_id = $3
+      AND model_sku_id = $4
+      AND state <> 'isolated'
+  `, [
+    startedAt,
+    addSeconds(new Date(startedAt), OBSERVING_PROBE_DELAY_SECONDS),
+    input.routeId,
+    input.modelSkuId,
+  ])
+}
+
+async function recordRouteProbeSuccess(db: Db, input: {
+  routeId: string
+  modelSkuId: string
+  upstreamModel: string
+  latencyMs: number
+}) {
+  const capturedAt = nowIso()
+  const result = {
+    ok: true,
+    upstreamModel: input.upstreamModel,
+    latencyMs: input.latencyMs,
+    capturedAt,
+  }
+  await db.query(`
+    INSERT INTO gateway_route_health (
+      route_id, model_sku_id, consecutive_failures, last_success_at, last_failure_at,
+      last_failure_kind, last_error, cooldown_until, state, next_probe_at,
+      probe_failure_count, score, observing_success_count, last_probe_at,
+      last_probe_result, updated_at
+    ) VALUES ($1, $2, 0, $3, NULL, NULL, NULL, NULL, 'observing', $4::timestamptz, 0, $5, 1, $3, $6::jsonb, $3)
+    ON CONFLICT (route_id, model_sku_id) DO UPDATE SET
+      consecutive_failures = 0,
+      last_success_at = EXCLUDED.last_success_at,
+      cooldown_until = NULL,
+      state = CASE
+        WHEN gateway_route_health.observing_success_count + 1 >= $7 THEN 'primary'
+        ELSE 'observing'
+      END,
+      next_probe_at = CASE
+        WHEN gateway_route_health.observing_success_count + 1 >= $7 THEN NULL
+        ELSE $4::timestamptz
+      END,
+      probe_failure_count = 0,
+      score = LEAST(100, GREATEST(0, gateway_route_health.score + 10)),
+      observing_success_count = CASE
+        WHEN gateway_route_health.observing_success_count + 1 >= $7 THEN 0
+        ELSE gateway_route_health.observing_success_count + 1
+      END,
+      last_probe_at = EXCLUDED.last_probe_at,
+      last_probe_result = EXCLUDED.last_probe_result,
+      updated_at = EXCLUDED.updated_at
+  `, [
+    input.routeId,
+    input.modelSkuId,
+    capturedAt,
+    addSeconds(new Date(capturedAt), OBSERVING_PROBE_DELAY_SECONDS),
+    DEFAULT_ROUTE_HEALTH_SCORE + 10,
+    JSON.stringify(result),
+    OBSERVING_SUCCESS_THRESHOLD,
+  ])
+}
+
+async function recordRouteProbeFailure(db: Db, input: {
+  routeId: string
+  modelSkuId: string
+  error: unknown
+  latencyMs: number
+}) {
+  const failureKind = classifyGatewayFailure(input.error)
+  const capturedAt = new Date()
+  const existing = (await db.query<{
+    consecutive_failures: number
+    probe_failure_count?: number | null
+    score?: number | null
+  }>(`
+    SELECT consecutive_failures, probe_failure_count, score
+    FROM gateway_route_health
+    WHERE route_id = $1 AND model_sku_id = $2
+    LIMIT 1
+  `, [input.routeId, input.modelSkuId])).rows[0]
+  const consecutiveFailures = Math.max(0, Number(existing?.consecutive_failures ?? 0)) + 1
+  const probeFailureCount = Math.max(0, Number(existing?.probe_failure_count ?? 0)) + 1
+  const cooldownSeconds = getCooldownSeconds(Math.max(consecutiveFailures, probeFailureCount), input.error)
+  const cooldownUntil = cooldownSeconds > 0 ? addSeconds(capturedAt, cooldownSeconds) : addSeconds(capturedAt, OBSERVING_PROBE_DELAY_SECONDS)
+  const isolated = shouldIsolateRouteFailure(failureKind)
+  const result = {
+    ok: false,
+    failureKind,
+    error: getErrorMessage(input.error).slice(0, 500),
+    latencyMs: input.latencyMs,
+    capturedAt: capturedAt.toISOString(),
+  }
+  await db.query(`
+    INSERT INTO gateway_route_health (
+      route_id, model_sku_id, consecutive_failures, last_success_at, last_failure_at,
+      last_failure_kind, last_error, cooldown_until, state, next_probe_at,
+      probe_failure_count, score, observing_success_count, last_probe_at,
+      last_probe_result, updated_at
+    ) VALUES ($1, $2, $3, NULL, $4, $5, $6, $7::timestamptz, $8, $9::timestamptz, $10, $11, 0, $4, $12::jsonb, $4)
+    ON CONFLICT (route_id, model_sku_id) DO UPDATE SET
+      consecutive_failures = EXCLUDED.consecutive_failures,
+      last_failure_at = EXCLUDED.last_failure_at,
+      last_failure_kind = EXCLUDED.last_failure_kind,
+      last_error = EXCLUDED.last_error,
+      cooldown_until = EXCLUDED.cooldown_until,
+      state = EXCLUDED.state,
+      next_probe_at = EXCLUDED.next_probe_at,
+      probe_failure_count = EXCLUDED.probe_failure_count,
+      score = EXCLUDED.score,
+      observing_success_count = 0,
+      last_probe_at = EXCLUDED.last_probe_at,
+      last_probe_result = EXCLUDED.last_probe_result,
+      updated_at = EXCLUDED.updated_at
+  `, [
+    input.routeId,
+    input.modelSkuId,
+    consecutiveFailures,
+    capturedAt.toISOString(),
+    failureKind,
+    getErrorMessage(input.error).slice(0, 500),
+    cooldownUntil,
+    isolated ? 'isolated' : 'cooling',
+    isolated ? null : cooldownUntil,
+    probeFailureCount,
+    clampRouteScore(Number(existing?.score ?? DEFAULT_ROUTE_HEALTH_SCORE) - getFailureScorePenalty(failureKind)),
+    JSON.stringify(result),
+  ])
+}
+
+async function runRouteRecoveryProbe(db: Db, route: RuntimeRouteRow, modelSkuId: string) {
+  const startedAt = Date.now()
+  await markRouteProbeStarted(db, { routeId: route.route_id, modelSkuId })
+  try {
+    const result = await callUpstream(route, {
+      modelSku: modelSkuId,
+      prompt: 'Generate a simple single-panel recovery probe image: one centered matte gray cube on a plain light background, studio lighting, no text, no watermark, no collage, no extra objects.',
+      negativePrompt: 'text, letters, watermark, logo, collage, split screen, multiple panels, multiple objects, people',
+      params: {
+        size: '1024x1024',
+        quality: 'auto',
+        output_format: 'png',
+        output_compression: null,
+        moderation: 'low',
+        n: 1,
+      },
+    })
+    await recordRouteProbeSuccess(db, {
+      routeId: route.route_id,
+      modelSkuId,
+      upstreamModel: result.upstreamModel,
+      latencyMs: Date.now() - startedAt,
+    })
+  } catch (error) {
+    await recordRouteProbeFailure(db, {
+      routeId: route.route_id,
+      modelSkuId,
+      error,
+      latencyMs: Date.now() - startedAt,
+    })
+  }
+}
+
+function scheduleDueRouteRecoveryProbes(db: Db, modelSkuId: string, routes: RuntimeRouteRow[], now = new Date()) {
+  const dueRoutes = routes
+    .filter((route) => isRouteRecoveryProbeDue(route, now))
+    .sort((left, right) => (
+      getProbeReadyAt(left) - getProbeReadyAt(right)
+      || (left.probe_failure_count ?? 0) - (right.probe_failure_count ?? 0)
+      || (right.score ?? DEFAULT_ROUTE_HEALTH_SCORE) - (left.score ?? DEFAULT_ROUTE_HEALTH_SCORE)
+    ))
+    .slice(0, MAX_RECOVERY_PROBES_PER_TRIGGER)
+
+  for (const route of dueRoutes) {
+    const key = `${modelSkuId}:${route.route_id}`
+    if (activeRouteRecoveryProbes.has(key)) continue
+    activeRouteRecoveryProbes.add(key)
+    void runRouteRecoveryProbe(db, route, modelSkuId)
+      .catch(() => undefined)
+      .finally(() => activeRouteRecoveryProbes.delete(key))
   }
 }
 
@@ -1846,6 +2195,7 @@ function shouldTryNextRoute(failureKind: GatewayFailureKind) {
     'upstream_timeout',
     'upstream_rate_limited',
     'upstream_server_error',
+    'upstream_async_queued',
     'network',
   ].includes(failureKind)
 }
@@ -1859,12 +2209,14 @@ function shouldAffectRouteHealth(error: unknown) {
     'upstream_timeout',
     'upstream_rate_limited',
     'upstream_server_error',
+    'upstream_async_queued',
     'network',
   ].includes(failureKind)
 }
 
 function classifyGatewayFailure(error: unknown): GatewayFailureKind {
   if (error instanceof UpstreamRequestError) return error.failureKind
+  if (error instanceof UpstreamAsyncTaskError) return 'upstream_async_queued'
   if (error instanceof ApiError) {
     if (error.code === 'no_route') return 'no_route'
     return classifyGatewayFailureFromParts({
@@ -1899,6 +2251,9 @@ function classifyGatewayFailureFromParts(input: {
   const type = input.errorType ?? ''
   const combined = `${code} ${type} ${message}`
 
+  if (/upstream_async_queued|上游返回异步任务|缺少结果轮询配置|async task|queued task|task queued/i.test(combined)) {
+    return 'upstream_async_queued'
+  }
   if (/insufficient account balance|insufficient balance|balance insufficient|account balance (is )?not enough|balance (is )?not enough|no enough balance|insufficient quota|not enough quota|quota not enough|quota exceeded|exceeded your current quota|insufficient_quota|credit balance|billing_hard_limit_reached|payment required|out of credits|not enough credits|额度不足|点数不足|余额不足|余额已用尽|额度已用尽|预扣费额度失败|用户剩余额度/i.test(combined)) {
     return 'route_exhausted'
   }
@@ -2173,6 +2528,162 @@ async function listGenerationOutputsForLibrary(db: Db, input: {
   return rows.map(serializeLibraryOutput)
 }
 
+async function executeStageOutputAttempt(db: Pool, input: {
+  stage: RouteExecutionStage
+  slotIndex: number
+  routeUsage: Map<string, number>
+  payload: GatewayRequest
+  prompt: string
+  modelSku: string
+  taskSignal: AbortSignal
+  failoverEnabled: boolean
+  attempts: GatewayAttempt[]
+}): Promise<OutputSlotAttemptResult> {
+  const failedRouteIdsThisAttempt = new Set<string>()
+  const routesToTry = orderRoutesForSlot(input.stage.routes, input.slotIndex, new Date(), failedRouteIdsThisAttempt, input.routeUsage)
+  if (!routesToTry.length) {
+    return { success: false, lastError: new Error('当前 stage 没有可用线路容量') }
+  }
+
+  let lastError: unknown = null
+  for (const route of routesToTry) {
+    const releaseRoute = claimRouteCapacity(route, input.routeUsage)
+    if (!releaseRoute) continue
+    const startedAt = Date.now()
+    try {
+      const result = await callUpstream(route, {
+        ...input.payload,
+        prompt: input.prompt,
+        modelSku: input.modelSku,
+        params: {
+          ...(input.payload.params ?? {}),
+          size: input.stage.deliveryPlan.baseSize,
+          n: UPSTREAM_OUTPUT_COUNT_PER_REQUEST,
+        },
+      }, input.taskSignal)
+      const image = result.images[0]
+      if (!image) throw new UpstreamRequestError('上游未返回图片', 502, 'upstream_server_error')
+      await recordRouteSuccess(db, {
+        routeId: route.route_id,
+        modelSkuId: input.modelSku,
+      })
+      input.attempts.push({
+        routeId: route.route_id,
+        upstreamModel: result.upstreamModel,
+        success: true,
+        latencyMs: Date.now() - startedAt,
+      })
+      return {
+        success: true,
+        output: {
+          image,
+          revisedPrompt: result.revisedPrompts?.[0],
+          rawImageUrl: result.rawImageUrls?.[0],
+          routeId: route.route_id,
+          upstreamModel: result.upstreamModel,
+          actualParams: result.actualParams,
+        },
+      }
+    } catch (error) {
+      lastError = error
+      const failureKind = classifyGatewayFailure(error)
+      if (shouldAffectRouteHealth(error)) {
+        await recordRouteFailure(db, {
+          routeId: route.route_id,
+          modelSkuId: input.modelSku,
+          error,
+        })
+      }
+      input.attempts.push({
+        routeId: route.route_id,
+        upstreamModel: getUpstreamModelForRoute(route),
+        success: false,
+        latencyMs: Date.now() - startedAt,
+        errorMessage: getErrorMessage(error),
+        failureKind,
+      })
+      failedRouteIdsThisAttempt.add(route.route_id)
+      const allowRouteFailover = input.failoverEnabled && (
+        isRetryableGatewayError(error)
+        || failureKind === 'parameter_incompatible'
+      )
+      if (!allowRouteFailover) {
+        return { success: false, lastError: error, shouldStopGeneration: true }
+      }
+    } finally {
+      releaseRoute()
+    }
+  }
+
+  return { success: false, lastError: lastError ?? new Error('当前 stage 生图线路请求失败') }
+}
+
+async function executeStageOutputSlots(db: Pool, input: {
+  stage: RouteExecutionStage
+  requestedOutputCount: number
+  payload: GatewayRequest
+  prompt: string
+  modelSku: string
+  taskSignal: AbortSignal
+  failoverEnabled: boolean
+  shouldSkipCompletion?: () => boolean
+  isCancelled: () => Promise<boolean>
+  attempts: GatewayAttempt[]
+}) {
+  const routeUsage = new Map<string, number>()
+  const outputs: GeneratedOutputSlot[] = []
+  const maxAttempts = Math.max(input.requestedOutputCount, input.requestedOutputCount * MAX_OUTPUT_SLOT_RETRY_ROUNDS)
+  const concurrency = getOutputSlotConcurrency(input.stage.routes, input.requestedOutputCount)
+  let nextAttemptIndex = 0
+  let lastError: unknown = null
+  let shouldStopGeneration = false
+
+  const claimNextAttemptIndex = () => {
+    if (shouldStopGeneration || outputs.length >= input.requestedOutputCount || nextAttemptIndex >= maxAttempts) return null
+    const slotIndex = nextAttemptIndex
+    nextAttemptIndex += 1
+    return slotIndex
+  }
+
+  const runWorker = async () => {
+    while (true) {
+      if (input.shouldSkipCompletion?.() || await input.isCancelled()) {
+        shouldStopGeneration = true
+        break
+      }
+      const slotIndex = claimNextAttemptIndex()
+      if (slotIndex == null) break
+      const result = await executeStageOutputAttempt(db, {
+        stage: input.stage,
+        slotIndex,
+        routeUsage,
+        payload: input.payload,
+        prompt: input.prompt,
+        modelSku: input.modelSku,
+        taskSignal: input.taskSignal,
+        failoverEnabled: input.failoverEnabled,
+        attempts: input.attempts,
+      })
+      if (result.success) {
+        outputs.push(result.output)
+      } else {
+        lastError = result.lastError
+        if (result.shouldStopGeneration) {
+          shouldStopGeneration = true
+          break
+        }
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: concurrency }, () => runWorker()))
+  return {
+    outputs: outputs.slice(0, input.requestedOutputCount),
+    lastError,
+    shouldStopGeneration,
+  }
+}
+
 async function softDeleteGenerationOutput(db: Pool, input: {
   outputId: string
   userId: string
@@ -2295,124 +2806,46 @@ async function executeReservedGenerationTask(db: Pool, env: ServerEnv, input: {
         skippedByCooldown: true,
       })
     }
-    const collectedImages: string[] = []
-    const collectedRevisedPrompts: Array<string | undefined> = []
-    const collectedRawImageUrls: string[] = []
+    const collectedOutputs: GeneratedOutputSlot[] = []
     let successRouteId = ''
     let successUpstreamModel = ''
     let successActualParams: Record<string, unknown> | undefined
     let lockedStage: RouteExecutionStage | null = null
 
-    while (collectedImages.length < input.requestedOutputCount) {
+    for (const stage of input.routeStages) {
       if (input.shouldSkipCompletion?.() || await isGenerationTaskCancelled(db, input.reservation.taskId)) break
-      let producedThisSlot = false
-      let shouldStopGeneration = false
-      const stagesToTry: RouteExecutionStage[] = lockedStage ? [lockedStage] : input.routeStages
-
-      for (const stage of stagesToTry) {
-        let retryRound = 0
-        let shouldAdvanceStage = false
-        while (!producedThisSlot && retryRound < MAX_OUTPUT_SLOT_RETRY_ROUNDS) {
-          const failedRouteIdsThisRound = new Set<string>()
-          const routesToTry = orderRoutesForSlot(stage.routes, collectedImages.length + retryRound, new Date(), failedRouteIdsThisRound)
-          if (!routesToTry.length) break
-
-          for (const route of routesToTry) {
-            if (input.shouldSkipCompletion?.() || await isGenerationTaskCancelled(db, input.reservation.taskId)) {
-              shouldStopGeneration = true
-              break
-            }
-            const startedAt = Date.now()
-            try {
-              const result = await callUpstream(route, {
-                ...input.payload,
-                prompt: input.prompt,
-                modelSku: input.modelSku,
-                params: {
-                  ...(input.payload.params ?? {}),
-                  size: stage.deliveryPlan.baseSize,
-                  n: UPSTREAM_OUTPUT_COUNT_PER_REQUEST,
-                },
-              }, taskController.signal)
-              const acceptedImages = result.images.slice(0, UPSTREAM_OUTPUT_COUNT_PER_REQUEST)
-              if (!acceptedImages.length) {
-                throw new UpstreamRequestError('上游未返回图片', 502, 'upstream_server_error')
-              }
-              collectedImages.push(...acceptedImages)
-              collectedRevisedPrompts.push(...acceptedImages.map((_, index) => result.revisedPrompts?.[index]))
-              collectedRawImageUrls.push(...(result.rawImageUrls ?? []).slice(0, acceptedImages.length))
-              if (!successRouteId) successRouteId = route.route_id
-              successUpstreamModel = result.upstreamModel
-              successActualParams ??= result.actualParams
-              lockedStage ??= stage
-              await recordRouteSuccess(db, {
-                routeId: route.route_id,
-                modelSkuId: input.modelSku,
-              })
-              attempts.push({
-                routeId: route.route_id,
-                upstreamModel: result.upstreamModel,
-                success: true,
-                latencyMs: Date.now() - startedAt,
-              })
-              producedThisSlot = true
-              break
-            } catch (error) {
-              lastError = error
-              if (taskController.signal.aborted && (await isGenerationTaskCancelled(db, input.reservation.taskId) || isTaskAbortError(error, TASK_ABORT_REASON_CANCELLED))) {
-                shouldStopGeneration = true
-                break
-              }
-              const failureKind = classifyGatewayFailure(error)
-              if (shouldAffectRouteHealth(error)) {
-                await recordRouteFailure(db, {
-                  routeId: route.route_id,
-                  modelSkuId: input.modelSku,
-                  error,
-                })
-              }
-              attempts.push({
-                routeId: route.route_id,
-                upstreamModel: getUpstreamModelForRoute(route),
-                success: false,
-                latencyMs: Date.now() - startedAt,
-                errorMessage: getErrorMessage(error),
-                failureKind,
-              })
-              failedRouteIdsThisRound.add(route.route_id)
-              const allowRouteFailover = failoverEnabled && (
-                isRetryableGatewayError(error)
-                || failureKind === 'parameter_incompatible'
-              )
-              if (!allowRouteFailover) {
-                if (lockedStage) {
-                  shouldStopGeneration = true
-                } else {
-                  shouldAdvanceStage = true
-                }
-                break
-              }
-            }
-          }
-
-          if (producedThisSlot || shouldStopGeneration || shouldAdvanceStage) break
-          retryRound += 1
-        }
-
-        if (producedThisSlot || shouldStopGeneration) break
-        if (lockedStage || !shouldAdvanceStage) {
-          continue
-        }
+      const stageResult = await executeStageOutputSlots(db, {
+        stage,
+        requestedOutputCount: input.requestedOutputCount,
+        payload: input.payload,
+        prompt: input.prompt,
+        modelSku: input.modelSku,
+        taskSignal: taskController.signal,
+        failoverEnabled,
+        shouldSkipCompletion: input.shouldSkipCompletion,
+        isCancelled: () => isGenerationTaskCancelled(db, input.reservation.taskId),
+        attempts,
+      })
+      lastError = stageResult.lastError ?? lastError
+      if (stageResult.outputs.length > 0) {
+        collectedOutputs.push(...stageResult.outputs)
+        lockedStage = stage
+        const firstOutput = stageResult.outputs[0]
+        if (!successRouteId) successRouteId = firstOutput.routeId
+        successUpstreamModel = stageResult.outputs.at(-1)?.upstreamModel || successUpstreamModel
+        successActualParams ??= firstOutput.actualParams
+        break
       }
-      if (shouldStopGeneration || !producedThisSlot) break
+      if (stageResult.shouldStopGeneration) break
     }
 
     if (await isGenerationTaskCancelled(db, input.reservation.taskId)) {
       return await readGenerationTaskResult(db, { taskId: input.reservation.taskId, userId: input.userId })
     }
 
-    if (collectedImages.length > 0) {
-      const outputImages = collectedImages.slice(0, input.requestedOutputCount)
+    if (collectedOutputs.length > 0) {
+      const acceptedOutputs = collectedOutputs.slice(0, input.requestedOutputCount)
+      const outputImages = acceptedOutputs.map((output) => output.image)
       const plannedDeliveryPlan = lockedStage?.deliveryPlan ?? input.routeStages[0]?.deliveryPlan
       const partialInfo = createPartialGenerationInfo({
         requestedOutputCount: input.requestedOutputCount,
@@ -2425,8 +2858,8 @@ async function executeReservedGenerationTask(db: Pool, env: ServerEnv, input: {
         userId: input.userId,
         images: outputImages,
         deliveryPlan: plannedDeliveryPlan,
-        revisedPrompts: collectedRevisedPrompts.slice(0, outputImages.length),
-        rawImageUrls: collectedRawImageUrls.slice(0, outputImages.length),
+        revisedPrompts: acceptedOutputs.map((output) => output.revisedPrompt),
+        rawImageUrls: acceptedOutputs.map((output) => output.rawImageUrl).filter((url): url is string => Boolean(url)),
       })
       const deliveryPlan = resolveFinalDeliveryPlan({
         plannedDeliveryPlan,
@@ -2448,8 +2881,8 @@ async function executeReservedGenerationTask(db: Pool, env: ServerEnv, input: {
       })
       return {
         images: outputs.map((output) => output.publicUrl),
-        revisedPrompts: collectedRevisedPrompts.slice(0, outputImages.length),
-        rawImageUrls: collectedRawImageUrls.slice(0, outputImages.length),
+        revisedPrompts: acceptedOutputs.map((output) => output.revisedPrompt),
+        rawImageUrls: acceptedOutputs.map((output) => output.rawImageUrl).filter((url): url is string => Boolean(url)),
         actualParams: {
           ...(successActualParams ?? {}),
           n: outputImages.length,
@@ -2514,7 +2947,9 @@ export async function submitGenerationTaskFromWorkflow(db: Pool, env: ServerEnv,
     agentPlanVersion: input.agentPlanVersion,
     params: normalizeRequestedParamsForModel(payload.params, model),
   }
-  const routes = filterRoutesForRequestedSize(await loadRoutesForModel(db, modelSku), normalizedPayload.params?.size)
+  const loadedRoutes = filterRoutesForRequestedSize(await loadRoutesForModel(db, modelSku), normalizedPayload.params?.size)
+  scheduleDueRouteRecoveryProbes(db, modelSku, loadedRoutes)
+  const routes = selectRoutesForUserTraffic(loadedRoutes)
   const routeStages = buildRouteExecutionStages(routes, normalizedPayload)
   if (!routeStages.length) throw new ApiError(503, 'no_route', '没有可用的生图线路')
   const requestedOutputCount = getRequestedOutputCount(normalizedPayload)
@@ -2620,7 +3055,9 @@ export function registerImageGatewayRoutes(app: FastifyInstance, db: Pool, env: 
         ...payload,
         params: normalizeRequestedParamsForModel(payload.params, model),
       }
-      const routes = filterRoutesForRequestedSize(await loadRoutesForModel(db, modelSku), normalizedPayload.params?.size)
+      const loadedRoutes = filterRoutesForRequestedSize(await loadRoutesForModel(db, modelSku), normalizedPayload.params?.size)
+      scheduleDueRouteRecoveryProbes(db, modelSku, loadedRoutes)
+      const routes = selectRoutesForUserTraffic(loadedRoutes)
       const routeStages = buildRouteExecutionStages(routes, normalizedPayload)
       if (!routeStages.length) throw new ApiError(503, 'no_route', '没有可用的生图线路')
       const requestedOutputCount = getRequestedOutputCount(normalizedPayload)
@@ -2685,7 +3122,9 @@ export function registerImageGatewayRoutes(app: FastifyInstance, db: Pool, env: 
         ...payload,
         params: normalizeRequestedParamsForModel(payload.params, model),
       }
-      const routes = filterRoutesForRequestedSize(await loadRoutesForModel(db, modelSku), normalizedPayload.params?.size)
+      const loadedRoutes = filterRoutesForRequestedSize(await loadRoutesForModel(db, modelSku), normalizedPayload.params?.size)
+      scheduleDueRouteRecoveryProbes(db, modelSku, loadedRoutes)
+      const routes = selectRoutesForUserTraffic(loadedRoutes)
       const routeStages = buildRouteExecutionStages(routes, normalizedPayload)
       if (!routeStages.length) throw new ApiError(503, 'no_route', '没有可用的生图线路')
       const requestedOutputCount = getRequestedOutputCount(normalizedPayload)

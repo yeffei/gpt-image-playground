@@ -22,6 +22,7 @@ function createRouteRow(input: {
   enabled: boolean
   defaultUpstreamModel?: string
   compatibilityStrategy?: 'openai_standard' | 'relay_extended'
+  isOfficial?: boolean
 }) {
   return {
     id: input.id,
@@ -32,6 +33,7 @@ function createRouteRow(input: {
     default_upstream_model: input.defaultUpstreamModel ?? 'gpt-image-2',
     compatibility_strategy: input.compatibilityStrategy ?? 'relay_extended',
     enabled: input.enabled,
+    is_official: input.isOfficial ?? false,
     notes: null,
     created_at: '2026-06-14T10:00:00.000Z',
     updated_at: '2026-06-14T10:00:00.000Z',
@@ -116,6 +118,87 @@ function buildTestApp(db: Pool) {
     trashedOutputCleanupIntervalMinutes: 360,
     trashedOutputCleanupRunOnStartup: true,
   })
+}
+
+function createBindingHealthTestDb() {
+  const health = {
+    consecutive_failures: 2,
+    last_failure_at: '2026-07-10T00:00:00.000Z',
+    last_failure_kind: 'upstream_timeout',
+    last_error: 'timeout',
+    cooldown_until: '2026-07-10T00:30:00.000Z',
+    health_state: 'cooling',
+    next_probe_at: '2026-07-10T00:30:00.000Z',
+    probe_failure_count: 1,
+    score: 42,
+    observing_success_count: 0,
+    last_probe_at: null as string | null,
+    last_probe_result: null as unknown,
+  }
+  const auditActions: string[] = []
+
+  const bindingRow = () => ({
+    id: 'binding_1',
+    model_sku_id: 'model_1',
+    model_name: 'gpt-image-2',
+    model_display_name: 'GPT Image 2',
+    route_id: 'route_1',
+    route_name: 'Route 1',
+    upstream_model: 'gpt-image-2',
+    priority: 100,
+    weight: 1,
+    timeout_seconds: 60,
+    enabled: true,
+    route_enabled: true,
+    created_at: '2026-07-10T00:00:00.000Z',
+    updated_at: '2026-07-10T00:00:00.000Z',
+    last_success_at: null,
+    ...health,
+  })
+
+  const db = {
+    async query(text: string, values?: unknown[]) {
+      if (text.includes('FROM admin_sessions')) {
+        return {
+          rows: values?.[0] === 'admin_sess'
+            ? [{
+                token: 'admin_sess',
+                admin_user_id: 'admin_1',
+                id: 'admin_1',
+                email: 'admin@example.com',
+                display_name: 'Admin',
+                status: 'active',
+              }]
+            : [],
+        }
+      }
+      if (text.includes('FROM model_route_bindings b') && text.includes('WHERE b.id = $1')) {
+        return { rows: values?.[0] === 'binding_1' ? [bindingRow()] : [] }
+      }
+      if (text.includes('INSERT INTO gateway_route_health')) {
+        health.consecutive_failures = Number(values?.[2] ?? 0)
+        health.last_failure_at = String(values?.[3] ?? '')
+        health.last_failure_kind = values?.[4] == null ? null : String(values[4])
+        health.last_error = values?.[5] == null ? null : String(values[5])
+        health.cooldown_until = values?.[6] == null ? null : String(values[6])
+        health.health_state = String(values?.[7] ?? '')
+        health.next_probe_at = values?.[8] == null ? null : String(values[8])
+        health.probe_failure_count = Number(values?.[9] ?? 0)
+        health.score = Number(values?.[10] ?? 0)
+        health.observing_success_count = Number(values?.[11] ?? 0)
+        health.last_probe_at = String(values?.[3] ?? '')
+        health.last_probe_result = JSON.parse(String(values?.[12] ?? '{}'))
+        return { rows: [], rowCount: 1 }
+      }
+      if (text.includes('INSERT INTO admin_audit_logs')) {
+        auditActions.push(String(values?.[2] ?? ''))
+        return { rows: [], rowCount: 1 }
+      }
+      throw new Error(`Unhandled query: ${text}`)
+    },
+  } as unknown as Pool
+
+  return { db, health, auditActions }
 }
 
 describe('gateway route high-res probe', () => {
@@ -464,6 +547,184 @@ describe('gateway route high-res probe', () => {
       expect(response.json().routes.find((route: { id: string; status: string }) => route.id === 'route_empty')?.status).toBe('auth_failed')
       expect(fetchMock.mock.calls.some(([input]) => String(input).includes('route-disabled'))).toBe(false)
       expect(fetchMock.mock.calls.some(([input]) => String(input).includes('images/generations'))).toBe(false)
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('returns route default model and binding alias fields with compatibility naming', async () => {
+    const route = createRouteRow({
+      id: 'route_alias',
+      name: 'Alias Route',
+      baseUrl: 'https://route-alias.example.test/v1',
+      apiKeyRef: 'ROUTE_ALIAS_KEY',
+      enabled: true,
+      defaultUpstreamModel: 'gpt-image-2',
+      isOfficial: false,
+    })
+    const bindingRow = {
+      id: 'binding_1',
+      model_sku_id: 'sku_1',
+      model_name: 'gpt-image-2-fast',
+      model_display_name: 'GPT Image 2 Fast',
+      route_id: 'route_alias',
+      route_name: 'Alias Route',
+      upstream_model: 'relay-gpt-image',
+      priority: 10,
+      weight: 1,
+      timeout_seconds: 60,
+      enabled: true,
+      route_enabled: true,
+      created_at: '2026-06-14T10:00:00.000Z',
+      updated_at: '2026-06-14T10:00:00.000Z',
+      consecutive_failures: 0,
+      last_success_at: null,
+      last_failure_at: null,
+      last_failure_kind: null,
+      last_error: null,
+      cooldown_until: null,
+    }
+    const db = {
+      async query(text: string, values?: unknown[]) {
+        if (text.includes('FROM admin_sessions')) {
+          const token = values?.[0]
+          return {
+            rows: token === 'admin_sess'
+              ? [{
+                  token,
+                  admin_user_id: 'admin_1',
+                  id: 'admin_1',
+                  email: 'admin@example.com',
+                  display_name: 'Admin',
+                  status: 'active',
+                }]
+              : [],
+          }
+        }
+        if (text.includes('FROM gateway_routes') && text.includes('WHERE id = $1')) {
+          return { rows: values?.[0] === 'route_alias' ? [route] : [] }
+        }
+        if (text.includes('FROM model_route_bindings') && text.includes('WHERE b.id = $1')) {
+          return { rows: values?.[0] === 'binding_1' ? [bindingRow] : [] }
+        }
+        if (text.includes('FROM model_skus')) return { rows: [] }
+        throw new Error(`Unhandled query: ${text}`)
+      },
+    } as unknown as Pool
+
+    const app = buildTestApp(db)
+    try {
+      const routeResponse = await app.inject({
+        method: 'GET',
+        url: '/api/admin/gateway-routes/route_alias',
+        headers: { Authorization: 'Bearer admin_sess' },
+      })
+      expect(routeResponse.statusCode).toBe(200)
+      expect(routeResponse.json().route).toMatchObject({
+        id: 'route_alias',
+        defaultUpstreamModel: 'gpt-image-2',
+        isOfficial: false,
+      })
+
+      const bindingResponse = await app.inject({
+        method: 'GET',
+        url: '/api/admin/model-route-bindings/binding_1',
+        headers: { Authorization: 'Bearer admin_sess' },
+      })
+      expect(bindingResponse.statusCode).toBe(200)
+      expect(bindingResponse.json().binding).toMatchObject({
+        id: 'binding_1',
+        modelAlias: 'relay-gpt-image',
+        upstreamModel: 'relay-gpt-image',
+      })
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+describe('gateway model binding health actions', () => {
+  it('schedules a selected binding for recovery probe without calling upstream immediately', async () => {
+    const { db, health, auditActions } = createBindingHealthTestDb()
+    const app = buildTestApp(db)
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/admin/model-route-bindings/binding_1/health-state',
+        headers: { Authorization: 'Bearer admin_sess' },
+        payload: { action: 'schedule_probe' },
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toMatchObject({
+        ok: true,
+        action: 'schedule_probe',
+        binding: {
+          id: 'binding_1',
+          healthState: 'cooling',
+          healthStatus: 'cooling',
+          nextProbeAt: expect.any(String),
+        },
+      })
+      expect(health.health_state).toBe('cooling')
+      expect(health.cooldown_until).toBeTruthy()
+      expect(health.next_probe_at).toBeTruthy()
+      expect(health.last_probe_result).toMatchObject({ manualAction: 'schedule_probe' })
+      expect(auditActions).toContain('model_route_binding_health_schedule_probe')
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('can restore an isolated binding to primary scheduling state', async () => {
+    const { db, health, auditActions } = createBindingHealthTestDb()
+    health.health_state = 'isolated'
+    health.score = 8
+    const app = buildTestApp(db)
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/admin/model-route-bindings/binding_1/health-state',
+        headers: { Authorization: 'Bearer admin_sess' },
+        payload: { action: 'restore_primary' },
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(response.json().binding).toMatchObject({
+        id: 'binding_1',
+        healthState: 'primary',
+        healthStatus: 'healthy',
+        score: 80,
+        consecutiveFailures: 0,
+      })
+      expect(health.health_state).toBe('primary')
+      expect(health.score).toBe(80)
+      expect(health.cooldown_until).toBeNull()
+      expect(auditActions).toContain('model_route_binding_health_restore_primary')
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('rejects unsupported binding health actions', async () => {
+    const { db } = createBindingHealthTestDb()
+    const app = buildTestApp(db)
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/admin/model-route-bindings/binding_1/health-state',
+        headers: { Authorization: 'Bearer admin_sess' },
+        payload: { action: 'unknown' },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(response.json()).toMatchObject({
+        ok: false,
+        error: 'invalid_health_action',
+      })
     } finally {
       await app.close()
     }

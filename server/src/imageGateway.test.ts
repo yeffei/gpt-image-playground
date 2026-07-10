@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { LIBRARY_ACTIVE_OUTPUT_LIMIT, LIBRARY_TRASH_RETENTION_DAYS, buildUpstreamPromptFields, deleteCompletedGenerationTasksForUser, deriveFailureResultFields, enforceLibraryActiveOutputLimit, extractRequiredModelAlias, filterRoutesForRequestedSize, finalizeFailure, getUpstreamModelCandidatesForRoute, isClientDisconnected, normalizeRequestedParamsForModel, prioritizeSizeSpecificModelAliases, resolveFinalDeliveryPlan, resolveRequestedModelSku, restoreGenerationOutput } from './imageGateway'
+import { LIBRARY_ACTIVE_OUTPUT_LIMIT, LIBRARY_TRASH_RETENTION_DAYS, buildUpstreamPromptFields, deleteCompletedGenerationTasksForUser, deriveFailureResultFields, enforceLibraryActiveOutputLimit, extractImages, extractImagesFromEventStream, extractRequiredModelAlias, filterRoutesForRequestedSize, finalizeFailure, getOutputSlotConcurrency, getUpstreamModelCandidatesForRoute, isClientDisconnected, normalizeRequestedParamsForModel, orderRoutesForSlot, prioritizeSizeSpecificModelAliases, resolveFinalDeliveryPlan, resolveRequestedModelSku, restoreGenerationOutput } from './imageGateway'
 
 function classifyGatewayFailure(error: unknown) {
   if (error && typeof error === 'object' && 'failureKind' in error && typeof (error as { failureKind?: unknown }).failureKind === 'string') {
@@ -91,9 +91,17 @@ describe('server image gateway upstream model aliases', () => {
   })
 
   it('prioritizes size-specific aliases for GPT Image 2 high-resolution requests', () => {
-    expect(prioritizeSizeSpecificModelAliases(['gpt-image-2'], '2560x1440', { allowRelayAlias: true })).toEqual(['gpt-image-2-2k', 'gpt-image-2'])
-    expect(prioritizeSizeSpecificModelAliases(['gpt-image-2'], '3840x2160', { allowRelayAlias: true })).toEqual(['gpt-image-2-4k', 'gpt-image-2'])
+    expect(prioritizeSizeSpecificModelAliases(['gpt-image-2'], '2560x1440', { allowRelayAlias: true })).toEqual(['gpt-image-2', 'gpt-image-2-2k'])
+    expect(prioritizeSizeSpecificModelAliases(['gpt-image-2'], '3840x2160', { allowRelayAlias: true })).toEqual(['gpt-image-2', 'gpt-image-2-4k'])
     expect(prioritizeSizeSpecificModelAliases(['gpt-image-2'], '3840x2160', { allowRelayAlias: false })).toEqual(['gpt-image-2'])
+  })
+
+  it('puts the requested size alias before a mismatched GPT Image 2 default alias', () => {
+    expect(prioritizeSizeSpecificModelAliases(['gpt-image-2-4k', 'gpt-image-2'], '2560x1440', { allowRelayAlias: true })).toEqual([
+      'gpt-image-2-2k',
+      'gpt-image-2-4k',
+      'gpt-image-2',
+    ])
   })
 })
 
@@ -115,6 +123,55 @@ describe('server image gateway prompt compatibility', () => {
     })).toEqual({
       prompt: 'A clean product photo\n\n请避免：watermark, extra people',
     })
+  })
+})
+
+describe('server image gateway upstream response parsing', () => {
+  it('extracts images from relay-compatible nested result fields', async () => {
+    const result = await extractImages({
+      output: [
+        {
+          type: 'image_generation_call',
+          result: {
+            image: 'cmVsYXktaW1hZ2U=',
+          },
+          revised_prompt: 'refined prompt',
+        },
+      ],
+    }, 'image/png')
+
+    expect(result.images).toEqual(['data:image/png;base64,cmVsYXktaW1hZ2U='])
+    expect(result.revisedPrompts).toEqual(['refined prompt'])
+  })
+
+  it('extracts final images from OpenAI-compatible event streams', async () => {
+    const response = new Response([
+      'data: {"type":"image_generation.completed","b64_json":"c3RyZWFtLWltYWdl","revised_prompt":"stream prompt"}',
+      '',
+      'data: [DONE]',
+      '',
+    ].join('\n'), {
+      headers: { 'Content-Type': 'text/event-stream' },
+    })
+
+    const result = await extractImagesFromEventStream(response, 'image/jpeg')
+
+    expect(result.images).toEqual(['data:image/jpeg;base64,c3RyZWFtLWltYWdl'])
+    expect(result.revisedPrompts).toEqual(['stream prompt'])
+  })
+
+  it('extracts final payload objects from relay event streams', async () => {
+    const response = new Response([
+      'event: result',
+      'data: {"object":"image.generation.result","data":[{"b64_json":"cmVzdWx0LWltYWdl"}]}',
+      '',
+    ].join('\n'), {
+      headers: { 'Content-Type': 'text/event-stream' },
+    })
+
+    const result = await extractImagesFromEventStream(response, 'image/png')
+
+    expect(result.images).toEqual(['data:image/png;base64,cmVzdWx0LWltYWdl'])
   })
 })
 
@@ -165,6 +222,61 @@ describe('server image gateway model capability normalization', () => {
       { route_id: 'route-1', route_name: 'Base', model_name: 'm', base_url: 'https://base.example/v1', api_key_ref: 'BASE', priority: 1, weight: 1, timeout_seconds: 60, consecutive_failures: 0, max_supported_long_edge: 1536 },
       { route_id: 'route-2', route_name: 'Legacy', model_name: 'm', base_url: 'https://legacy.example/v1', api_key_ref: 'LEGACY', priority: 2, weight: 1, timeout_seconds: 60, consecutive_failures: 0, max_supported_long_edge: null },
     ] as any, '3840x2160').map((route) => route.route_id)).toEqual(['route-1', 'route-2'])
+  })
+
+  it('uses controlled output-slot concurrency for four-image requests', () => {
+    const routeA = { route_id: 'route-a', route_name: 'A', model_name: 'm', base_url: 'https://a.example/v1', api_key_ref: 'A', priority: 1, weight: 1, timeout_seconds: 60, consecutive_failures: 0 }
+    const routeB = { route_id: 'route-b', route_name: 'B', model_name: 'm', base_url: 'https://b.example/v1', api_key_ref: 'B', priority: 1, weight: 1, timeout_seconds: 60, consecutive_failures: 0 }
+
+    expect(getOutputSlotConcurrency([routeA] as any, 4)).toBe(2)
+    expect(getOutputSlotConcurrency([routeA, routeB] as any, 4)).toBe(4)
+  })
+
+  it('skips routes that are already at task-local capacity', () => {
+    const routes = [
+      { route_id: 'route-a', route_name: 'A', model_name: 'm', base_url: 'https://a.example/v1', api_key_ref: 'A', priority: 1, weight: 1, timeout_seconds: 60, consecutive_failures: 0 },
+      { route_id: 'route-b', route_name: 'B', model_name: 'm', base_url: 'https://b.example/v1', api_key_ref: 'B', priority: 1, weight: 1, timeout_seconds: 60, consecutive_failures: 0 },
+    ]
+    const routeUsage = new Map([['route-a', 2]])
+
+    expect(orderRoutesForSlot(routes as any, 0, new Date('2026-07-09T00:00:00.000Z'), new Set(), routeUsage).map((route) => route.route_id))
+      .toEqual(['route-b'])
+  })
+
+  it('keeps cooling, probing and isolated routes out of user traffic', () => {
+    const now = new Date('2026-07-09T00:00:00.000Z')
+    const routes = [
+      { route_id: 'route-cooling', route_name: 'Cooling', model_name: 'm', base_url: 'https://cooling.example/v1', api_key_ref: 'COOLING', priority: 1, weight: 3, timeout_seconds: 60, consecutive_failures: 2, cooldown_until: '2026-07-09T00:30:00.000Z', state: 'cooling', score: 90 },
+      { route_id: 'route-probing', route_name: 'Probing', model_name: 'm', base_url: 'https://probing.example/v1', api_key_ref: 'PROBING', priority: 1, weight: 3, timeout_seconds: 60, consecutive_failures: 1, state: 'probing', score: 90 },
+      { route_id: 'route-isolated', route_name: 'Isolated', model_name: 'm', base_url: 'https://isolated.example/v1', api_key_ref: 'ISOLATED', priority: 1, weight: 3, timeout_seconds: 60, consecutive_failures: 3, state: 'isolated', score: 10 },
+      { route_id: 'route-primary', route_name: 'Primary', model_name: 'm', base_url: 'https://primary.example/v1', api_key_ref: 'PRIMARY', priority: 1, weight: 1, timeout_seconds: 60, consecutive_failures: 0, state: 'primary', score: 70 },
+    ]
+
+    expect(orderRoutesForSlot(routes as any, 0, now, new Set()).map((route) => route.route_id))
+      .toEqual(['route-primary'])
+    expect(getOutputSlotConcurrency(routes as any, 4, now)).toBe(2)
+  })
+
+  it('allows observing routes as controlled recovery candidates', () => {
+    const now = new Date('2026-07-09T00:00:00.000Z')
+    const routes = [
+      { route_id: 'route-observing', route_name: 'Observing', model_name: 'm', base_url: 'https://observing.example/v1', api_key_ref: 'OBSERVING', priority: 1, weight: 1, timeout_seconds: 60, consecutive_failures: 1, state: 'observing', score: 65 },
+      { route_id: 'route-primary', route_name: 'Primary', model_name: 'm', base_url: 'https://primary.example/v1', api_key_ref: 'PRIMARY', priority: 1, weight: 1, timeout_seconds: 60, consecutive_failures: 0, state: 'primary', score: 80 },
+    ]
+
+    expect(orderRoutesForSlot(routes as any, 0, now, new Set()).map((route) => route.route_id))
+      .toEqual(['route-observing', 'route-primary'])
+  })
+
+  it('uses health score before weight when ranking equally prioritized primary routes', () => {
+    const now = new Date('2026-07-09T00:00:00.000Z')
+    const routes = [
+      { route_id: 'route-heavy-low-score', route_name: 'Heavy', model_name: 'm', base_url: 'https://heavy.example/v1', api_key_ref: 'HEAVY', priority: 1, weight: 3, timeout_seconds: 60, consecutive_failures: 0, state: 'primary', score: 45 },
+      { route_id: 'route-light-high-score', route_name: 'Light', model_name: 'm', base_url: 'https://light.example/v1', api_key_ref: 'LIGHT', priority: 1, weight: 1, timeout_seconds: 60, consecutive_failures: 0, state: 'primary', score: 95 },
+    ]
+
+    expect(orderRoutesForSlot(routes as any, 0, now, new Set()).map((route) => route.route_id))
+      .toEqual(['route-light-high-score', 'route-heavy-low-score'])
   })
 })
 

@@ -278,6 +278,7 @@ export type ImageGatewayFailureKind =
   | 'upstream_timeout'
   | 'upstream_rate_limited'
   | 'upstream_server_error'
+  | 'upstream_async_queued'
   | 'upstream_bad_request'
   | 'upstream_auth_error'
   | 'content_policy_violation'

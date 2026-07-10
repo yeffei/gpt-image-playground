@@ -146,6 +146,7 @@ const TASK_FAILURE_KIND_OPTIONS = [
   'upstream_timeout',
   'upstream_rate_limited',
   'upstream_server_error',
+  'upstream_async_queued',
   'upstream_bad_request',
   'upstream_auth_error',
   'content_policy_violation',
@@ -203,6 +204,7 @@ const ADMIN_VALUE_LABELS: Record<string, string> = {
   upstream_timeout: '上游超时',
   upstream_rate_limited: '上游限流',
   upstream_server_error: '上游服务错误',
+  upstream_async_queued: '异步任务缺轮询',
   upstream_bad_request: '上游拒绝请求',
   upstream_auth_error: '上游鉴权失败',
   content_policy_violation: '内容审核未通过',
@@ -1173,8 +1175,9 @@ function humanizeAdminKey(key: string) {
     provider: '接口类型',
     baseUrl: '接口地址',
     apiKeyRef: '密钥环境变量',
-    upstreamModel: '线路实际模型名',
-    defaultUpstreamModel: '默认上游模型',
+    upstreamModel: '上游模型',
+    modelAlias: '模型别名',
+    defaultUpstreamModel: '默认模型名',
     supportedSizes: '前台尺寸选项',
     supportedQualities: '前台质量选项',
     supportsEdit: '支持编辑',
@@ -1287,6 +1290,7 @@ function getStatusTone(value: unknown) {
     'upstream_timeout',
     'upstream_rate_limited',
     'upstream_server_error',
+    'upstream_async_queued',
     'upstream_bad_request',
     'upstream_auth_error',
     'content_policy_violation',
@@ -2570,6 +2574,7 @@ function AdminGatewayRouteDetailView(props: { detail: Record<string, unknown>; s
           fields={[
             { key: 'name', label: '线路名称' },
             { key: 'isOfficial', label: '线路类型' },
+            { key: 'defaultUpstreamModel', label: '默认模型名' },
             { key: 'apiKeyRef', label: '密钥环境变量' },
             { key: 'baseUrl', label: '基础地址' },
             { key: 'endpoint', label: '接口地址' },
@@ -2602,8 +2607,10 @@ function AdminGatewayBindingDetailView(props: { detail: Record<string, unknown>;
     ...binding,
     modelDisplayName: getValueByPath(modelRecord ?? {}, 'displayName') ?? getValueByPath(binding, 'modelDisplayName'),
     routeName: getValueByPath(routeRecord ?? {}, 'name') ?? getValueByPath(binding, 'routeName'),
-    healthStatus: getValueByPath(routeRecord ?? {}, 'healthStatus') ?? getValueByPath(binding, 'healthStatus'),
-    restoresAt: getValueByPath(routeRecord ?? {}, 'restoresAt') ?? getValueByPath(binding, 'restoresAt') ?? getValueByPath(routeRecord ?? {}, 'diagnostics.restoresAt'),
+    modelAlias: getValueByPath(binding, 'modelAlias') ?? getValueByPath(binding, 'upstreamModel'),
+    healthStatus: getValueByPath(binding, 'healthStatus') ?? getValueByPath(routeRecord ?? {}, 'healthStatus'),
+    healthState: getValueByPath(binding, 'healthState') ?? getValueByPath(routeRecord ?? {}, 'healthState'),
+    restoresAt: getValueByPath(binding, 'restoresAt') ?? getValueByPath(routeRecord ?? {}, 'restoresAt') ?? getValueByPath(routeRecord ?? {}, 'diagnostics.restoresAt'),
   }
   const bindingLabel = props.selectedId || `${formatCellValue(getDetailMetricValue(bindingView, 'modelDisplayName'))} / ${formatCellValue(getDetailMetricValue(bindingView, 'routeName'))}`
 
@@ -2618,6 +2625,7 @@ function AdminGatewayBindingDetailView(props: { detail: Record<string, unknown>;
           items={[
             { key: 'enabled', label: '启用', value: getDetailMetricValue(bindingView, 'enabled') },
             { key: 'healthStatus', label: '线路健康', value: getDetailMetricValue(bindingView, 'healthStatus') },
+            { key: 'score', label: '信用分', value: getDetailMetricValue(bindingView, 'score') },
             { key: 'priority', label: '优先级', value: getDetailMetricValue(bindingView, 'priority') },
             { key: 'weight', label: '分流比例', value: getDetailMetricValue(bindingView, 'weight') },
           ]}
@@ -2630,7 +2638,12 @@ function AdminGatewayBindingDetailView(props: { detail: Record<string, unknown>;
             { key: 'routeName', label: '线路' },
             { key: 'enabled', label: '启用' },
             { key: 'healthStatus', label: '健康状态' },
+            { key: 'healthState', label: '自愈状态' },
+            { key: 'score', label: '信用分' },
             { key: 'restoresAt', label: '预计恢复' },
+            { key: 'nextProbeAt', label: '下次探测' },
+            { key: 'probeFailureCount', label: '探测失败数' },
+            { key: 'observingSuccessCount', label: '观察成功数' },
           ]}
         />
       </section>
@@ -2644,6 +2657,7 @@ function AdminGatewayBindingDetailView(props: { detail: Record<string, unknown>;
           record={binding}
           hideEmpty
           fields={[
+            { key: 'modelAlias', label: '模型别名' },
             { key: 'priority', label: '线路顺序' },
             { key: 'weight', label: '分流比例' },
             { key: 'createdAt', label: '创建时间' },
@@ -4575,6 +4589,7 @@ function GatewayActions(props: {
   const [baseUrl, setBaseUrl] = useState('')
   const [apiKeyRef, setApiKeyRef] = useState('')
   const [showApiKeyRef, setShowApiKeyRef] = useState(false)
+  const [defaultUpstreamModel, setDefaultUpstreamModel] = useState('')
   const [notes, setNotes] = useState('')
   const [enabled, setEnabled] = useState(true)
   const [isOfficial, setIsOfficial] = useState(false)
@@ -4645,6 +4660,7 @@ function GatewayActions(props: {
       setBaseUrl('')
       setApiKeyRef('')
       setShowApiKeyRef(false)
+      setDefaultUpstreamModel('')
       setNotes('')
       setEnabled(true)
       setIsOfficial(false)
@@ -4654,6 +4670,7 @@ function GatewayActions(props: {
     setBaseUrl(readRecordString(props.selectedRecord, 'baseUrl'))
     setApiKeyRef('')
     setShowApiKeyRef(false)
+    setDefaultUpstreamModel(readRecordString(props.selectedRecord, 'defaultUpstreamModel'))
     setNotes(readRecordString(props.selectedRecord, 'notes'))
     setEnabled(readRecordBoolean(props.selectedRecord, 'enabled', true))
     setIsOfficial(readRecordBoolean(props.selectedRecord, 'isOfficial', false))
@@ -4665,6 +4682,7 @@ function GatewayActions(props: {
       provider: string
       baseUrl: string
       apiKeyRef?: string
+      defaultUpstreamModel?: string
       notes?: string
       enabled: boolean
       isOfficial: boolean
@@ -4672,6 +4690,7 @@ function GatewayActions(props: {
       name: name.trim(),
       provider: 'openai-compatible',
       baseUrl: baseUrl.trim(),
+      defaultUpstreamModel: defaultUpstreamModel.trim(),
       notes: readOptionalText(notes),
       enabled,
       isOfficial,
@@ -4708,10 +4727,19 @@ function GatewayActions(props: {
               <input value={name} onChange={(event) => setName(event.target.value)} required={!props.selectedId} disabled={props.disabled} />
             </label>
           </div>
-          <p className="admin-form-hint">这里维护“真实会被后端调用的出图入口”。你只需要填好线路名称、接口地址和密钥环境变量名；如果这是官方直连账号，就勾选“官方线路”。</p>
+          <p className="admin-form-hint">这里维护“真实会被后端调用的出图入口”。先配置这条线路默认该调用哪个模型名；如果某个模型在这条线路上需要特殊别名，再去“模型可用线路”里单独填模型别名。</p>
           <label>
             <span>接口地址</span>
             <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} required={!props.selectedId} disabled={props.disabled} />
+          </label>
+          <label>
+            <span>默认模型名</span>
+            <input
+              value={defaultUpstreamModel}
+              onChange={(event) => setDefaultUpstreamModel(event.target.value)}
+              placeholder="留空则按系统默认 gpt-image-2"
+              disabled={props.disabled}
+            />
           </label>
           <div className="admin-form-row">
             <label>
@@ -5075,7 +5103,7 @@ function ModelRouteBindingActions(props: {
 }) {
   const [modelSkuId, setModelSkuId] = useState('')
   const [selectedRouteIds, setSelectedRouteIds] = useState<string[]>([])
-  const [upstreamModel, setUpstreamModel] = useState('')
+  const [modelAlias, setModelAlias] = useState('')
   const [priority, setPriority] = useState('100')
   const [weight, setWeight] = useState('1')
   const [timeoutSeconds, setTimeoutSeconds] = useState('60')
@@ -5090,7 +5118,7 @@ function ModelRouteBindingActions(props: {
     if (!props.selectedId) {
       setModelSkuId('')
       setSelectedRouteIds([])
-      setUpstreamModel('')
+      setModelAlias('')
       setPriority('100')
       setWeight('1')
       setTimeoutSeconds('60')
@@ -5100,7 +5128,7 @@ function ModelRouteBindingActions(props: {
     const routeId = readRecordString(props.selectedRecord, 'routeId')
     setModelSkuId(readRecordString(props.selectedRecord, 'modelSkuId'))
     setSelectedRouteIds(routeId ? [routeId] : [])
-    setUpstreamModel(readRecordString(props.selectedRecord, 'upstreamModel'))
+    setModelAlias(readRecordString(props.selectedRecord, 'modelAlias') || readRecordString(props.selectedRecord, 'upstreamModel'))
     setPriority(readRecordString(props.selectedRecord, 'priority', '100'))
     setWeight(readRecordString(props.selectedRecord, 'weight', '1'))
     setTimeoutSeconds(readRecordString(props.selectedRecord, 'timeoutSeconds', '60'))
@@ -5176,6 +5204,14 @@ function ModelRouteBindingActions(props: {
   const boundRouteIdSet = useMemo(() => new Set(boundRouteIds), [boundRouteIds])
   const newBindingCount = selectedRouteIds.length
   const addableRouteCount = Math.max(0, routeOptions.length - boundRouteIds.length)
+  const selectedHealthState = readRecordString(props.selectedRecord, 'healthState') || readRecordString(props.selectedRecord, 'healthStatus')
+  const selectedScore = readRecordString(props.selectedRecord, 'score')
+  const runHealthAction = (action: 'schedule_probe' | 'force_observing' | 'isolate' | 'restore_primary', actionName: string) => {
+    void props.onRun(actionName, async () => {
+      if (!props.selectedId) throw new Error('请先选择一条模型可用线路')
+      await adminPost(`/api/admin/model-route-bindings/${encodeURIComponent(props.selectedId)}/health-state`, props.token, { action })
+    })
+  }
 
   return (
     <div className="admin-action-grid">
@@ -5187,7 +5223,7 @@ function ModelRouteBindingActions(props: {
           const routeIdsToCreate = selectedRouteIds.filter((routeId) => !boundRouteIdSet.has(routeId))
           void props.onRun(isEditing ? '更新模型可用线路' : `创建模型可用线路（${routeIdsToCreate.length} 条）`, async () => {
             const sharedPayload = {
-              upstreamModel: readOptionalText(upstreamModel),
+              modelAlias: modelAlias.trim(),
               priority: Number(priority),
               weight: Number(weight),
               timeoutSeconds: Number(timeoutSeconds),
@@ -5280,10 +5316,10 @@ function ModelRouteBindingActions(props: {
         ) : null}
         <p className="admin-form-hint">同一个模型可以挂多条线路做主备和分流。前台用户只会选模型，真正走哪条线路由后端按你这里的顺序、权重和线路状态自动决定。</p>
         <label>
-          <span>{props.selectedId ? '这条线路实际调用的模型名' : '这些线路实际调用的模型名'}</span>
-          <input value={upstreamModel} onChange={(event) => setUpstreamModel(event.target.value)} disabled={props.disabled} />
+          <span>{props.selectedId ? '这条绑定的模型别名' : '这些绑定的模型别名'}</span>
+          <input value={modelAlias} onChange={(event) => setModelAlias(event.target.value)} disabled={props.disabled} />
         </label>
-        <p className="admin-form-hint">如果上游要求的模型名和你后台这个模型代号不一样，就在这里填“实际上游模型名”；留空表示两边名称一致。</p>
+        <p className="admin-form-hint">只有当某条线路要求这个模型使用特殊别名时才填写；留空时会直接使用该线路里的“默认模型名”。</p>
         <div className="admin-form-row">
           <label>
             <span>线路顺序</span>
@@ -5316,6 +5352,45 @@ function ModelRouteBindingActions(props: {
         onRun={props.onRun}
         onDelete={() => adminDelete(`/api/admin/model-route-bindings/${encodeURIComponent(props.selectedId)}`, props.token)}
       />
+      {props.selectedId ? (
+        <section className="admin-action-form">
+          <h3>线路自愈状态</h3>
+          <div className="admin-strategy-list">
+            <div><span>当前状态</span><strong>{selectedHealthState || '-'}</strong></div>
+            <div><span>信用分</span><strong>{selectedScore || '-'}</strong></div>
+          </div>
+          <div className="admin-action-button-row">
+            <button
+              type="button"
+              disabled={props.disabled}
+              onClick={() => runHealthAction('schedule_probe', '安排线路探测')}
+            >
+              安排探测
+            </button>
+            <button
+              type="button"
+              disabled={props.disabled}
+              onClick={() => runHealthAction('force_observing', '强制进入观察')}
+            >
+              强制观察
+            </button>
+            <button
+              type="button"
+              disabled={props.disabled}
+              onClick={() => runHealthAction('restore_primary', '恢复主力状态')}
+            >
+              恢复主力
+            </button>
+            <button
+              type="button"
+              disabled={props.disabled}
+              onClick={() => runHealthAction('isolate', '隔离模型线路')}
+            >
+              隔离线路
+            </button>
+          </div>
+        </section>
+      ) : null}
     </div>
   )
 }
@@ -6319,6 +6394,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
   const inspirationSummaryCards = useMemo(() => props.section === 'inspiration' ? getInspirationSummaryCards(summary) : [], [props.section, summary])
   const agentWorkflowSummaryCards = useMemo(() => props.section === 'agentWorkflow' ? getAgentWorkflowSummaryCards(summary) : [], [props.section, summary])
   const agentAttentionQueues = useMemo(() => props.section === 'agentWorkflow' ? getAgentAttentionQueues(summary) : [], [props.section, summary])
+  const shouldShowDetailPanel = props.section !== 'gateway'
 
   const detailPanel = (
     <section className={isContentModule ? 'admin-detail-panel admin-content-detail-panel' : `admin-panel admin-detail-panel${useInlineWorkbench ? ' admin-inline-detail-panel' : ''}`}>
@@ -6639,7 +6715,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
               </div>
               {inlineWorkbenchMode === 'detail' || !hasInlineActionPanel ? (
                 <div className="admin-inline-workbench-main">
-                  {detailPanel}
+                  {shouldShowDetailPanel ? detailPanel : null}
                 </div>
               ) : null}
               {hasInlineActionPanel && inlineWorkbenchMode === 'action' ? (
@@ -6864,7 +6940,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
               </summary>
               <div className="admin-bottom-detail-shell">
                 {shouldRenderActionPanel && selectedId ? actionPanel : null}
-                {detailPanel}
+                {shouldShowDetailPanel ? detailPanel : null}
               </div>
             </details>
           ) : null}
@@ -6873,7 +6949,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
         {useInlineWorkbench || useBottomDetailWorkbench || useUserDetailModal ? null : (
           <aside className="admin-side-column">
             {shouldRenderActionPanel && !showActionPanelInWorkspace ? actionPanel : null}
-            {detailPanel}
+            {shouldShowDetailPanel ? detailPanel : null}
             {summaryPanel}
           </aside>
         )}
@@ -6887,7 +6963,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
           onClose={() => setUserDetailModalOpen(false)}
         >
           <div className="admin-modal-layout">
-            {detailPanel}
+            {shouldShowDetailPanel ? detailPanel : null}
             {shouldRenderActionPanel ? actionPanel : null}
           </div>
         </AdminModal>

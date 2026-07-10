@@ -1,3 +1,6 @@
+import { getOrderedUpstreamModelCandidates } from './gatewayModelAlias.js'
+import { extractFirstImageDataUrlFromResponse } from './upstreamImageResponse.js'
+
 const HIGH_RES_PROBE_SIZES = ['1024x1024', '2560x1440', '3840x2160'] as const
 const HIGH_RES_PROBE_TIMEOUT_MS = 120_000
 const HIGH_RES_PROBE_4K_TIMEOUT_MS = 240_000
@@ -100,18 +103,6 @@ async function readGatewayError(response: Response) {
   }
 }
 
-function normalizeBase64Image(value: string, fallbackMime: string) {
-  return value.startsWith('data:') ? value : `data:${fallbackMime};base64,${value}`
-}
-
-async function fetchImageAsDataUrl(url: string, fallbackMime: string) {
-  const response = await fetch(url)
-  if (!response.ok) throw new Error(`图片链接下载失败：HTTP ${response.status}`)
-  const blob = await response.blob()
-  const bytes = Buffer.from(await blob.arrayBuffer())
-  return `data:${blob.type || fallbackMime};base64,${bytes.toString('base64')}`
-}
-
 async function fetchWithTimeout(input: FetchInput, init: RequestInit, timeoutMs = HIGH_RES_PROBE_TIMEOUT_MS) {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
@@ -125,25 +116,6 @@ async function fetchWithTimeout(input: FetchInput, init: RequestInit, timeoutMs 
   }
 }
 
-async function extractFirstImageDataUrl(payload: unknown, fallbackMime: string) {
-  const data = payload && typeof payload === 'object' && 'data' in payload && Array.isArray((payload as { data?: unknown }).data)
-    ? (payload as { data: unknown[] }).data
-    : []
-  for (const item of data) {
-    if (!item || typeof item !== 'object') continue
-    const b64 = 'b64_json' in item && typeof (item as { b64_json?: unknown }).b64_json === 'string'
-      ? (item as { b64_json: string }).b64_json
-      : ''
-    const url = 'url' in item && typeof (item as { url?: unknown }).url === 'string'
-      ? (item as { url: string }).url
-      : ''
-    if (b64) return normalizeBase64Image(b64, fallbackMime)
-    if (url.startsWith('http://') || url.startsWith('https://')) return await fetchImageAsDataUrl(url, fallbackMime)
-    if (url.startsWith('data:')) return url
-  }
-  throw new Error('接口没有返回可识别的图片数据')
-}
-
 function parseRequestedSize(size: string) {
   const match = size.match(/^(\d+)x(\d+)$/)
   if (!match) return null
@@ -151,21 +123,6 @@ function parseRequestedSize(size: string) {
     width: Number(match[1]),
     height: Number(match[2]),
   }
-}
-
-function parseRequestedLongestEdge(size?: string | null) {
-  const parsed = size ? parseRequestedSize(size) : null
-  return parsed ? Math.max(parsed.width, parsed.height) : 0
-}
-
-function getSizeSpecificModelAlias(model: string, size?: string | null, options: { allowRelayAlias?: boolean } = {}) {
-  if (!options.allowRelayAlias) return ''
-  const normalizedModel = model.trim().toLowerCase()
-  if (normalizedModel !== 'gpt-image-2') return ''
-  const longestEdge = parseRequestedLongestEdge(size)
-  if (longestEdge >= 3840) return 'gpt-image-2-4k'
-  if (longestEdge >= 2560) return 'gpt-image-2-2k'
-  return ''
 }
 
 function getPngDimensions(bytes: Buffer) {
@@ -252,9 +209,13 @@ export async function probeGatewayRoute(route: ProbeRoute, sizes: readonly HighR
   for (const requestedSize of sizes.length ? sizes : HIGH_RES_PROBE_SIZES) {
     const startedAt = Date.now()
     const attemptedModels: string[] = []
+    let lastStatusCode: number | null = null
     try {
-      const sizeAlias = getSizeSpecificModelAlias(upstreamModel, requestedSize, { allowRelayAlias: route.isOfficial !== true })
-      const modelsToTry = sizeAlias ? [sizeAlias, upstreamModel] : [upstreamModel]
+      const modelsToTry = getOrderedUpstreamModelCandidates({
+        routeDefaultModel: upstreamModel,
+        size: requestedSize,
+        allowRelayAlias: route.isOfficial !== true,
+      })
       const timeoutMs = requestedSize === '3840x2160' ? HIGH_RES_PROBE_4K_TIMEOUT_MS : HIGH_RES_PROBE_TIMEOUT_MS
       let response: Response | null = null
       let errorSummary = ''
@@ -277,6 +238,7 @@ export async function probeGatewayRoute(route: ProbeRoute, sizes: readonly HighR
           },
           body: JSON.stringify(body),
         }, timeoutMs)
+        lastStatusCode = response.status
         if (response.ok) {
           upstreamModel = candidateModel
           break
@@ -307,7 +269,7 @@ export async function probeGatewayRoute(route: ProbeRoute, sizes: readonly HighR
         continue
       }
 
-      const imageDataUrl = await extractFirstImageDataUrl(await response.json(), 'image/png')
+      const imageDataUrl = await extractFirstImageDataUrlFromResponse(response, 'image/png')
       const actual = getImageDimensionsFromDataUrl(imageDataUrl)
       const requested = parseRequestedSize(requestedSize)
       const shrunk = Boolean(actual && requested && (actual.width < requested.width || actual.height < requested.height))
@@ -334,7 +296,7 @@ export async function probeGatewayRoute(route: ProbeRoute, sizes: readonly HighR
         attemptedModels: attemptedModels.length ? attemptedModels : [upstreamModel],
         shrunk: false,
         returnedImage: false,
-        statusCode: null,
+        statusCode: lastStatusCode,
         latencyMs: Date.now() - startedAt,
         errorSummary: error instanceof Error ? error.message : String(error),
       })
