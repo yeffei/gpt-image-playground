@@ -608,9 +608,10 @@ const GATEWAY_MODULES: Record<GatewaySubsectionKey, AdminModuleConfig> = {
     columns: [
       { key: 'modelDisplayName', label: '模型' },
       { key: 'routeName', label: '线路' },
-      { key: 'healthStatus', label: '健康状态' },
+      { key: 'healthState', label: '自愈状态' },
+      { key: 'score', label: '信用分' },
+      { key: 'nextProbeAt', label: '下次探测' },
       { key: 'enabled', label: '启用' },
-      { key: 'restoresAt', label: '预计恢复' },
       { key: 'priority', label: '线路顺序' },
       { key: 'weight', label: '分流比例' },
     ],
@@ -5359,6 +5360,7 @@ function ModelRouteBindingActions(props: {
             <div><span>当前状态</span><strong>{selectedHealthState || '-'}</strong></div>
             <div><span>信用分</span><strong>{selectedScore || '-'}</strong></div>
           </div>
+          <p className="admin-form-warning">安排探测会在下一次调度触发低成本真实上游 probe，可能消耗供应商额度；不会扣用户账户余额。</p>
           <div className="admin-action-button-row">
             <button
               type="button"
