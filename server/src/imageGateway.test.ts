@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { LIBRARY_ACTIVE_OUTPUT_LIMIT, LIBRARY_TRASH_RETENTION_DAYS, buildUpstreamPromptFields, deleteCompletedGenerationTasksForUser, deriveFailureResultFields, enforceLibraryActiveOutputLimit, extractImages, extractImagesFromEventStream, extractRequiredModelAlias, filterRoutesForRequestedSize, finalizeFailure, getOutputSlotConcurrency, getUpstreamModelCandidatesForRoute, isClientDisconnected, normalizeRequestedParamsForModel, orderRoutesForSlot, prioritizeSizeSpecificModelAliases, resolveFinalDeliveryPlan, resolveRequestedModelSku, restoreGenerationOutput } from './imageGateway'
+import { LIBRARY_ACTIVE_OUTPUT_LIMIT, LIBRARY_TRASH_RETENTION_DAYS, buildUpstreamPromptFields, deleteCompletedGenerationTasksForUser, deriveFailureResultFields, enforceLibraryActiveOutputLimit, extractImages, extractImagesFromEventStream, extractRequiredModelAlias, filterRoutesForRequestedSize, finalizeFailure, getOutputSlotConcurrency, getRecoveryProbeBudgetResetAt, getUpstreamModelCandidatesForRoute, isClientDisconnected, normalizeRequestedParamsForModel, orderRoutesForSlot, prioritizeSizeSpecificModelAliases, resolveFinalDeliveryPlan, resolveRequestedModelSku, restoreGenerationOutput } from './imageGateway'
 
 function classifyGatewayFailure(error: unknown) {
   if (error && typeof error === 'object' && 'failureKind' in error && typeof (error as { failureKind?: unknown }).failureKind === 'string') {
@@ -277,6 +277,25 @@ describe('server image gateway model capability normalization', () => {
 
     expect(orderRoutesForSlot(routes as any, 0, now, new Set()).map((route) => route.route_id))
       .toEqual(['route-light-high-score', 'route-heavy-low-score'])
+  })
+
+  it('blocks automatic recovery probes until the per-route budget window resets', () => {
+    const now = new Date('2026-07-10T12:00:00.000Z')
+
+    expect(getRecoveryProbeBudgetResetAt({
+      recovery_probe_window_started_at: '2026-07-10T00:00:00.000Z',
+      recovery_probe_count: 3,
+    } as any, now)).toBe(new Date('2026-07-11T00:00:00.000Z').getTime())
+
+    expect(getRecoveryProbeBudgetResetAt({
+      recovery_probe_window_started_at: '2026-07-09T00:00:00.000Z',
+      recovery_probe_count: 3,
+    } as any, now)).toBe(0)
+
+    expect(getRecoveryProbeBudgetResetAt({
+      recovery_probe_window_started_at: '2026-07-10T00:00:00.000Z',
+      recovery_probe_count: 2,
+    } as any, now)).toBe(0)
   })
 })
 

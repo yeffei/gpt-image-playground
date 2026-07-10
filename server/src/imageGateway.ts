@@ -36,6 +36,8 @@ const MIN_ROUTE_HEALTH_SCORE = 0
 const OBSERVING_SUCCESS_THRESHOLD = 2
 const OBSERVING_PROBE_DELAY_SECONDS = 10 * 60
 const MAX_RECOVERY_PROBES_PER_TRIGGER = 2
+const RECOVERY_PROBE_BUDGET_WINDOW_SECONDS = 24 * 60 * 60
+const MAX_RECOVERY_PROBES_PER_ROUTE_WINDOW = 3
 const TASK_ABORT_REASON_CANCELLED = 'task_cancelled'
 const GPT_IMAGE_2_SUPPORTED_SIZES = ['*']
 export const LIBRARY_ACTIVE_OUTPUT_LIMIT = 100
@@ -120,6 +122,8 @@ type RuntimeRouteRow = {
   observing_success_count?: number | null
   last_probe_at?: string | null
   last_probe_result?: unknown
+  recovery_probe_window_started_at?: string | null
+  recovery_probe_count?: number | null
 }
 
 type BillingReservation = {
@@ -966,7 +970,9 @@ async function loadRoutesForModel(db: Db, modelSkuId: string) {
       COALESCE(h.score, ${DEFAULT_ROUTE_HEALTH_SCORE}) AS score,
       COALESCE(h.observing_success_count, 0) AS observing_success_count,
       h.last_probe_at::text,
-      h.last_probe_result
+      h.last_probe_result,
+      h.recovery_probe_window_started_at::text,
+      COALESCE(h.recovery_probe_count, 0) AS recovery_probe_count
     FROM model_route_bindings b
     JOIN gateway_routes r ON r.id = b.route_id
     JOIN model_skus m ON m.id = b.model_sku_id
@@ -1490,10 +1496,19 @@ function getProbeReadyAt(route: RuntimeRouteRow) {
   return candidates.length ? Math.max(...candidates) : 0
 }
 
+export function getRecoveryProbeBudgetResetAt(route: Pick<RuntimeRouteRow, 'recovery_probe_window_started_at' | 'recovery_probe_count'>, now = new Date()) {
+  const windowStartedAt = route.recovery_probe_window_started_at ? new Date(route.recovery_probe_window_started_at).getTime() : 0
+  if (!Number.isFinite(windowStartedAt) || windowStartedAt <= 0) return 0
+  const resetAt = windowStartedAt + RECOVERY_PROBE_BUDGET_WINDOW_SECONDS * 1000
+  const probeCount = Math.max(0, Number(route.recovery_probe_count ?? 0))
+  return probeCount >= MAX_RECOVERY_PROBES_PER_ROUTE_WINDOW && resetAt > now.getTime() ? resetAt : 0
+}
+
 function isRouteRecoveryProbeDue(route: RuntimeRouteRow, now = new Date()) {
   const state = normalizeRouteHealthState(route, now)
   if (state === 'primary' || state === 'isolated') return false
   if (state === 'cooling' && isRouteCoolingDown(route, now)) return false
+  if (getRecoveryProbeBudgetResetAt(route, now) > 0) return false
   const readyAt = getProbeReadyAt(route)
   return readyAt > 0 && readyAt <= now.getTime()
 }
@@ -1501,23 +1516,60 @@ function isRouteRecoveryProbeDue(route: RuntimeRouteRow, now = new Date()) {
 async function markRouteProbeStarted(db: Db, input: {
   routeId: string
   modelSkuId: string
-}) {
+}): Promise<'started' | 'budget_exhausted' | 'not_started'> {
   const startedAt = nowIso()
-  await db.query(`
+  const budgetWindowCutoff = addSeconds(new Date(startedAt), -RECOVERY_PROBE_BUDGET_WINDOW_SECONDS)
+  const result = await db.query(`
     UPDATE gateway_route_health
     SET state = 'probing',
-      last_probe_at = $1,
+      last_probe_at = $1::timestamptz,
       next_probe_at = $2::timestamptz,
+      recovery_probe_window_started_at = CASE
+        WHEN recovery_probe_window_started_at IS NULL OR recovery_probe_window_started_at <= $3::timestamptz THEN $1::timestamptz
+        ELSE recovery_probe_window_started_at
+      END,
+      recovery_probe_count = CASE
+        WHEN recovery_probe_window_started_at IS NULL OR recovery_probe_window_started_at <= $3::timestamptz THEN 1
+        ELSE recovery_probe_count + 1
+      END,
       updated_at = $1
-    WHERE route_id = $3
-      AND model_sku_id = $4
+    WHERE route_id = $4
+      AND model_sku_id = $5
       AND state <> 'isolated'
+      AND (
+        recovery_probe_window_started_at IS NULL
+        OR recovery_probe_window_started_at <= $3::timestamptz
+        OR recovery_probe_count < $6
+      )
   `, [
     startedAt,
     addSeconds(new Date(startedAt), OBSERVING_PROBE_DELAY_SECONDS),
+    budgetWindowCutoff,
     input.routeId,
     input.modelSkuId,
+    MAX_RECOVERY_PROBES_PER_ROUTE_WINDOW,
   ])
+  if ((result.rowCount ?? 0) > 0) return 'started'
+
+  const exhausted = await db.query(`
+    UPDATE gateway_route_health
+    SET next_probe_at = recovery_probe_window_started_at + ($1::double precision * interval '1 second'),
+      updated_at = $2::timestamptz
+    WHERE route_id = $3
+      AND model_sku_id = $4
+      AND state <> 'isolated'
+      AND recovery_probe_window_started_at IS NOT NULL
+      AND recovery_probe_window_started_at > $5::timestamptz
+      AND recovery_probe_count >= $6
+  `, [
+    RECOVERY_PROBE_BUDGET_WINDOW_SECONDS,
+    startedAt,
+    input.routeId,
+    input.modelSkuId,
+    budgetWindowCutoff,
+    MAX_RECOVERY_PROBES_PER_ROUTE_WINDOW,
+  ])
+  return (exhausted.rowCount ?? 0) > 0 ? 'budget_exhausted' : 'not_started'
 }
 
 async function recordRouteProbeSuccess(db: Db, input: {
@@ -1641,7 +1693,8 @@ async function recordRouteProbeFailure(db: Db, input: {
 
 async function runRouteRecoveryProbe(db: Db, route: RuntimeRouteRow, modelSkuId: string) {
   const startedAt = Date.now()
-  await markRouteProbeStarted(db, { routeId: route.route_id, modelSkuId })
+  const startStatus = await markRouteProbeStarted(db, { routeId: route.route_id, modelSkuId })
+  if (startStatus !== 'started') return
   try {
     const result = await callUpstream(route, {
       modelSku: modelSkuId,
