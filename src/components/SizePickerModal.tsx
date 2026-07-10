@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { calculateImageSize, formatImageRatio, normalizeImageSize, parseRatio, type SizeTier } from '../lib/size'
+import { calculateImageSize, formatImageRatio, normalizeImageSize, type SizeTier } from '../lib/size'
 import { useStore } from '../store'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import ViewportTooltip from './ViewportTooltip'
@@ -152,7 +152,6 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
   const availableSizeTiers = useMemo(() => getAvailableSizeTiers(maxDeliveryLongEdge), [maxDeliveryLongEdge])
   const [tier, setTier] = useState<SizeTier>(getNearestAllowedSizeTier(currentPreset?.tier ?? '1K', maxDeliveryLongEdge))
   const [ratio, setRatio] = useState(currentPreset?.ratio ?? (effectiveAllowAuto ? '1:1' : '4:3'))
-  const [customRatio, setCustomRatio] = useState('16:9')
   const [selectedSupportedSize, setSelectedSupportedSize] = useState(() => {
     const normalizedCurrent = normalizeImageSize(currentSize)
     return supportedSizes.includes(normalizedCurrent) ? normalizedCurrent : normalizeImageSize(supportedSizes[0] ?? '')
@@ -165,9 +164,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
     if (hintTimerRef.current != null) window.clearTimeout(hintTimerRef.current)
   }, [])
 
-  const activeRatio = ratio === 'custom' ? customRatio : ratio
-  const parsedCustomRatio = parseRatio(customRatio)
-  const customRatioValid = ratio !== 'custom' || Boolean(parsedCustomRatio)
+  const activeRatio = ratio
   const supportedSizeCards = useMemo(
     () => supportedSizes.map((size) => ({
       value: normalizeImageSize(size),
@@ -238,8 +235,8 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
 
   const buttonClass = (active: boolean) => {
     return `rounded-xl border px-3 py-2 text-sm transition ${active
-      ? 'border-blue-400 bg-blue-50 text-blue-600 dark:border-blue-500/50 dark:bg-blue-500/10 dark:text-blue-300'
-      : 'border-gray-200/70 bg-white/60 text-gray-600 hover:bg-gray-50 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300 dark:hover:bg-white/[0.06]'
+      ? 'border-[rgba(123,97,255,0.34)] bg-[rgba(123,97,255,0.12)] text-[#785cff] dark:border-[rgba(123,97,255,0.34)] dark:bg-[rgba(123,97,255,0.12)] dark:text-[#b9adff]'
+      : 'border-[rgba(17,17,17,0.1)] bg-[#f7f6f3] text-[#111111] hover:border-[rgba(123,97,255,0.28)] hover:bg-[rgba(123,97,255,0.08)] hover:text-[#785cff] dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300 dark:hover:border-[rgba(123,97,255,0.34)] dark:hover:bg-[rgba(123,97,255,0.12)] dark:hover:text-[#b9adff]'
     }`
   }
 
@@ -252,14 +249,14 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
   return createPortal(
     <div
       data-no-drag-select
-      className="fixed inset-0 z-[70] flex items-center justify-center p-4"
+      className="size-picker-backdrop fixed inset-0 z-[70] flex items-center justify-center p-4"
       onMouseDown={handleMouseDown}
       onMouseUp={handleMouseUp}
     >
-      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm animate-overlay-in" />
+      <div className="platform-modal-overlay absolute inset-0 animate-overlay-in" />
       <div
         ref={modalRef}
-        className="relative z-10 flex max-h-[86vh] w-full max-w-md flex-col rounded-3xl border border-white/50 bg-white/95 p-4 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10"
+        className="size-picker-panel relative z-10 flex max-h-[86vh] w-full max-w-md flex-col rounded-3xl border border-white/50 bg-white/95 p-4 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10"
       >
         <div className="mb-3 flex flex-shrink-0 items-start justify-between gap-4">
           <div>
@@ -311,7 +308,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
             {mode === 'auto' && (
               <div className="flex h-full animate-fade-in items-center justify-center pt-6 pb-3 text-center">
                 <div>
-                  <div className="mb-3 inline-flex h-14 w-14 items-center justify-center rounded-full bg-blue-50 text-blue-500 dark:bg-blue-500/10">
+                  <div className="size-picker-auto-icon mb-3 inline-flex h-14 w-14 items-center justify-center rounded-full">
                     <svg className="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                     </svg>
@@ -353,39 +350,45 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
               <div className="space-y-3 animate-fade-in">
                 <section>
                   <div className="mb-2 text-xs font-medium text-gray-400 dark:text-gray-500">常用预设</div>
-                  <div className="grid grid-cols-4 gap-1.5">
+                  <div className="size-picker-preset-grid grid grid-cols-4 gap-1.5">
                     {QUICK_PRESETS.map((item) => {
                       const active = tier === item.tier && ratio === item.ratio
                       return (
                         <button
                           key={`${item.tier}-${item.ratio}`}
-                          className={`${buttonClass(active)} min-h-[72px] !px-2 !py-2 text-center`}
+                          className={`${buttonClass(active)} size-picker-preset-button min-h-[54px] !px-2 !py-1.5 text-center`}
                           onClick={() => applyQuickPreset(item.tier, item.ratio)}
                         >
-                          <div className="text-[12px] font-medium leading-tight">{item.label}</div>
-                          <div className="mt-0.5 text-[10px] opacity-70">{item.hint}</div>
+                          <div className="text-[13px] font-medium leading-tight">{item.label}</div>
+                          <div className="mt-0.5 text-[11px] opacity-65">{item.hint}</div>
                         </button>
                       )
                     })}
                   </div>
                 </section>
 
-                <section>
-                  <div className="mb-2 text-xs font-medium text-gray-400 dark:text-gray-500">分辨率档位</div>
-                  <div className="grid grid-cols-3 gap-2">
+                <section className="size-picker-tier-section">
+                  <div className="size-picker-tier-row mb-2 flex items-center justify-between gap-3">
+                    <div className="text-xs font-medium text-gray-400 dark:text-gray-500">分辨率档位</div>
+                    <div className="size-picker-tier-options flex min-w-0 flex-1 justify-end gap-2">
                     {availableSizeTiers.map((item) => {
                       const resolutionHint = getTierResolutionHint(item, activeRatio)
                       return (
-                        <button key={item} className={`${buttonClass(tier === item)} text-left`} onClick={() => setTier(item)}>
-                          <div className="text-[13px] font-medium">{item}</div>
-                          <div className="mt-0.5 text-[11px] opacity-70">{TIER_HINTS[item]}</div>
-                          {resolutionHint && <div className="mt-1 text-[10px] opacity-60">{resolutionHint}</div>}
+                        <button
+                          key={item}
+                          className={`${buttonClass(tier === item)} size-picker-tier-pill text-left`}
+                          onClick={() => setTier(item)}
+                          title={resolutionHint ?? TIER_HINTS[item]}
+                        >
+                          <span className="text-[13px] font-semibold">{item}</span>
+                          <span className="ml-1.5 text-[11px] opacity-70">{TIER_HINTS[item]}</span>
                         </button>
                       )
                     })}
+                    </div>
                   </div>
                   {availableSizeTiers.length < TIERS.length && (
-                    <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-700 dark:bg-amber-400/10 dark:text-amber-200">
+                    <div className="size-picker-warning mt-2 rounded-lg px-3 py-2 text-[11px] leading-relaxed">
                       当前模型的后台线路实测最高支持 {availableSizeTiers.at(-1)}，更高档位暂不开放。
                     </div>
                   )}
@@ -417,27 +420,8 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                         </button>
                       )
                     })}
-                    <button className={`${buttonClass(ratio === 'custom')} col-span-4`} onClick={() => setRatio('custom')}>
-                      自定义比例
-                    </button>
                   </div>
                 </section>
-
-                {ratio === 'custom' && (
-                  <label className="block animate-fade-in">
-                    <span className="mb-2 block text-xs font-medium text-gray-400 dark:text-gray-500">输入自定义画幅比例</span>
-                    <input
-                      value={customRatio}
-                      onChange={(e) => setCustomRatio(e.target.value)}
-                      placeholder="例如 5:4 / 2.39:1"
-                      className={`w-full rounded-xl border px-3 py-2 text-sm outline-none transition ${
-                        customRatioValid
-                          ? 'border-gray-200/70 bg-white/60 text-gray-700 focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50'
-                          : 'border-red-300 bg-white/60 text-gray-700 focus:border-red-400 dark:border-red-500/40 dark:bg-white/[0.03] dark:text-gray-200'
-                      }`}
-                    />
-                  </label>
-                )}
               </div>
             )}
 
@@ -488,7 +472,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
           <button
             onClick={applySize}
             disabled={!previewSize}
-            className="flex-1 rounded-xl bg-blue-500 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+            className="size-picker-confirm flex-1 rounded-xl px-4 py-2.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50"
           >
             确定
           </button>

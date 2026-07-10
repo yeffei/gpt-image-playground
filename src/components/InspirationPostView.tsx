@@ -84,7 +84,7 @@ export function InspirationPostContent(props: {
           <div className="relative overflow-hidden border-b border-white/70 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.82),rgba(236,241,248,0.78)_48%,rgba(226,232,240,0.72))] xl:border-b-0 xl:border-r">
             <div className="absolute inset-x-[8%] top-8 h-28 rounded-full bg-[radial-gradient(circle,rgba(148,163,184,0.18),transparent_72%)] blur-3xl" />
             <div className="relative flex h-[clamp(320px,58vh,680px)] items-stretch justify-center p-0 sm:h-[clamp(380px,62vh,720px)] xl:h-[clamp(520px,64vh,760px)]">
-              <div className="flex h-full w-full overflow-hidden rounded-none border-0 bg-white/72 shadow-none backdrop-blur sm:rounded-none xl:rounded-r-[1px]">
+              <div className="flex h-full w-full overflow-hidden rounded-none border-0 bg-white/72 shadow-none sm:rounded-none xl:rounded-r-[1px]">
                 <div className="h-full w-full overflow-hidden rounded-none bg-[linear-gradient(180deg,rgba(248,250,252,0.98),rgba(241,245,249,0.92))]">
                   <img
                     src={post.imageUrl}
@@ -104,7 +104,7 @@ export function InspirationPostContent(props: {
             <div className="space-y-5 sm:space-y-6">
               <div className="flex flex-wrap items-center gap-2.5">
                 {post.featured ? (
-                  <span className="inline-flex rounded-full bg-amber-100 px-3.5 py-1.5 text-[11px] font-semibold text-amber-700">
+                  <span className="inspiration-featured-badge inline-flex rounded-full px-3.5 py-1.5 text-[11px] font-semibold">
                     精选作品
                   </span>
                 ) : null}

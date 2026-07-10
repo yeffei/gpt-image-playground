@@ -39,9 +39,9 @@ function getActionButtonClass(tone: 'primary' | 'secondary' | 'danger' | 'warnin
   if (tone === 'secondary') {
     return 'border border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-400 dark:hover:bg-white/[0.06]'
   }
-  if (tone === 'warning') return 'bg-orange-500 text-white hover:bg-orange-600'
-  if (tone === 'danger') return 'bg-red-500 text-white hover:bg-red-600'
-  return 'bg-blue-500 text-white hover:bg-blue-600'
+  if (tone === 'warning') return 'platform-confirm-action is-warning'
+  if (tone === 'danger') return 'platform-confirm-action is-danger'
+  return 'platform-confirm-action is-primary'
 }
 
 export default function ConfirmDialog() {
@@ -93,21 +93,21 @@ export default function ConfirmDialog() {
       className="fixed inset-0 z-[110] flex items-center justify-center p-4"
       onClick={handleClose}
     >
-      <div className="absolute inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-md animate-overlay-in" />
+      <div className="platform-modal-overlay absolute inset-0 animate-overlay-in" />
       <div
-        className="relative bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] max-w-sm w-full p-6 z-10 ring-1 ring-black/5 dark:ring-white/10 animate-confirm-in"
+        className="platform-confirm-panel relative max-w-sm w-full p-6 z-10 animate-confirm-in"
         onClick={(e) => e.stopPropagation()}
       >
         <h3 className="mb-2 flex items-center gap-2 text-base font-bold text-gray-800 dark:text-gray-100">
           {confirmDialog.icon === 'info' && (
-            <svg className="h-5 w-5 shrink-0 text-blue-500" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+            <svg className="h-5 w-5 shrink-0 text-[var(--platform-accent-fill,#785cff)]" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
               <circle cx="12" cy="12" r="10" />
               <path d="M12 16v-4" />
               <path d="M12 8h.01" />
             </svg>
           )}
           {confirmDialog.icon === 'copy' && (
-            <CopyIcon className="h-5 w-5 shrink-0 text-blue-500" />
+            <CopyIcon className="h-5 w-5 shrink-0 text-[var(--platform-accent-fill,#785cff)]" />
           )}
           {confirmDialog.title}
         </h3>
@@ -146,7 +146,7 @@ export default function ConfirmDialog() {
             {confirmDialog.showCancel !== false && (
               <button
                 onClick={handleCancel}
-                className="flex-1 py-2 rounded-lg border border-gray-200 dark:border-white/[0.08] text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/[0.06] transition"
+                className="platform-confirm-action is-secondary flex-1 py-2 rounded-lg text-sm transition"
               >
                 {cancelText}
               </button>

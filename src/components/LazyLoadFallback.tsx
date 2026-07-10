@@ -29,9 +29,9 @@ export function LazyViewFallback({
       aria-live="polite"
       aria-busy="true"
     >
-      <div className="overflow-hidden rounded-[1.75rem] border border-[rgba(148,163,184,0.16)] bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(248,250,252,0.9))] p-5 shadow-[0_18px_50px_rgba(15,23,42,0.08)] dark:border-white/[0.08] dark:bg-[linear-gradient(180deg,rgba(15,23,42,0.86),rgba(15,23,42,0.72))]">
+      <div className="lazy-fallback-panel overflow-hidden p-5">
         <div className="flex items-center gap-3 text-slate-600 dark:text-slate-200">
-          <span className="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-cyan-50 text-cyan-600 dark:bg-cyan-500/12 dark:text-cyan-300">
+          <span className="lazy-fallback-icon inline-flex h-10 w-10 items-center justify-center rounded-2xl">
             <Spinner />
           </span>
           <div>
@@ -66,10 +66,10 @@ export function LazyModalFallback({
       aria-live="polite"
       aria-busy="true"
     >
-      <div className="absolute inset-0 bg-slate-950/22 backdrop-blur-sm" />
-      <div className="relative z-10 w-full max-w-sm rounded-[1.75rem] border border-white/55 bg-white/95 p-5 shadow-2xl ring-1 ring-black/5 dark:border-white/[0.08] dark:bg-slate-900/94 dark:ring-white/10">
+      <div className="platform-modal-overlay absolute inset-0" />
+      <div className="lazy-fallback-panel relative z-10 w-full max-w-sm p-5">
         <div className="flex items-center gap-3 text-slate-700 dark:text-slate-100">
-          <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-cyan-50 text-cyan-600 dark:bg-cyan-500/12 dark:text-cyan-300">
+          <span className="lazy-fallback-icon inline-flex h-11 w-11 items-center justify-center rounded-2xl">
             <Spinner />
           </span>
           <div>

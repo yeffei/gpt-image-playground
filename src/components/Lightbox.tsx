@@ -622,7 +622,7 @@ function LightboxInner({ src, imageId, maskPreviewSrc, onClose, showNav, current
   const zoomPercent = Math.round(s * 100)
 
   const navBtnClass =
-    'absolute top-1/2 -translate-y-1/2 p-2 rounded-full bg-black/40 text-white hover:bg-black/60 transition-all z-10 backdrop-blur-sm'
+    'absolute top-1/2 -translate-y-1/2 p-2 rounded-full bg-black/40 text-white hover:bg-black/60 transition-all z-10'
 
   return (
     <div
@@ -633,7 +633,7 @@ function LightboxInner({ src, imageId, maskPreviewSrc, onClose, showNav, current
       onClick={onClick}
       onDoubleClick={onDoubleClick}
     >
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-md animate-fade-in" />
+      <div className="absolute inset-0 bg-black/76 animate-fade-in" />
       <div className="relative animate-zoom-in">
         <div className="relative inline-block">
           <div
@@ -668,7 +668,7 @@ function LightboxInner({ src, imageId, maskPreviewSrc, onClose, showNav, current
               type="button"
               data-lightbox-control
               onClick={handleDownload}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-black/58 text-white/88 shadow-[0_6px_18px_rgba(0,0,0,0.26),inset_0_0_0_1px_rgba(255,255,255,0.12)] backdrop-blur-xl transition-all hover:bg-black/72 hover:text-white focus:outline-none focus:ring-2 focus:ring-white/30 sm:h-8.5 sm:w-8.5"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-black/58 text-white/88 shadow-[0_6px_18px_rgba(0,0,0,0.26),inset_0_0_0_1px_rgba(255,255,255,0.12)] transition-all hover:bg-black/72 hover:text-white focus:outline-none focus:ring-2 focus:ring-white/30 sm:h-8.5 sm:w-8.5"
               title="下载图片"
               aria-label="下载图片"
             >
@@ -681,7 +681,7 @@ function LightboxInner({ src, imageId, maskPreviewSrc, onClose, showNav, current
                 e.stopPropagation()
                 onClose()
               }}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-black/58 text-white/88 shadow-[0_6px_18px_rgba(0,0,0,0.26),inset_0_0_0_1px_rgba(255,255,255,0.12)] backdrop-blur-xl transition-all hover:bg-black/72 hover:text-white focus:outline-none focus:ring-2 focus:ring-white/30 sm:h-8.5 sm:w-8.5"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-black/58 text-white/88 shadow-[0_6px_18px_rgba(0,0,0,0.26),inset_0_0_0_1px_rgba(255,255,255,0.12)] transition-all hover:bg-black/72 hover:text-white focus:outline-none focus:ring-2 focus:ring-white/30 sm:h-8.5 sm:w-8.5"
               title="关闭"
               aria-label="关闭"
             >
@@ -716,14 +716,14 @@ function LightboxInner({ src, imageId, maskPreviewSrc, onClose, showNav, current
       {/* 底部指示器 */}
       {showZoomBadge && isZoomed && zoomPercent !== 100 && (
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 pointer-events-none">
-          <span className="px-3 py-1.5 bg-black/50 text-white/80 text-xs rounded-full backdrop-blur-sm transition-opacity duration-500">
+          <span className="px-3 py-1.5 bg-black/50 text-white/80 text-xs rounded-full transition-opacity duration-500">
             {zoomPercent}%
           </span>
         </div>
       )}
       {showNav && !isZoomed && (
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 pointer-events-none">
-          <span className="px-3 py-1.5 bg-black/50 text-white/80 text-xs rounded-full backdrop-blur-sm">
+          <span className="px-3 py-1.5 bg-black/50 text-white/80 text-xs rounded-full">
             {currentIndex + 1} / {total}
           </span>
         </div>

@@ -77,7 +77,7 @@ export function InspirationHomeContent(props: {
           </button>
           <div className="flex min-w-0 flex-col justify-center gap-2.5 p-3.5 sm:p-4 lg:p-4.5">
             <div className="space-y-1.5">
-              <span className="inline-flex w-fit rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-700">
+              <span className="inspiration-featured-badge inline-flex w-fit rounded-full px-2.5 py-1 text-[11px] font-semibold">
                 精选主视觉
               </span>
               <h2 className="max-w-[16ch] text-[clamp(1.25rem,1.45vw,1.65rem)] font-semibold leading-[1.1] tracking-[-0.01em] text-slate-900">

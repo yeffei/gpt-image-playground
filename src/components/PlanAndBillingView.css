@@ -70,9 +70,9 @@
 .plan-rule-badge {
   width: fit-content;
   padding: 5px 9px;
-  border: 1px solid rgba(14, 165, 233, 0.16);
+  border: 1px solid rgba(123, 97, 255, 0.18);
   border-radius: 999px;
-  background: rgba(14, 165, 233, 0.08);
+  background: var(--platform-accent-soft, rgba(123, 97, 255, 0.12));
   color: var(--muted);
   font-size: 11px;
   font-weight: 760;
@@ -133,7 +133,7 @@
 }
 
 .plan-price-row b {
-  color: #0f766e;
+  color: var(--platform-accent-deep, #5f49df);
   font-size: 12px;
   font-weight: 820;
   white-space: nowrap;
@@ -145,10 +145,10 @@
   justify-content: space-between;
   gap: 10px;
   padding: 9px 11px;
-  border: 1px solid rgba(14, 165, 233, 0.18);
+  border: 1px solid rgba(123, 97, 255, 0.18);
   border-radius: 14px;
   background:
-    linear-gradient(90deg, rgba(14, 165, 233, 0.1), rgba(255, 255, 255, 0.76)),
+    linear-gradient(90deg, rgba(123, 97, 255, 0.1), rgba(255, 255, 255, 0.76)),
     rgba(255, 255, 255, 0.78);
 }
 
@@ -159,7 +159,7 @@
 }
 
 .plan-rule-footnote strong {
-  color: #075985;
+  color: var(--platform-accent-deep, #5f49df);
   font-size: 13px;
   font-weight: 840;
   white-space: nowrap;
@@ -238,18 +238,18 @@
 .plan-invite-actions button {
   min-height: 36px;
   padding: 0 13px;
-  border: 1px solid rgba(14, 165, 233, 0.22);
+  border: 1px solid rgba(123, 97, 255, 0.22);
   border-radius: 14px;
-  background: rgba(14, 165, 233, 0.1);
-  color: #0369a1;
+  background: var(--platform-accent-soft, rgba(123, 97, 255, 0.12));
+  color: var(--platform-accent-deep, #5f49df);
   font-size: 12px;
   font-weight: 800;
   transition: background 180ms ease, border-color 180ms ease, transform 180ms ease;
 }
 
 .plan-invite-actions button:hover {
-  border-color: rgba(14, 165, 233, 0.3);
-  background: rgba(14, 165, 233, 0.14);
+  border-color: rgba(123, 97, 255, 0.3);
+  background: rgba(123, 97, 255, 0.14);
   transform: translateY(-1px);
 }
 
@@ -322,9 +322,9 @@
 }
 
 .plan-ledger-toolbar button.is-active {
-  border-color: rgba(14, 165, 233, 0.28);
-  background: rgba(14, 165, 233, 0.1);
-  color: #0369a1;
+  border-color: rgba(123, 97, 255, 0.28);
+  background: var(--platform-accent-soft, rgba(123, 97, 255, 0.12));
+  color: var(--platform-accent-deep, #5f49df);
 }
 
 .plan-ledger-pagination span {
@@ -567,8 +567,8 @@
 }
 
 .recharge-access-banner.tone-ready {
-  border-color: rgba(8, 145, 178, 0.18);
-  background: linear-gradient(180deg, rgba(236, 254, 255, 0.92), rgba(207, 250, 254, 0.64));
+  border-color: rgba(123, 97, 255, 0.18);
+  background: linear-gradient(180deg, rgba(246, 243, 255, 0.92), rgba(238, 232, 255, 0.64));
 }
 
 .recharge-view-grid {
@@ -635,11 +635,11 @@
   width: 28px;
   height: 28px;
   border-radius: 10px;
-  background: linear-gradient(135deg, #f59e0b, #ea580c);
-  color: #fff;
+  background: rgba(161, 92, 7, 0.1);
+  color: var(--platform-warning, #a15c07);
   font-size: 13px;
   font-weight: 860;
-  box-shadow: 0 10px 22px rgba(245, 158, 11, 0.18);
+  box-shadow: none;
 }
 
 .recharge-step-head div {
@@ -707,9 +707,9 @@
 }
 
 .recharge-code-panel {
-  border: 1px solid rgba(14, 165, 233, 0.14);
+  border: 1px solid rgba(123, 97, 255, 0.14);
   background:
-    radial-gradient(circle at top right, rgba(14, 165, 233, 0.08), transparent 34%),
+    radial-gradient(circle at top right, rgba(123, 97, 255, 0.08), transparent 34%),
     rgba(255, 255, 255, 0.82);
 }
 
@@ -733,8 +733,8 @@
 
 .recharge-code-row input:focus {
   outline: none;
-  border-color: rgba(14, 165, 233, 0.32);
-  box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.1);
+  border-color: rgba(123, 97, 255, 0.32);
+  box-shadow: 0 0 0 4px rgba(123, 97, 255, 0.1);
 }
 
 .recharge-code-row input:disabled {
@@ -744,9 +744,9 @@
 
 .recharge-link-button {
   min-height: 42px;
-  border: 1px solid rgba(14, 165, 233, 0.2);
+  border: 1px solid var(--platform-accent-fill, #785cff);
   border-radius: 14px;
-  background: linear-gradient(135deg, #0f9f8f, #0ea5e9);
+  background: var(--platform-accent-fill, #785cff);
   padding: 0 14px;
   color: #fff;
   font-size: 13px;
@@ -808,10 +808,10 @@
 }
 
 .recharge-primary-button {
-  border: 1px solid rgba(245, 158, 11, 0.18);
-  background: linear-gradient(135deg, #f59e0b, #ea580c);
+  border: 1px solid var(--platform-accent-fill, #785cff);
+  background: var(--platform-accent-fill, #785cff);
   color: #fff;
-  box-shadow: 0 16px 40px rgba(245, 158, 11, 0.22);
+  box-shadow: 0 16px 40px rgba(123, 97, 255, 0.18);
 }
 
 .recharge-secondary-button {
@@ -1292,4 +1292,222 @@
 .plan-history-item .plan-history-title {
   font-size: 13px;
   line-height: 1.25;
+}
+
+/* Commercial workspace pass: billing is a utility surface, not a promo palette. */
+.plan-card,
+.recharge-card,
+.plan-price-table,
+.plan-history-list,
+.plan-empty-note,
+.plan-history-item,
+.plan-invite-field,
+.plan-ledger-summary span,
+.plan-ledger-stream-head,
+.recharge-step-panel,
+.recharge-access-banner,
+.recharge-success-summary div {
+  border-color: var(--platform-line, rgba(17, 17, 17, 0.06));
+  background: var(--platform-surface, #fff);
+  box-shadow: var(--platform-shadow, 0 2px 12px rgba(17, 17, 17, 0.035)), var(--platform-inset, inset 0 1px 0 rgba(255, 255, 255, 0.9));
+}
+
+.plan-card,
+.recharge-card {
+  background: var(--platform-surface, #fff);
+}
+
+.plan-card h2,
+.recharge-card h2,
+.plan-price-row strong,
+.plan-history-item .plan-history-title,
+.plan-empty-note strong,
+.plan-invite-field strong,
+.recharge-access-banner strong,
+.recharge-success-summary strong {
+  color: var(--platform-ink, #111);
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.plan-card-head p,
+.recharge-card-copy,
+.recharge-step-head p,
+.recharge-code-hint,
+.plan-price-row small,
+.plan-history-meta,
+.plan-history-date,
+.plan-history-balance,
+.plan-invite-field span,
+.recharge-access-banner span,
+.recharge-access-banner small,
+.recharge-success-summary span {
+  color: var(--platform-muted, rgba(17, 17, 17, 0.52));
+}
+
+.plan-rule-badge,
+.plan-ledger-toolbar button,
+.plan-ledger-pagination button,
+.plan-invite-actions button,
+.recharge-amount-chip,
+.recharge-link-button,
+.recharge-primary-button,
+.recharge-secondary-button,
+.recharge-result-badge {
+  font-family: var(--font-ui-sans);
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.plan-rule-badge,
+.plan-ledger-toolbar button,
+.plan-ledger-pagination button,
+.plan-invite-actions button,
+.recharge-secondary-button,
+.recharge-amount-chip {
+  border-color: var(--platform-line-strong, rgba(17, 17, 17, 0.13));
+  background: var(--platform-control, #f3f2ef);
+  color: var(--platform-ink, #111);
+  box-shadow: none;
+}
+
+.plan-ledger-toolbar button.is-active,
+.recharge-amount-chip.is-active,
+.recharge-access-banner.tone-guest,
+.recharge-access-banner.tone-ready {
+  border-color: rgba(123, 97, 255, 0.28);
+  background: var(--platform-accent-soft, rgba(123, 97, 255, 0.12));
+  color: var(--platform-accent-deep, #5f49df);
+  box-shadow: none;
+}
+
+.recharge-access-banner.tone-no-balance {
+  border-color: rgba(161, 92, 7, 0.18);
+  background: rgba(161, 92, 7, 0.08);
+}
+
+.recharge-step-head > span,
+.recharge-link-button,
+.recharge-primary-button {
+  border-color: var(--platform-accent-fill, #785cff);
+  background: var(--platform-accent-fill, #785cff);
+  color: #fff;
+  box-shadow: 0 14px 30px rgba(123, 97, 255, 0.18);
+}
+
+.recharge-amount-chip strong,
+.recharge-amount-chip span,
+.plan-price-row b {
+  color: var(--platform-ink, #111);
+  font-weight: 700;
+}
+
+.recharge-amount-chip small {
+  color: var(--platform-muted, rgba(17, 17, 17, 0.52));
+}
+
+.recharge-code-panel {
+  border-color: var(--platform-line, rgba(17, 17, 17, 0.06));
+  background: var(--platform-surface, #fff);
+}
+
+.recharge-code-row input {
+  border-color: var(--platform-line-strong, rgba(17, 17, 17, 0.13));
+  background: var(--platform-surface, #fff);
+  color: var(--platform-ink, #111);
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.recharge-code-row input:focus {
+  border-color: rgba(123, 97, 255, 0.28);
+  box-shadow: 0 0 0 3px var(--platform-accent-soft, rgba(123, 97, 255, 0.12));
+}
+
+.recharge-amount-chip:hover,
+.recharge-primary-button:hover,
+.recharge-secondary-button:hover,
+.recharge-link-button:hover,
+.plan-invite-actions button:hover {
+  transform: none;
+}
+
+/* Final platform polish: billing and recharge use trustable control surfaces, not promotional gradients. */
+.plan-view-shell,
+.recharge-view-shell {
+  color: var(--platform-ink, #111);
+}
+
+.plan-card,
+.plan-ledger-card,
+.plan-rule-card,
+.plan-invite-card,
+.recharge-card,
+.recharge-step-panel,
+.recharge-code-panel,
+.recharge-success-summary {
+  border-color: var(--platform-line, rgba(17, 17, 17, 0.06)) !important;
+  border-radius: var(--platform-radius-lg, 18px) !important;
+  background: var(--platform-surface, #fff) !important;
+  box-shadow: var(--platform-shadow, 0 2px 12px rgba(17, 17, 17, 0.035)), var(--platform-inset, inset 0 1px 0 rgba(255, 255, 255, 0.9)) !important;
+}
+
+.plan-price-row,
+.plan-ledger-summary,
+.plan-history-item,
+.plan-empty-note,
+.plan-invite-field,
+.recharge-access-banner,
+.recharge-amount-chip,
+.recharge-code-row input,
+.recharge-result-badge {
+  border-color: var(--platform-line-strong, rgba(17, 17, 17, 0.13)) !important;
+  background: var(--platform-control, #f3f2ef) !important;
+  color: var(--platform-ink, #111) !important;
+  box-shadow: none !important;
+}
+
+.plan-rule-badge,
+.plan-ledger-toolbar button.is-active,
+.recharge-amount-chip.is-active,
+.recharge-result-badge.is-processing,
+.recharge-result-badge.is-success,
+.recharge-access-banner.tone-ready {
+  border-color: rgba(123, 97, 255, 0.24) !important;
+  background: var(--platform-accent-soft, rgba(123, 97, 255, 0.12)) !important;
+  color: var(--platform-accent-deep, #5f49df) !important;
+}
+
+.recharge-primary-button,
+.plan-invite-actions button,
+.recharge-primary-button:hover,
+.plan-invite-actions button:hover {
+  border-color: var(--platform-accent-fill, #785cff) !important;
+  background: var(--platform-accent-fill, #785cff) !important;
+  color: #fff !important;
+  box-shadow: 0 14px 30px rgba(123, 97, 255, 0.18) !important;
+}
+
+.recharge-secondary-button,
+.recharge-link-button,
+.plan-ledger-toolbar button,
+.plan-ledger-pagination button,
+.recharge-secondary-button:hover,
+.recharge-link-button:hover {
+  border-color: var(--platform-line-strong, rgba(17, 17, 17, 0.13)) !important;
+  background: var(--platform-control, #f3f2ef) !important;
+  color: var(--platform-ink, #111) !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.plan-history-amount.is-income {
+  color: var(--platform-success, #337a4f) !important;
+}
+
+.plan-history-amount.is-expense,
+.recharge-result-badge.is-failed,
+.recharge-result-badge.is-cancelled {
+  color: var(--platform-danger, #b42318) !important;
 }

@@ -567,19 +567,7 @@ export default function PromptLibraryView() {
                 <h1 className="prompt-library-title">提示词库</h1>
                 <span className="prompt-library-count-badge">{resultSummary}</span>
               </div>
-              <p className="prompt-library-subtitle">先挑方向，再带回工作台继续填。套用会覆盖主提示词和负面提示词，但保留参考图与其他参数。</p>
             </div>
-            <div className="prompt-library-topbar-actions">
-              <button type="button" className="prompt-library-secondary" onClick={goBackToWorkbench}>
-                回工作台
-              </button>
-            </div>
-          </div>
-
-          <div className="prompt-library-flow-strip" aria-label="使用路径">
-            <span>筛选方向</span>
-            <span>套用即回工作台</span>
-            <span>继续补参数并提交</span>
           </div>
 
           <div className="prompt-library-toolbar">
@@ -617,18 +605,6 @@ export default function PromptLibraryView() {
                 placeholder="搜索标题或场景"
                 aria-label="搜索模板"
               />
-            </label>
-
-            <label className="prompt-library-sort-field">
-              <select
-                value={sortMode}
-                onChange={(event) => setSortMode(event.target.value as PromptLibrarySortMode)}
-                aria-label="提示词库排序"
-              >
-                <option value="featured">推荐优先</option>
-                <option value="recent">最近用</option>
-                <option value="usage">最常用</option>
-              </select>
             </label>
 
             {visibleCategories.length > 1 && (

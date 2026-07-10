@@ -12,9 +12,10 @@ import {
   GUEST_VIEW_RESULTS_LABEL,
   GUEST_VIEW_YOUR_RESULTS_TITLE,
 } from './lib/accessCopy'
+import type { GalleryView, LibraryViewMode } from './types'
 
 type PrototypeNavItem = {
-  key: 'workbench' | 'agentWorkflow' | 'library' | 'promptLibrary' | 'favorites' | 'auth' | 'plan' | 'help' | 'settings' | 'inspiration'
+  key: 'home' | 'workbench' | 'agentWorkflow' | 'library' | 'promptLibrary' | 'favorites' | 'auth' | 'plan' | 'help' | 'settings' | 'inspiration'
   label: string
   meta?: string
   tooltip: string
@@ -29,6 +30,7 @@ type PrototypeNavSection = {
 }
 
 const PlanAndBillingView = lazy(() => import('./components/PlanAndBillingView'))
+const HomeView = lazy(() => import('./components/HomeView'))
 const AgentWorkflowView = lazy(() => import('./components/AgentWorkflowView'))
 const AuthView = lazy(() => import('./components/AuthView'))
 const LibraryView = lazy(() => import('./components/LibraryView'))
@@ -81,7 +83,7 @@ export default function App() {
   const [currentPathname, setCurrentPathname] = useState(() =>
     typeof window !== 'undefined' ? window.location.pathname : '/',
   )
-  const [navCollapsed, setNavCollapsed] = useState(false)
+  const [navCollapsed, setNavCollapsed] = useState(true)
   const [showHelp, setShowHelp] = useState(false)
   const [imageContextMenuReady, setImageContextMenuReady] = useState(false)
   const [initialImageContextMenuInfo, setInitialImageContextMenuInfo] = useState<ImageContextMenuInfo | null>(null)
@@ -91,6 +93,7 @@ export default function App() {
   const isInspirationLatestRoute = typeof window !== 'undefined' ? isInspirationLatestPath(currentPathname) : false
   const inspirationPostId = typeof window !== 'undefined' ? getInspirationPostId(currentPathname) : null
   const isInspirationHomeRoute = typeof window !== 'undefined' ? isInspirationHomePath(currentPathname) : false
+  const isHomeRoute = typeof window !== 'undefined' ? isHomePath(currentPathname) : false
   const setShowSettings = useStore((s) => s.setShowSettings)
   const showSettings = useStore((s) => s.showSettings)
   const galleryView = useStore((s) => s.galleryView)
@@ -117,9 +120,27 @@ export default function App() {
     const syncLocation = () => {
       setCurrentPathname(window.location.pathname)
     }
+    const originalPushState = window.history.pushState
+    const originalReplaceState = window.history.replaceState
+
+    window.history.pushState = function pushStateWithLocationSync(...args) {
+      const result = originalPushState.apply(this, args)
+      syncLocation()
+      return result
+    }
+
+    window.history.replaceState = function replaceStateWithLocationSync(...args) {
+      const result = originalReplaceState.apply(this, args)
+      syncLocation()
+      return result
+    }
 
     window.addEventListener('popstate', syncLocation)
-    return () => window.removeEventListener('popstate', syncLocation)
+    return () => {
+      window.history.pushState = originalPushState
+      window.history.replaceState = originalReplaceState
+      window.removeEventListener('popstate', syncLocation)
+    }
   }, [])
 
   useEffect(() => {
@@ -166,7 +187,6 @@ export default function App() {
     showToast(account.isLoggedIn ? '已进入作品库' : '已打开作品库入口，登录后查看个人结果', 'info')
   }
   const showFavoriteWorks = () => {
-    window.history.pushState({}, '', '/')
     setGalleryView('library')
     setLibraryViewMode('favorites')
     setSearchQuery('')
@@ -182,16 +202,20 @@ export default function App() {
     showToast(account.isLoggedIn ? '已进入提示词库' : '已进入提示词库，当前可先浏览官方模板', 'info')
   }
   const showInspiration = () => {
-    window.history.pushState({}, '', '/')
     setGalleryView('inspiration')
     window.scrollTo({ top: 0, behavior: 'smooth' })
     showToast('已进入灵感广场', 'info')
+  }
+  const showHome = () => {
+    setGalleryView('home')
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
   const navSections: PrototypeNavSection[] = account.isLoggedIn
     ? [
         {
           group: '创作',
           items: [
+            { key: 'home', label: '首页', meta: '总览入口', tooltip: '回到首页', icon: 'home', onClick: showHome },
             { key: 'agentWorkflow', label: '智能创作流', meta: '计划生成', tooltip: '进入智能创作流', icon: 'flow', onClick: () => setGalleryView('agentWorkflow') },
             { key: 'workbench', label: '工作台', meta: '生成入口', tooltip: '进入工作台', icon: 'grid', onClick: () => setGalleryView('workbench') },
           ],
@@ -216,6 +240,7 @@ export default function App() {
         {
           group: '公开入口',
           items: [
+            { key: 'home', label: '首页', meta: '产品入口', tooltip: '回到首页', icon: 'home', tone: 'public', onClick: showHome },
             { key: 'agentWorkflow', label: '智能创作流', meta: '登录使用', tooltip: '进入智能创作流', icon: 'flow', tone: 'public', onClick: () => setGalleryView('agentWorkflow') },
             { key: 'workbench', label: '工作台', meta: '试填入口', tooltip: '进入试填入口', icon: 'grid', tone: 'public', onClick: () => setGalleryView('workbench') },
             { key: 'inspiration', label: '灵感广场', meta: '公开展示', tooltip: '浏览灵感广场', icon: 'spark', tone: 'public', onClick: showInspiration },
@@ -231,6 +256,7 @@ export default function App() {
       ]
 
   const isNavItemActive = (key: PrototypeNavItem['key']) => {
+    if (key === 'home') return galleryView === 'home'
     if (key === 'workbench') return galleryView === 'workbench'
     if (key === 'agentWorkflow') return galleryView === 'agentWorkflow'
     if (key === 'library') return galleryView === 'library' && libraryViewMode === 'all'
@@ -260,6 +286,28 @@ export default function App() {
     if (!isInspirationHomeRoute) return
     setGalleryView('inspiration')
   }, [isInspirationHomeRoute, setGalleryView])
+
+  useEffect(() => {
+    if (!isHomeRoute) return
+    setGalleryView('home')
+  }, [isHomeRoute, setGalleryView])
+
+  useEffect(() => {
+    const routeState = getShellRouteState(currentPathname)
+    if (!routeState) return
+
+    if (getNormalizedPathname(currentPathname) === '/') {
+      window.history.replaceState({}, '', '/home')
+    }
+
+    if (galleryView !== routeState.view) {
+      setGalleryView(routeState.view)
+    }
+
+    if (routeState.libraryViewMode && libraryViewMode !== routeState.libraryViewMode) {
+      setLibraryViewMode(routeState.libraryViewMode)
+    }
+  }, [currentPathname, galleryView, libraryViewMode, setGalleryView, setLibraryViewMode])
 
   useEffect(() => {
     const preventPageImageDrag = (e: DragEvent) => {
@@ -418,7 +466,9 @@ export default function App() {
 
             <div className="prototype-main">
               <Suspense fallback={<LazyViewFallback />}>
-                {galleryView === 'plan' ? (
+                {galleryView === 'home' ? (
+                  <HomeView />
+                ) : galleryView === 'plan' ? (
                   <PlanAndBillingView />
                 ) : galleryView === 'agentWorkflow' ? (
                   <AgentWorkflowView />
@@ -579,4 +629,38 @@ function getInspirationTopicCategory(pathname: string) {
 
 function isInspirationHomePath(pathname: string) {
   return /^\/inspiration\/?$/.test(pathname)
+}
+
+function isHomePath(pathname: string) {
+  return /^\/home\/?$/.test(pathname)
+}
+
+function getNormalizedPathname(pathname: string) {
+  return pathname.replace(/\/+$/, '') || '/'
+}
+
+function getShellRouteState(pathname: string): { view: GalleryView; libraryViewMode?: LibraryViewMode } | null {
+  switch (getNormalizedPathname(pathname)) {
+    case '/':
+    case '/home':
+      return { view: 'home' }
+    case '/workbench':
+      return { view: 'workbench' }
+    case '/agent-workflow':
+      return { view: 'agentWorkflow' }
+    case '/library':
+      return { view: 'library', libraryViewMode: 'all' }
+    case '/library/favorites':
+      return { view: 'library', libraryViewMode: 'favorites' }
+    case '/prompt-library':
+      return { view: 'promptLibrary' }
+    case '/inspiration':
+      return { view: 'inspiration' }
+    case '/plan':
+      return { view: 'plan' }
+    case '/auth':
+      return { view: 'auth' }
+    default:
+      return null
+  }
 }

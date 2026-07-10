@@ -2,7 +2,7 @@
 
 export type ApiMode = 'images' | 'responses'
 export type AppMode = 'gallery' | 'agent'
-export type GalleryView = 'workbench' | 'agentWorkflow' | 'plan' | 'auth' | 'recharge' | 'library' | 'promptLibrary' | 'inspiration'
+export type GalleryView = 'home' | 'workbench' | 'agentWorkflow' | 'plan' | 'auth' | 'recharge' | 'library' | 'promptLibrary' | 'inspiration'
 export type WorkbenchReturnSource = Exclude<GalleryView, 'workbench'>
 export type AuthRedirectView = 'workbench' | 'agentWorkflow' | 'plan' | 'library' | 'promptLibrary'
 export type AuthReturnSource = Exclude<AuthRedirectView, 'workbench'>

@@ -10,13 +10,10 @@
   display: grid;
   gap: 10px;
   padding: 14px 22px 12px;
-  border: 1px solid rgba(148, 163, 184, 0.1);
-  border-radius: 22px;
-  background:
-    radial-gradient(circle at top left, rgba(123, 97, 255, 0.04), transparent 18%),
-    radial-gradient(circle at bottom right, rgba(125, 211, 252, 0.04), transparent 20%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(247, 249, 252, 0.88));
-  box-shadow: 0 12px 26px rgba(54, 38, 94, 0.05), var(--inset);
+  border: 1px solid var(--platform-line, rgba(17, 17, 17, 0.06));
+  border-radius: var(--platform-radius-xl, 24px);
+  background: var(--platform-surface, #ffffff);
+  box-shadow: var(--platform-shadow, 0 2px 12px rgba(17, 17, 17, 0.035)), var(--platform-inset, inset 0 1px 0 rgba(255, 255, 255, 0.9));
 }
 
 .site-footer-brand {
@@ -34,13 +31,11 @@
   justify-content: center;
   width: 34px;
   height: 34px;
-  border-radius: 12px;
-  background:
-    radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.72), transparent 38%),
-    linear-gradient(135deg, rgba(124, 58, 237, 0.9), rgba(14, 165, 233, 0.82));
+  border-radius: 10px;
+  background: var(--platform-primary, #111111);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.52),
-    0 14px 28px rgba(123, 97, 255, 0.2);
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 10px 22px var(--platform-action-shadow, rgba(17, 17, 17, 0.14));
 }
 
 .site-footer-brand-mark span {
@@ -59,24 +54,24 @@
 }
 
 .site-footer-kicker {
-  color: rgba(99, 102, 241, 0.82);
+  color: var(--platform-accent-deep, #5f49df);
   font-size: 10px;
   font-weight: 760;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 .site-footer-brand strong {
-  color: var(--text);
+  color: var(--platform-ink, var(--text));
   font-size: 16px;
   font-weight: 820;
-  letter-spacing: -0.03em;
+  letter-spacing: 0;
 }
 
 .site-footer-brand-note {
   margin: 0;
   margin-left: auto;
-  color: var(--muted);
+  color: var(--platform-muted, var(--muted));
   font-size: 10px;
   line-height: 1.5;
   white-space: nowrap;
@@ -104,7 +99,7 @@
 
 .site-footer-column h2 {
   margin: 0;
-  color: rgba(100, 116, 139, 0.84);
+  color: var(--platform-muted, rgba(100, 116, 139, 0.84));
   font-size: 10px;
   font-weight: 760;
   letter-spacing: 0.12em;
@@ -120,7 +115,7 @@
 }
 
 .site-footer-column li {
-  color: var(--muted);
+  color: var(--platform-muted, var(--muted));
   font-size: 10px;
   line-height: 1.4;
 }
@@ -131,7 +126,7 @@
   justify-content: flex-end;
   gap: 6px 10px;
   flex-wrap: wrap;
-  color: rgba(100, 116, 139, 0.72);
+  color: var(--platform-muted, rgba(100, 116, 139, 0.72));
   font-size: 10px;
   line-height: 1.4;
   text-align: right;
@@ -222,7 +217,7 @@
 }
 
 .site-footer-brand strong {
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 @media (max-width: 720px) {

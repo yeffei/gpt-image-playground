@@ -257,7 +257,7 @@ export default function HistoryModal({ onClose, ignoreOutsideClickRef }: History
                   {editingId === c.id ? (
                     <input
                       type="text"
-                      className="flex-1 bg-white dark:bg-black/20 border border-blue-400/50 dark:border-white/20 rounded px-1.5 py-0.5 text-sm outline-none text-gray-900 dark:text-white focus:border-blue-500 dark:focus:border-white/40 shadow-sm min-w-0"
+                      className="agent-focus-input flex-1 rounded border px-1.5 py-0.5 text-sm outline-none shadow-sm min-w-0"
                       value={editingTitle}
                       onChange={(e) => setEditingTitle(e.target.value)}
                       onKeyDown={handleRenameKeyDown}
@@ -281,7 +281,7 @@ export default function HistoryModal({ onClose, ignoreOutsideClickRef }: History
                     <HistoryActionButton
                       tooltip="确认"
                       onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); confirmRename() }}
-                      className="p-1.5 hover:bg-gray-200 dark:hover:bg-white/10 rounded-md text-green-500 dark:text-green-400 hover:text-green-600 dark:hover:text-green-300 transition-colors"
+                      className="agent-action-button is-accent p-1.5 rounded-md transition-colors"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />

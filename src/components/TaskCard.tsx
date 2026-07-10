@@ -405,7 +405,7 @@ export default function TaskCard({
   const swipeBgClass = showSwipeAction
     ? swipeStartedSelected
       ? 'bg-gray-500 dark:bg-gray-600'
-      : 'bg-blue-500'
+      : 'task-swipe-accent'
     : 'bg-gray-200 dark:bg-gray-700'
 
   const qualityDisplay = getParamDisplay(task, 'quality')
@@ -426,13 +426,11 @@ export default function TaskCard({
   const interruptedLabel = task.error === SERVER_IMAGE_INTERRUPTED_MESSAGE ? '已刷新' : '已停止'
   const publicResult = getPublicTaskResultView(task)
   const requestedOutputCount = Math.min(Math.max(publicResult.requestedOutputCount, 1), 4)
-  const compactModelName = modelSku?.label ?? (task.modelSku ? displayProfileName : showModel ? displayModelName : displayProfileName)
   const compactParamParts = [
     showQuality ? `质量 ${qualityDisplay.displayValue}` : null,
     task.status === 'done' || showFormat ? formatDisplay.displayValue : null,
     !isAgentTask ? `${publicResult.outputCount}/${requestedOutputCount}张` : null,
     task.maskImageId ? '局部重绘' : null,
-    compactModelName,
   ].filter(Boolean)
   const compactParamLine = compactParamParts.join(' · ')
   const isFailedCard = task.status === 'error' && !isFalReconnecting
@@ -482,9 +480,9 @@ export default function TaskCard({
           isSwiping || swipeDirection !== 0 ? 'will-change-transform' : ''
         } ${
           task.status === 'running'
-            ? 'border-cyan-400 generating'
+            ? 'is-running generating'
               : isSelected
-              ? 'border-cyan-500 shadow-[0_18px_42px_rgba(8,145,178,0.16)] ring-2 ring-cyan-500/30'
+              ? 'is-selected'
               : 'border-[rgba(15,23,42,0.08)] hover:border-[rgba(15,23,42,0.18)] dark:border-white/[0.08] dark:hover:border-white/[0.18]'
           }`}
         onClick={(e) => {
@@ -521,7 +519,7 @@ export default function TaskCard({
       >
         {/* 选中时的角标 */}
       {isSelected && (
-        <div className="absolute top-2 right-2 z-10 w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center shadow-sm">
+        <div className="task-selected-badge absolute top-2 right-2 z-10 w-5 h-5 rounded-full flex items-center justify-center shadow-sm">
           <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
           </svg>
@@ -540,7 +538,7 @@ export default function TaskCard({
                   onError={() => setStreamPreviewLoaded(false)}
                 />
                 {streamPreviewLoaded && (
-                  <span className="absolute top-3 right-3 flex items-center gap-1 rounded-full bg-cyan-500 px-2 py-1 text-[10px] font-medium text-white backdrop-blur-sm sm:text-xs">
+                  <span className="task-preview-badge absolute top-3 right-3 flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-medium sm:text-xs">
                     预览
                   </span>
                 )}
@@ -715,7 +713,7 @@ export default function TaskCard({
           {/* 运行中显示耗时，完成后显示封面图比例与分辨率标签 */}
           <div className="absolute top-3 left-3 flex items-center gap-1">
             {showRunningTimer || task.status !== 'done' ? (
-              <span className="flex items-center gap-1 rounded-full bg-black/50 text-white text-[10px] sm:text-xs px-2 py-1 backdrop-blur-sm font-mono">
+              <span className="flex items-center gap-1 rounded-full bg-black/50 text-white text-[10px] sm:text-xs px-2 py-1 font-mono">
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
@@ -723,10 +721,10 @@ export default function TaskCard({
               </span>
             ) : displayCoverRatio && displayCoverSize ? (
               <>
-                <span className="rounded-full bg-black/50 text-white text-[10px] sm:text-xs px-2 py-1 backdrop-blur-sm font-mono">
+                <span className="rounded-full bg-black/50 text-white text-[10px] sm:text-xs px-2 py-1 font-mono">
                   {displayCoverRatio}
                 </span>
-                <span className="rounded-full bg-black/50 text-white/90 text-[10px] sm:text-xs px-2 py-1 backdrop-blur-sm font-medium">
+                <span className="rounded-full bg-black/50 text-white/90 text-[10px] sm:text-xs px-2 py-1 font-medium">
                   {displayCoverSize}
                 </span>
               </>
@@ -756,14 +754,14 @@ export default function TaskCard({
           <span data-task-status-badge data-task-status={task.status} className="sr-only">
             {task.status}
           </span>
-          <div className="prototype-result-copy flex-1 min-h-0 mb-3 overflow-hidden">
+          <div className="prototype-result-copy flex-1 min-h-0 mb-2 overflow-hidden">
             {showPendingPrompt ? (
               <div className="leading-relaxed">
                 <p className="text-sm text-slate-800 dark:text-gray-200 font-medium">正在生成……</p>
                 <p className="mt-1 text-xs text-slate-500 dark:text-gray-400">输入内容将在响应完成时接收</p>
               </div>
             ) : (
-              <div className="space-y-2">
+              <div>
                 <p className="text-[15px] text-slate-800 dark:text-gray-200 leading-relaxed line-clamp-2 font-medium">
                   {task.prompt || '(无提示词)'}
                 </p>
@@ -771,15 +769,15 @@ export default function TaskCard({
             )}
           </div>
 
-          <div className="mt-auto flex flex-col gap-2">
+          <div className="flex flex-col gap-1.5">
             {isFailedCard && failureDisplay.supportingDetail && (
-              <div className="task-failure-note">
+              <div className="task-failure-note task-error-note">
                 <strong>错误信息</strong>
                 <span>{failureDisplay.supportingDetail}</span>
               </div>
             )}
             {resultSummary && (
-              <div className="task-failure-note">
+              <div className="task-failure-note task-result-note">
                 <strong>{resultSummary.label}</strong>
                 <span>{resultSummary.value}</span>
               </div>
@@ -818,11 +816,7 @@ export default function TaskCard({
                     onClick={() =>
                       updateTaskInStore(task.id, { isFavorite: !task.isFavorite })
                     }
-                    className={`p-1.5 rounded-md transition ${
-                      task.isFavorite
-                        ? 'task-mini-action text-amber-500'
-                        : 'task-mini-action'
-                    }`}
+                    className={`task-mini-action ${task.isFavorite ? 'is-favorite' : ''}`}
                   >
                     <svg
                       className="w-4 h-4"

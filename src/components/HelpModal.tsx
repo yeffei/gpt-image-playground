@@ -48,16 +48,16 @@ export default function HelpModal({ onClose }: HelpModalProps) {
       className="fixed inset-0 z-[100] flex items-center justify-center p-4"
       onClick={onClose}
     >
-      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm animate-overlay-in" />
+      <div className="platform-modal-overlay absolute inset-0 animate-overlay-in" />
       <div
         ref={modalRef}
-        className="relative z-10 flex max-h-[84vh] w-full max-w-2xl flex-col rounded-3xl border border-white/50 bg-white/95 p-5 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10"
+        className="help-modal-panel relative z-10 flex max-h-[84vh] w-full max-w-2xl flex-col p-5 animate-modal-in"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-start justify-between gap-4">
           <div className="min-w-0">
             <h3 className="frontend-section-title flex items-center gap-2 text-gray-900 dark:text-gray-100">
-              <svg className="h-5 w-5 shrink-0 text-blue-500" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+              <svg className="h-5 w-5 shrink-0 text-[var(--platform-accent-fill,#785cff)]" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
                 <circle cx="12" cy="12" r="10" />
                 <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
                 <path d="M12 17h.01" />
@@ -83,8 +83,8 @@ export default function HelpModal({ onClose }: HelpModalProps) {
 
         <div className="custom-scrollbar mb-4 flex-1 overflow-y-auto overscroll-contain pr-1 text-sm text-gray-600 dark:text-gray-300 sm:pr-2">
           {!account.isLoggedIn && (
-            <section className="mb-4 rounded-2xl border border-blue-100 bg-blue-50/70 p-4 text-blue-900/75 dark:border-blue-500/15 dark:bg-blue-500/10 dark:text-blue-100/80">
-              <h4 className="frontend-card-title mb-1.5 text-blue-950 dark:text-blue-100">访客说明</h4>
+            <section className="help-guest-note mb-4 rounded-2xl border p-4">
+              <h4 className="frontend-card-title mb-1.5">访客说明</h4>
               <p className="leading-relaxed">{GUEST_HELP_INTRO_COPY}</p>
             </section>
           )}

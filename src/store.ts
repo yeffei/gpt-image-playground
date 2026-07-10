@@ -393,6 +393,29 @@ function isWorkbenchReturnNavSource(view: GalleryView): view is Exclude<GalleryV
   return view === 'library' || view === 'promptLibrary' || view === 'agentWorkflow' || view === 'plan' || view === 'recharge'
 }
 
+function getNormalizedBrowserPath(pathname: string) {
+  return pathname.replace(/\/+$/, '') || '/'
+}
+
+function getBrowserPathForGalleryView(view: GalleryView, libraryViewMode: LibraryViewMode) {
+  if (view === 'home') return '/home'
+  if (view === 'workbench') return '/workbench'
+  if (view === 'agentWorkflow') return '/agent-workflow'
+  if (view === 'library') return libraryViewMode === 'favorites' ? '/library/favorites' : '/library'
+  if (view === 'promptLibrary') return '/prompt-library'
+  if (view === 'inspiration') return '/inspiration'
+  if (view === 'plan') return '/plan'
+  if (view === 'auth') return '/auth'
+  return null
+}
+
+function syncBrowserPathForGalleryView(view: GalleryView, libraryViewMode: LibraryViewMode) {
+  if (typeof window === 'undefined') return
+  const targetPath = getBrowserPathForGalleryView(view, libraryViewMode)
+  if (!targetPath || getNormalizedBrowserPath(window.location.pathname) === targetPath) return
+  window.history.pushState({}, '', targetPath)
+}
+
 function createOpenAITimeoutError(timeoutSeconds: number, profile?: TimeoutStreamingHintProfile | null) {
   return `请求超时：超过 ${timeoutSeconds} 秒仍未完成，请稍后重试或提高超时时间。${getTimeoutStreamingHint(profile)}`
 }
@@ -1404,7 +1427,7 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     ? 'promptLibrary'
     : persisted.galleryView === 'library'
     ? 'library'
-    : 'workbench'
+    : 'home'
   const libraryViewMode = persisted.libraryViewMode === 'favorites'
     ? 'favorites'
     : persisted.libraryViewMode === 'trash'
@@ -2015,7 +2038,7 @@ export const useStore = create<AppState>()(
     (set, get) => ({
       // Mode
       appMode: 'gallery',
-      galleryView: 'workbench',
+      galleryView: 'home',
       workbenchReturnContext: null,
       authReturnContext: null,
       libraryViewMode: 'all',
@@ -2080,6 +2103,7 @@ export const useStore = create<AppState>()(
         })
       },
       setGalleryView: (galleryView) => set((state) => {
+        syncBrowserPathForGalleryView(galleryView, state.libraryViewMode)
         if (state.galleryView === galleryView) return {}
         if (galleryView === 'workbench' && isWorkbenchReturnNavSource(state.galleryView)) {
           return {
@@ -2099,7 +2123,10 @@ export const useStore = create<AppState>()(
       }),
       dismissWorkbenchReturnContext: () => set({ workbenchReturnContext: null }),
       dismissAuthReturnContext: () => set({ authReturnContext: null }),
-      setLibraryViewMode: (libraryViewMode) => set({ libraryViewMode }),
+      setLibraryViewMode: (libraryViewMode) => set((state) => {
+        syncBrowserPathForGalleryView(state.galleryView, libraryViewMode)
+        return { libraryViewMode }
+      }),
       setPromptLibraryTab: (promptLibraryTab) => set({ promptLibraryTab }),
       setAuthViewMode: (authViewMode) => set({ authViewMode }),
       openAuthView: (options) => {
@@ -2114,6 +2141,7 @@ export const useStore = create<AppState>()(
             : get().galleryView === 'promptLibrary'
             ? 'promptLibrary'
             : 'workbench')
+        syncBrowserPathForGalleryView('auth', get().libraryViewMode)
         set({
           appMode: 'gallery',
           galleryView: 'auth',
@@ -2136,6 +2164,7 @@ export const useStore = create<AppState>()(
           planName: accountPatch.planName ?? '个人标准版',
         }, DEFAULT_ACCOUNT_STATE)
         const nextBilling = getFreshBillingState()
+        syncBrowserPathForGalleryView(redirectTo, state.libraryViewMode)
         set(() => ({
           authSessionToken: token,
           account,

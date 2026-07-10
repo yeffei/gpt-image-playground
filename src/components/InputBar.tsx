@@ -743,12 +743,6 @@ export default function InputBar() {
     const ratio = formatImageRatio(Number(match[1]), Number(match[2]))
     return ratio ? `${ratio} · ${displaySize}` : displaySize
   }, [displaySize])
-  const displaySizeSubLabel = useMemo(() => {
-    if (!displaySize || displaySize === 'auto') return '交由模型判断'
-    const match = displaySize.match(/^(\d+)[xX](\d+)$/)
-    if (!match) return '已固定分辨率'
-    return isFalTextToImage && params.size === 'auto' ? 'fal.ai 自动规整' : '已固定画幅'
-  }, [displaySize, isFalTextToImage, params.size])
   const submitBillingHint = useMemo(() => {
     if (workbenchAccessState !== 'ready') return ''
     if (!displaySize || displaySize === 'auto') {
@@ -1830,16 +1824,16 @@ export default function InputBar() {
           text={imageHintText}
         />
         {showDropBefore && (
-          <div className="absolute -left-[5px] top-0 bottom-0 w-[2px] bg-blue-500 rounded-full z-40 shadow-sm pointer-events-none" />
+          <div className="prototype-drop-indicator absolute -left-[5px] top-0 bottom-0 w-[2px] rounded-full z-40 pointer-events-none" />
         )}
         {showDropAfter && (
-          <div className="absolute -right-[5px] top-0 bottom-0 w-[2px] bg-blue-500 rounded-full z-40 shadow-sm pointer-events-none" />
+          <div className="prototype-drop-indicator absolute -right-[5px] top-0 bottom-0 w-[2px] rounded-full z-40 pointer-events-none" />
         )}
         <div
           className={`prototype-reference-thumb relative w-[52px] h-[52px] rounded-xl overflow-hidden shadow-sm cursor-grab active:cursor-grabbing select-none ${
             isMaskTarget
-              ? 'border-2 border-blue-500'
-              : 'border border-gray-200 dark:border-white/[0.08]'
+              ? 'is-mask-target'
+              : 'is-reference-target'
           }`}
           onClick={() => {
             if (suppressImageClickRef.current) return
@@ -1864,11 +1858,11 @@ export default function InputBar() {
             </div>
           )}
           {isMaskTarget && (
-            <span className="absolute left-1 top-1 rounded bg-blue-500/90 px-1.5 py-0.5 text-[8px] leading-none text-white font-bold tracking-wider backdrop-blur-sm z-10 pointer-events-none">
+            <span className="prototype-mask-badge absolute left-1 top-1 rounded px-1.5 py-0.5 text-[8px] leading-none font-bold tracking-normal z-10 pointer-events-none">
               MASK
             </span>
           )}
-          <span className="absolute bottom-1 left-1 flex h-4 w-4 items-center justify-center rounded-full bg-black/55 text-[9px] font-semibold text-white backdrop-blur-sm z-10 pointer-events-none">
+          <span className="absolute bottom-1 left-1 flex h-4 w-4 items-center justify-center rounded-full bg-black/55 text-[9px] font-semibold text-white z-10 pointer-events-none">
             {idx + 1}
           </span>
           {canEdit && (
@@ -1964,7 +1958,6 @@ export default function InputBar() {
           title="选择尺寸"
         >
           <div className="font-mono text-xs text-slate-700 dark:text-gray-100">{displaySizeLabel}</div>
-          <div className="mt-0.5 text-[11px] leading-tight text-slate-400 dark:text-gray-500">{displaySizeSubLabel}</div>
         </button>
         <ButtonTooltip
           visible={isFalTextToImage && sizeHint.visible}
@@ -2031,7 +2024,6 @@ export default function InputBar() {
           className="prototype-quantity-segment"
           role="radiogroup"
           aria-label="数量"
-          style={{ gridTemplateColumns: 'repeat(' + Math.max(outputCountOptions.length, 1) + ', minmax(0, 1fr))' }}
         >
           {outputCountOptions.map((value) => {
             const disabled = value > outputImageLimit
@@ -2125,15 +2117,15 @@ export default function InputBar() {
     <button
       type="button"
       onClick={handleOpenPromptOptimizer}
-      className="prototype-optimizer-card prototype-optimizer-inline group inline-flex w-full items-center justify-between gap-3 rounded-[1rem] border border-cyan-200/75 bg-[linear-gradient(135deg,rgba(236,254,255,0.95),rgba(239,246,255,0.95))] px-3.5 py-3 text-left shadow-[0_10px_24px_rgba(14,116,144,0.08)] transition hover:-translate-y-[1px] hover:border-cyan-300 hover:shadow-[0_14px_30px_rgba(14,116,144,0.12)] dark:border-cyan-500/20 dark:bg-[linear-gradient(135deg,rgba(8,145,178,0.12),rgba(37,99,235,0.12))] dark:hover:border-cyan-400/35"
+      className="prototype-optimizer-card prototype-optimizer-inline group inline-flex w-full items-center justify-between gap-3 rounded-[1rem] px-3.5 py-3 text-left transition"
     >
       <div className="prototype-optimizer-copy min-w-0">
-        <div className="prototype-optimizer-title text-[13px] font-semibold leading-snug text-slate-800 dark:text-gray-100">提示词优化</div>
+        <div className="prototype-optimizer-title text-[12px] font-medium leading-snug text-slate-800 dark:text-gray-100">提示词优化</div>
         <div className="prototype-optimizer-body mt-0.5 text-[11px] leading-relaxed text-slate-500 dark:text-gray-400">
           {promptOptimizerModeLabel} · {promptOptimizerStatusLabel}
         </div>
       </div>
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white/80 text-cyan-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] transition group-hover:bg-white dark:bg-white/[0.08] dark:text-cyan-200 dark:group-hover:bg-white/[0.12]">
+      <div className="prototype-optimizer-icon flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl transition">
         <svg className="h-4.5 w-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 3l1.9 5.3L19 10l-5.1 1.7L12 17l-1.9-5.3L5 10l5.1-1.7L12 3z" />
         </svg>
@@ -2145,19 +2137,24 @@ export default function InputBar() {
     <div className={`prototype-param-grid grid ${compressionDisabled ? singleFieldCols : cols} gap-2 text-xs flex-1`}>
       <label className={`prototype-output-format-field ${compressionDisabled ? 'is-single' : 'is-paired'} flex flex-col gap-1`}>
         <span className="prototype-output-format-label ml-1 text-[11px] font-medium tracking-normal text-slate-400 dark:text-gray-500">格式</span>
-        <div className="prototype-output-format-segment" role="radiogroup" aria-label="格式">
+        <div
+          className="prototype-output-format-segment"
+          role="radiogroup"
+          aria-label="格式"
+        >
           {[
             { label: 'PNG', value: 'png' },
             { label: 'JPG', value: 'jpeg' },
           ].map((option) => {
-            const active = params.output_format === option.value
+            const value = option.value as 'png' | 'jpeg'
+            const active = params.output_format === value
             return (
               <button
                 key={option.value}
                 type="button"
                 role="radio"
                 aria-checked={active}
-                onClick={() => setParams({ output_format: option.value as 'png' | 'jpeg' })}
+                onClick={() => setParams({ output_format: value })}
                 className={`prototype-output-format-option ${active ? 'is-active' : ''}`}
               >
                 {option.label}
@@ -2168,7 +2165,7 @@ export default function InputBar() {
       </label>
       {!compressionDisabled && (
         <label
-          className="relative flex flex-col gap-1"
+          className="prototype-output-compression-field relative flex flex-col gap-1"
           onMouseEnter={compressionHint.show}
           onMouseLeave={compressionHint.hide}
           onTouchStart={compressionHint.startTouch}
@@ -2176,7 +2173,6 @@ export default function InputBar() {
           onTouchCancel={compressionHint.hide}
           onClick={compressionHint.show}
         >
-          <span className="ml-1 text-[11px] font-medium tracking-normal text-slate-400 dark:text-gray-500">压缩率</span>
           <input
             value={outputCompressionInput}
             onChange={(e) => setOutputCompressionInput(e.target.value)}
@@ -2196,12 +2192,12 @@ export default function InputBar() {
     </div>
   )
 
-  const renderSubmitButtonCopy = () => (
+  const renderSubmitButtonCopy = (options?: { compactHint?: boolean }) => (
     <span className="prototype-submit-copy">
       <span>{submitButtonLabel}</span>
-      {submitFooterHint ? <small>{submitFooterHint}</small> : null}
+      {!options?.compactHint && submitFooterHint ? <small>{submitFooterHint}</small> : null}
       {shareSafetyHint.level !== 'safe' ? (
-        <small className={shareSafetyHint.level === 'blocked' ? 'text-red-500' : 'text-amber-500'}>{shareSafetyHint.message}</small>
+        <small className={shareSafetyHint.level === 'blocked' ? 'is-danger' : 'is-warning'}>{shareSafetyHint.message}</small>
       ) : null}
     </span>
   )
@@ -2210,17 +2206,17 @@ export default function InputBar() {
     <>
       {/* 全屏拖拽遮罩 */}
       {isDragging && (
-        <div className="fixed inset-0 z-[100] bg-white/60 dark:bg-gray-900/60 backdrop-blur-md flex flex-col items-center justify-center pointer-events-none">
+        <div className="platform-drag-overlay fixed inset-0 z-[100] flex flex-col items-center justify-center pointer-events-none">
           <div className="flex flex-col items-center gap-4 p-8 rounded-3xl">
-            <div className={`w-20 h-20 rounded-full border-2 border-dashed flex items-center justify-center ${
-              atImageLimit ? 'bg-red-50 dark:bg-red-500/10 border-red-300' : 'bg-blue-50 dark:bg-blue-500/10 border-blue-400'
+            <div className={`platform-drag-target w-20 h-20 rounded-full border-2 border-dashed flex items-center justify-center ${
+              atImageLimit ? 'is-blocked' : 'is-ready'
             }`}>
               {atImageLimit ? (
                 <svg className="w-10 h-10 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
                 </svg>
               ) : (
-                <svg className="w-10 h-10 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
                 </svg>
               )}
@@ -2258,10 +2254,10 @@ export default function InputBar() {
         <div data-input-bar className="studio-input-bar-frame fixed bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-30 box-border w-full max-w-6xl px-3 sm:px-4 transition-all duration-300 lg:right-auto lg:top-[5rem] lg:bottom-6 lg:w-[24.25rem] lg:max-w-none lg:translate-x-0 lg:px-0 xl:w-[25.75rem]">
         {visibleSelectedTasks.length > 0 && (
           <div className="flex justify-center mb-3">
-            <div className="bg-white/90 dark:bg-gray-800/90 backdrop-blur shadow-[0_8px_30px_rgb(0,0,0,0.12)] dark:shadow-lg rounded-full flex items-center p-1 border border-gray-200/50 dark:border-white/10 pointer-events-auto">
+            <div className="platform-selection-toolbar rounded-full flex items-center p-1 pointer-events-auto">
               <button
                 onClick={clearSelection}
-                className="p-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
+                className="platform-selection-action"
                 title="取消选择"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2271,7 +2267,7 @@ export default function InputBar() {
               <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1"></div>
               <button
                 onClick={handleSelectAllToggle}
-                className="p-2 text-blue-500 dark:text-blue-400 hover:text-blue-600 dark:hover:text-blue-300 transition-colors"
+                className="platform-selection-action is-accent"
                 title={visibleSelectedTasks.length === filteredTasks.length && filteredTasks.length > 0 ? "取消全选" : "全选当前可见"}
               >
                 {visibleSelectedTasks.length === filteredTasks.length && filteredTasks.length > 0 ? (
@@ -2288,7 +2284,7 @@ export default function InputBar() {
               <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1"></div>
               <button
                 onClick={handleToggleFavorite}
-                className="p-2 text-yellow-500 dark:text-yellow-400 hover:text-yellow-600 dark:hover:text-yellow-300 transition-colors"
+                className="platform-selection-action is-accent"
                 title="收藏/取消收藏"
               >
                 {allVisibleSelectedFavorite ? (
@@ -2304,7 +2300,7 @@ export default function InputBar() {
               <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1"></div>
               <button
                 onClick={handleDownloadSelected}
-                className="p-2 text-green-500 dark:text-green-400 hover:text-green-600 dark:hover:text-green-300 transition-colors"
+                className="platform-selection-action is-accent"
                 title="批量下载"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2314,7 +2310,7 @@ export default function InputBar() {
               <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1"></div>
               <button
                 onClick={handleDeleteSelected}
-                className="p-2 text-red-500 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300 transition-colors"
+                className="platform-selection-action is-danger"
                 title="删除选中"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2369,7 +2365,7 @@ export default function InputBar() {
           {/* 输入框 */}
           <div className="prototype-composer-block relative grid prototype-prompt-editor-shell">
             {showAtImageMenu && (
-              <div style={{ left: `${menuLeft}px` }} className="absolute bottom-full z-50 mb-2 w-64 overflow-hidden rounded-2xl border border-gray-200/70 bg-white/95 p-1.5 shadow-xl ring-1 ring-black/5 backdrop-blur-xl dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10">
+              <div style={{ left: `${menuLeft}px` }} className="platform-mention-menu absolute bottom-full z-50 mb-2 w-64 overflow-hidden rounded-2xl p-1.5">
                 <div className="px-2 pb-1 pt-0.5 text-[11px] text-gray-400 dark:text-gray-500">选择图片引用</div>
                 <div className="max-h-56 overflow-y-auto custom-scrollbar">
                   {atImageOptions.map((option, optionIndex) => (
@@ -2383,7 +2379,7 @@ export default function InputBar() {
                       onMouseEnter={() => setAtImageMenuIndex(optionIndex)}
                       className={`flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left text-xs transition-colors ${
                         optionIndex === atImageMenuIndex
-                          ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300'
+                          ? 'is-active'
                           : 'text-gray-700 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/[0.06]'
                         }`}
                     >
@@ -2439,7 +2435,7 @@ export default function InputBar() {
                 syncMentionTagSelection(el)
               }}
               aria-label={promptPlaceholder}
-              className="prototype-prompt-editor col-start-1 row-start-1 min-h-[72px] w-full overflow-hidden ios-rounded-scroll-fix whitespace-pre-wrap break-words rounded-[1.35rem] border border-[rgba(148,163,184,0.22)] bg-white/78 pl-4 pr-10 py-3 sm:py-3.5 lg:py-3 text-sm leading-relaxed shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] outline-none transition-[border-color,box-shadow,background-color] duration-200 focus:border-cyan-300 focus:ring-2 focus:ring-cyan-300/25 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-100 dark:focus:ring-cyan-500/20"
+              className="prototype-prompt-editor platform-focus-control col-start-1 row-start-1 min-h-[72px] w-full overflow-hidden ios-rounded-scroll-fix whitespace-pre-wrap break-words rounded-[1.35rem] border border-[rgba(148,163,184,0.22)] bg-white/78 pl-4 pr-10 py-3 sm:py-3.5 lg:py-3 text-sm leading-relaxed shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] outline-none transition-[border-color,box-shadow,background-color] duration-200 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-100"
             />
             {prompt.length === 0 && (
               <div className="prompt-placeholder prototype-prompt-placeholder col-start-1 row-start-1 pointer-events-none pl-4 pr-10 py-3 sm:py-3.5 lg:py-3 text-sm leading-relaxed text-slate-400 dark:text-gray-500">
@@ -2464,117 +2460,115 @@ export default function InputBar() {
             {renderPromptOptimizerButton()}
           </div>
 
-          {!isMobile && (
-            <div className="prototype-negative-panel mt-2.5 rounded-[1.2rem] border border-[rgba(148,163,184,0.16)] bg-white/60 px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)] dark:border-white/[0.06] dark:bg-white/[0.025]">
-              <button
-                type="button"
-                onClick={() => setNegativePromptOpen((open) => !open)}
-                className="prototype-negative-trigger flex w-full items-center justify-between gap-3 text-left"
-                aria-expanded={negativePromptOpen}
-              >
-                <div className="prototype-negative-summary min-w-0">
-                  <div className="min-w-0">
-                    <span className="prototype-negative-title">负面提示</span>
-                    <span className={`prototype-negative-state ${negativePrompt.trim() ? 'is-filled' : ''}`}>
-                      {negativePromptStateLabel}
-                    </span>
-                  </div>
-                  <span className="prototype-negative-preview truncate">
-                    {negativePromptPreview}
+          <div className="prototype-negative-panel mt-2.5 rounded-[1.2rem] border border-[rgba(148,163,184,0.16)] bg-white/60 px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)] dark:border-white/[0.06] dark:bg-white/[0.025]">
+            <button
+              type="button"
+              onClick={() => setNegativePromptOpen((open) => !open)}
+              className="prototype-negative-trigger flex w-full items-center justify-between gap-3 text-left"
+              aria-expanded={negativePromptOpen}
+            >
+              <div className="prototype-negative-summary min-w-0">
+                <div className="min-w-0">
+                  <span className="prototype-negative-title">负面提示</span>
+                  <span className={`prototype-negative-state ${negativePrompt.trim() ? 'is-filled' : ''}`}>
+                    {negativePromptStateLabel}
                   </span>
                 </div>
-                <div className="flex items-center gap-2">
-                  <svg className={`h-4 w-4 text-slate-400 transition-transform duration-200 ${negativePromptOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </div>
-              </button>
+                <span className="prototype-negative-preview truncate">
+                  {negativePromptPreview}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <svg className={`h-4 w-4 text-slate-400 transition-transform duration-200 ${negativePromptOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </div>
+            </button>
 
-              {negativePromptOpen && (
-                <div className="mt-2.5 space-y-2 border-t border-[rgba(148,163,184,0.12)] pt-2.5 dark:border-white/[0.05]">
-                  <textarea
-                    value={negativePrompt}
-                    onChange={(e) => setNegativePrompt(e.target.value)}
-                    rows={2}
-                    placeholder="水印、错字、低清晰度、杂乱背景"
-                    className="prototype-input-control w-full resize-none rounded-[1rem] border border-[rgba(148,163,184,0.2)] bg-white/80 px-3 py-2.5 text-sm leading-relaxed text-slate-700 outline-none transition-[border-color,box-shadow] duration-200 placeholder:text-slate-400 focus:border-cyan-300 focus:ring-2 focus:ring-cyan-300/20 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-100 dark:placeholder:text-gray-500"
-                  />
-                  <div className="flex flex-wrap gap-1.5 pt-1">
-                    {pinnedConstraintTerms.length > 0 && (
-                      pinnedConstraintTerms.map((item) => (
+            {negativePromptOpen && (
+              <div className="mt-2.5 space-y-2 border-t border-[rgba(148,163,184,0.12)] pt-2.5 dark:border-white/[0.05]">
+                <textarea
+                  value={negativePrompt}
+                  onChange={(e) => setNegativePrompt(e.target.value)}
+                  rows={2}
+                  placeholder="水印、错字、低清晰度、杂乱背景"
+                  className="prototype-input-control platform-focus-control w-full resize-none rounded-[1rem] border border-[rgba(148,163,184,0.2)] bg-white/80 px-3 py-2.5 text-sm leading-relaxed text-slate-700 outline-none transition-[border-color,box-shadow] duration-200 placeholder:text-slate-400 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-100 dark:placeholder:text-gray-500"
+                />
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {pinnedConstraintTerms.length > 0 && (
+                    pinnedConstraintTerms.map((item) => (
+                      <div
+                        key={`pinned-${item}`}
+                        className="prototype-chip prototype-chip-pinned is-pinned inline-flex items-center gap-1 rounded-full px-1.5 py-[0.3125rem]"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => appendNegativePromptTerms([item], `已复用固定约束：${item}`)}
+                          className="rounded-full px-1 text-[11px] transition-colors"
+                        >
+                          {item}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => togglePinnedConstraintTerm(item)}
+                          className="rounded-full px-1 text-[10px] transition-colors"
+                          aria-label={`取消固定约束 ${item}`}
+                        >
+                          取消
+                        </button>
+                      </div>
+                    ))
+                  )}
+                  {constraintMemoryTerms.length > 0 && (
+                    <>
+                      {constraintMemoryTerms.map((item) => (
                         <div
-                          key={`pinned-${item}`}
-                          className="prototype-chip prototype-chip-pinned inline-flex items-center gap-1 rounded-full border border-amber-200/80 bg-amber-50/85 px-1.5 py-[0.3125rem] dark:border-amber-400/25 dark:bg-amber-500/10"
+                          key={`memory-${item}`}
+                          className="prototype-chip prototype-chip-memory is-memory inline-flex items-center gap-1 rounded-full px-1.5 py-[0.3125rem]"
                         >
                           <button
                             type="button"
-                            onClick={() => appendNegativePromptTerms([item], `已复用固定约束：${item}`)}
-                            className="rounded-full px-1 text-[11px] text-amber-700 transition-colors hover:text-amber-800 dark:text-amber-200 dark:hover:text-amber-100"
+                            onClick={() => appendNegativePromptTerms([item], `已复用约束：${item}`)}
+                            className="rounded-full px-1 text-[11px] transition-colors"
                           >
                             {item}
                           </button>
                           <button
                             type="button"
                             onClick={() => togglePinnedConstraintTerm(item)}
-                            className="rounded-full px-1 text-[10px] text-amber-500 transition-colors hover:text-rose-500 dark:text-amber-300/80 dark:hover:text-rose-300"
-                            aria-label={`取消固定约束 ${item}`}
+                            className="rounded-full px-1 text-[10px] transition-colors"
+                            aria-label={`固定约束 ${item}`}
                           >
-                            取消
+                            固定
                           </button>
                         </div>
-                      ))
-                    )}
-                    {constraintMemoryTerms.length > 0 && (
-                      <>
-                        {constraintMemoryTerms.map((item) => (
-                          <div
-                            key={`memory-${item}`}
-                            className="prototype-chip prototype-chip-memory inline-flex items-center gap-1 rounded-full border border-cyan-200/70 bg-cyan-50/80 px-1.5 py-[0.3125rem] dark:border-cyan-500/25 dark:bg-cyan-500/10"
-                          >
-                            <button
-                              type="button"
-                              onClick={() => appendNegativePromptTerms([item], `已复用约束：${item}`)}
-                              className="rounded-full px-1 text-[11px] text-cyan-700 transition-colors hover:text-cyan-800 dark:text-cyan-200 dark:hover:text-cyan-100"
-                            >
-                              {item}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => togglePinnedConstraintTerm(item)}
-                              className="rounded-full px-1 text-[10px] text-cyan-500 transition-colors hover:text-amber-500 dark:text-cyan-300/80 dark:hover:text-amber-300"
-                              aria-label={`固定约束 ${item}`}
-                            >
-                              固定
-                            </button>
-                          </div>
-                        ))}
-                        <button
-                          type="button"
-                          onClick={clearConstraintMemoryTerms}
-                          className="prototype-chip rounded-full border border-[rgba(148,163,184,0.18)] bg-white/55 px-2 py-[0.3125rem] text-[10px] text-slate-500 transition-colors hover:text-slate-700 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-400 dark:hover:text-gray-200"
-                        >
-                          清空最近
-                        </button>
-                      </>
-                    )}
-                    {visibleQuickConstraintTerms.map((item) => (
+                      ))}
                       <button
-                        key={item}
                         type="button"
-                        onClick={() => appendNegativePromptTerms([item], `已添加约束：${item}`)}
-                        className="prototype-chip rounded-full border border-[rgba(148,163,184,0.18)] bg-white/70 px-2.5 py-[0.3125rem] text-[11px] text-slate-600 transition-colors hover:border-cyan-300 hover:text-cyan-700 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300 dark:hover:border-cyan-500/40 dark:hover:text-cyan-300"
+                        onClick={clearConstraintMemoryTerms}
+                        className="prototype-chip rounded-full border border-[rgba(148,163,184,0.18)] bg-white/55 px-2 py-[0.3125rem] text-[10px] text-slate-500 transition-colors hover:text-slate-700 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-400 dark:hover:text-gray-200"
                       >
-                        {item}
+                        清空最近
                       </button>
-                    ))}
-                    <span className="shrink-0 rounded-full border border-[rgba(148,163,184,0.18)] bg-white/55 px-2 py-[0.3125rem] text-[10px] text-slate-500 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-400">
-                      {negativePromptModeLabel}
-                    </span>
-                  </div>
+                    </>
+                  )}
+                  {visibleQuickConstraintTerms.map((item) => (
+                    <button
+                      key={item}
+                      type="button"
+                      onClick={() => appendNegativePromptTerms([item], `已添加约束：${item}`)}
+                      className="prototype-chip rounded-full border border-[rgba(148,163,184,0.18)] bg-white/70 px-2.5 py-[0.3125rem] text-[11px] text-slate-600 transition-colors dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300"
+                    >
+                      {item}
+                    </button>
+                  ))}
+                  <span className="shrink-0 rounded-full border border-[rgba(148,163,184,0.18)] bg-white/55 px-2 py-[0.3125rem] text-[10px] text-slate-500 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-400">
+                    {negativePromptModeLabel}
+                  </span>
                 </div>
-              )}
-            </div>
-          )}
+              </div>
+            )}
+          </div>
 
           {/* 参数 + 按钮 */}
           <div className="prototype-control-stack mt-2.5">
@@ -2598,8 +2592,8 @@ export default function InputBar() {
                     onClick={() => !atImageLimit && fileInputRef.current?.click()}
                     className={`prototype-action-button h-11 w-11 rounded-[1rem] transition-all ${
                       atImageLimit
-                        ? 'bg-gray-200 dark:bg-white/[0.04] text-gray-300 dark:text-gray-500 cursor-not-allowed'
-                        : 'bg-slate-200/90 text-slate-600 hover:bg-slate-300 dark:bg-white/[0.05] dark:hover:bg-white/[0.09] dark:text-gray-300'
+                        ? 'is-disabled cursor-not-allowed'
+                        : 'is-secondary'
                     }`}
                     aria-label={uploadImageTooltipText}
                   >
@@ -2619,19 +2613,21 @@ export default function InputBar() {
                     disabled={hasSubmitRoute && workbenchAccessState === 'ready' ? !canSubmit : false}
                     className={`prototype-submit-button inline-flex h-11 w-full items-center justify-center gap-2 rounded-[1rem] px-4 text-[13px] font-semibold transition-all ${
                       workbenchAccessState === 'guest'
-                        ? 'bg-[linear-gradient(135deg,#1d4ed8,#2563eb)] text-white hover:brightness-105'
+                        ? 'is-primary'
                         : workbenchAccessState === 'no_balance'
-                        ? 'bg-[linear-gradient(135deg,#d97706,#f59e0b)] text-white hover:brightness-105'
+                        ? 'is-warning'
                         : !hasSubmitRoute
-                        ? 'bg-slate-300 dark:bg-white/[0.06] text-slate-600 dark:text-gray-300 cursor-pointer'
-                        : 'bg-[linear-gradient(135deg,#0891b2,#2563eb)] text-white hover:brightness-105 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed'
+                        ? 'is-neutral cursor-pointer'
+                        : 'is-primary'
                     }`}
                     aria-label={submitButtonAriaLabel}
                   >
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
                     </svg>
-                    {renderSubmitButtonCopy()}
+                    {renderSubmitButtonCopy({
+                      compactHint: isMobile && workbenchAccessState === 'guest' && shareSafetyHint.level === 'safe',
+                    })}
                   </button>
                 </div>
               </div>
@@ -2656,8 +2652,8 @@ export default function InputBar() {
                     onClick={() => !atImageLimit && fileInputRef.current?.click()}
                     className={`prototype-action-button h-12 w-12 rounded-2xl transition-all shadow-sm ${
                       atImageLimit
-                        ? 'bg-gray-200 dark:bg-white/[0.04] text-gray-300 dark:text-gray-500 cursor-not-allowed'
-                        : 'bg-slate-200 text-slate-600 hover:bg-slate-300 dark:bg-white/[0.06] dark:hover:bg-white/[0.1] dark:text-gray-300 hover:shadow'
+                        ? 'is-disabled cursor-not-allowed'
+                        : 'is-secondary'
                     }`}
                     aria-label={uploadImageTooltipText}
                   >
@@ -2677,19 +2673,21 @@ export default function InputBar() {
                     disabled={hasSubmitRoute && workbenchAccessState === 'ready' ? !canSubmit : false}
                     className={`prototype-submit-button min-w-[152px] h-12 px-4 rounded-2xl transition-all shadow-sm hover:shadow inline-flex items-center justify-center gap-2 text-sm font-semibold ${
                       workbenchAccessState === 'guest'
-                        ? 'bg-[linear-gradient(135deg,#1d4ed8,#2563eb)] text-white hover:brightness-105'
+                        ? 'is-primary'
                         : workbenchAccessState === 'no_balance'
-                        ? 'bg-[linear-gradient(135deg,#d97706,#f59e0b)] text-white hover:brightness-105'
+                        ? 'is-warning'
                         : !hasSubmitRoute
-                        ? 'bg-slate-300 dark:bg-white/[0.06] text-slate-600 dark:text-gray-300 cursor-pointer'
-                        : 'bg-[linear-gradient(135deg,#0891b2,#2563eb)] text-white hover:brightness-105 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed'
+                        ? 'is-neutral cursor-pointer'
+                        : 'is-primary'
                     }`}
                     aria-label={submitButtonAriaLabel}
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
                     </svg>
-                    {renderSubmitButtonCopy()}
+                    {renderSubmitButtonCopy({
+                      compactHint: isMobile && workbenchAccessState === 'guest' && shareSafetyHint.level === 'safe',
+                    })}
                   </button>
                 </div>
               </div>
@@ -2722,8 +2720,8 @@ export default function InputBar() {
                     }}
                     className={`p-2.5 rounded-xl transition-all shadow-sm flex-shrink-0 ${
                       atImageLimit
-                        ? 'bg-gray-200 dark:bg-white/[0.04] text-gray-300 dark:text-gray-500 cursor-not-allowed'
-                        : 'bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300'
+                        ? 'prototype-action-button is-disabled cursor-not-allowed'
+                        : 'prototype-action-button is-secondary'
                     }`}
                     aria-label={uploadImageTooltipText}
                   >
@@ -2786,18 +2784,20 @@ export default function InputBar() {
                     aria-label={submitButtonAriaLabel}
                     className={`prototype-submit-button w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-all shadow-sm ${
                       workbenchAccessState === 'guest'
-                        ? 'bg-blue-600 text-white hover:bg-blue-700'
+                        ? 'is-primary'
                         : workbenchAccessState === 'no_balance'
-                        ? 'bg-amber-500 text-white hover:bg-amber-600'
+                        ? 'is-warning'
                         : !hasSubmitRoute
-                        ? 'bg-gray-300 dark:bg-white/[0.06] text-slate-600 dark:text-gray-300 cursor-pointer'
-                        : 'bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed'
+                        ? 'is-neutral cursor-pointer'
+                        : 'is-primary'
                     }`}
                   >
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
                     </svg>
-                    {renderSubmitButtonCopy()}
+                    {renderSubmitButtonCopy({
+                      compactHint: isMobile && workbenchAccessState === 'guest' && shareSafetyHint.level === 'safe',
+                    })}
                   </button>
                 </div>
               </div>

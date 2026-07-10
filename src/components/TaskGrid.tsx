@@ -389,7 +389,7 @@ export default function TaskGrid({ limit = 6 }: { limit?: number }) {
       </div>
       {selectionBox && (
         <div
-          className="fixed bg-blue-500/20 border border-blue-500/50 pointer-events-none z-[30]"
+          className="task-selection-box fixed pointer-events-none z-[30]"
           style={{
             left: Math.min(selectionBox.startPageX, selectionBox.currentPageX) - window.scrollX,
             top: Math.min(selectionBox.startPageY, selectionBox.currentPageY) - window.scrollY,

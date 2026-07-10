@@ -22,7 +22,7 @@ export function InspirationOverlayCard(props: {
           className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.02]"
         />
         <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/92 via-slate-950/56 via-42% to-transparent px-2.5 pb-2.5 pt-12 text-white sm:px-3 sm:pb-3">
-          <div className="inline-flex max-w-[82%] items-center rounded-full bg-slate-950/72 px-2.5 py-1 shadow-[0_8px_20px_rgba(15,23,42,0.2)] backdrop-blur-md">
+          <div className="inline-flex max-w-[82%] items-center rounded-full bg-slate-950/72 px-2.5 py-1 shadow-[0_8px_20px_rgba(15,23,42,0.2)]">
             <div className="line-clamp-1 text-[11.5px] font-medium leading-4 text-white [text-shadow:0_1px_2px_rgba(0,0,0,0.35)]">
               {props.item.title ?? '灵感作品'}
             </div>

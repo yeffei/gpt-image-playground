@@ -842,9 +842,9 @@ export default function MaskEditorModal() {
 
   return (
     <>
-      <div data-no-drag-select className="fixed inset-0 z-[80] flex flex-col bg-gray-50 dark:bg-gray-900 animate-modal-in">
+      <div data-no-drag-select className="mask-editor-shell fixed inset-0 z-[80] flex flex-col animate-modal-in">
       {/* Header */}
-      <div className="flex-none flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-950 z-20">
+      <div className="mask-editor-header flex-none flex items-center justify-between px-4 py-3 z-20">
         <div className="flex items-center gap-3">
           <button onClick={close} disabled={isSaving} className="p-2 -ml-2 text-gray-500 hover:bg-gray-100 rounded-lg dark:text-gray-400 dark:hover:bg-gray-800 transition" title="取消">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
@@ -877,11 +877,11 @@ export default function MaskEditorModal() {
         </div>
         <div className="flex items-center gap-2">
           {maskDraft?.targetImageId === imageId && (
-            <button onClick={handleRemoveMask} className="flex h-8 items-center gap-1.5 px-4 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-lg transition">
+            <button onClick={handleRemoveMask} className="mask-editor-danger flex h-8 items-center gap-1.5 px-4 text-sm font-medium transition">
               移除遮罩
             </button>
           )}
-          <button onClick={handleSave} disabled={!isReady || isSaving} className="flex h-8 items-center gap-1.5 px-4 text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-lg disabled:opacity-50 transition">
+          <button onClick={handleSave} disabled={!isReady || isSaving} className="mask-editor-primary flex h-8 items-center gap-1.5 px-4 text-sm font-medium disabled:opacity-50 transition">
             {isSaving ? '保存中...' : '保存'}
           </button>
         </div>
@@ -890,7 +890,7 @@ export default function MaskEditorModal() {
       {/* Workspace */}
       <div ref={stageRef} className="flex-1 relative flex items-center justify-center overflow-hidden bg-gray-100/50 dark:bg-black/50 p-0 pb-[76px] sm:p-6 sm:pb-[100px]" style={{ containerType: 'size' }}>
         {isLoading && (
-          <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/50 text-sm text-gray-500 backdrop-blur-sm dark:bg-gray-900/50 dark:text-gray-300">
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/72 text-sm text-gray-500 dark:bg-gray-900/70 dark:text-gray-300">
             正在载入图片...
           </div>
         )}
@@ -931,11 +931,11 @@ export default function MaskEditorModal() {
 
         {/* Footer Toolbar */}
         <div className="absolute bottom-4 sm:bottom-8 left-1/2 -translate-x-1/2 flex items-center justify-center z-20 pointer-events-none w-full px-2 sm:px-4">
-          <div className="flex items-center gap-2 sm:gap-4 px-2 sm:px-3 py-1.5 sm:py-2 bg-white/95 dark:bg-[#0f0f0f]/95 backdrop-blur-md border border-gray-200/80 dark:border-white/5 rounded-2xl sm:rounded-[1.25rem] shadow-2xl pointer-events-auto">
+          <div className="mask-editor-toolbar flex items-center gap-2 sm:gap-4 px-2 sm:px-3 py-1.5 sm:py-2 pointer-events-auto">
             <div className="flex items-center gap-1.5 sm:gap-3">
               <div className="flex items-center bg-gray-100/80 dark:bg-[#232325]/80 p-1 rounded-xl sm:rounded-[14px]">
                 <button
-                  className={`p-2 sm:p-2.5 rounded-lg sm:rounded-xl transition-all ${tool === 'brush' ? 'bg-white shadow-sm text-blue-500 dark:bg-[#323338] dark:text-blue-400 dark:shadow-none' : 'text-gray-500 hover:text-gray-700 dark:text-[#8a8a8e] dark:hover:text-gray-200'}`}
+                  className={`mask-tool-button p-2 sm:p-2.5 rounded-lg sm:rounded-xl transition-all ${tool === 'brush' ? 'is-active' : ''}`}
                   onClick={() => setTool('brush')}
                   disabled={!isReady || isSaving}
                   title="画笔"
@@ -945,7 +945,7 @@ export default function MaskEditorModal() {
                   </svg>
                 </button>
                 <button
-                  className={`p-2 sm:p-2.5 rounded-lg sm:rounded-xl transition-all ${tool === 'eraser' ? 'bg-white shadow-sm text-blue-500 dark:bg-[#323338] dark:text-blue-400 dark:shadow-none' : 'text-gray-500 hover:text-gray-700 dark:text-[#8a8a8e] dark:hover:text-gray-200'}`}
+                  className={`mask-tool-button p-2 sm:p-2.5 rounded-lg sm:rounded-xl transition-all ${tool === 'eraser' ? 'is-active' : ''}`}
                   onClick={() => setTool('eraser')}
                   disabled={!isReady || isSaving}
                   title="橡皮"
@@ -964,7 +964,7 @@ export default function MaskEditorModal() {
                 <button
                   ref={brushSizeButtonRef}
                   onClick={toggleBrushControls}
-                  className={`flex items-center justify-center w-10 h-10 sm:w-[46px] sm:h-[46px] rounded-xl sm:rounded-[14px] transition-all border ${showBrushControls ? 'bg-blue-50 border-blue-200 text-blue-600 dark:bg-[#323338] dark:border-gray-600 dark:text-blue-400' : 'bg-white border-gray-200/80 text-gray-700 hover:bg-gray-50 dark:bg-transparent dark:border-[#323338] dark:text-[#e0e0e0] dark:hover:border-gray-500'}`}
+                  className={`mask-tool-button flex items-center justify-center w-10 h-10 sm:w-[46px] sm:h-[46px] rounded-xl sm:rounded-[14px] transition-all border ${showBrushControls ? 'is-active' : ''}`}
                   disabled={!isReady || isSaving}
                   title="调节笔刷大小"
                 >

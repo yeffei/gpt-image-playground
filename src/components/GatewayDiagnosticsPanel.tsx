@@ -59,14 +59,14 @@ function getExclusionReasonLabel(reason: string) {
 function getOperationalFindingClassName(severity: GatewayOperationalFindingSeverity) {
   switch (severity) {
     case 'critical':
-      return 'border-red-100 bg-red-50 text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200'
+      return 'gateway-finding is-critical'
     case 'warning':
-      return 'border-amber-100 bg-amber-50 text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200'
+      return 'gateway-finding is-warning'
     case 'ok':
-      return 'border-emerald-100 bg-emerald-50 text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200'
+      return 'gateway-finding is-ok'
     case 'info':
     default:
-      return 'border-gray-100 bg-white/80 text-gray-600 dark:border-white/[0.06] dark:bg-white/[0.03] dark:text-gray-300'
+      return 'gateway-finding is-info'
   }
 }
 
@@ -177,7 +177,7 @@ export default function GatewayDiagnosticsPanel({ initialPayload = null }: Gatew
                   <div key={`${override.routeId}-${override.updatedAt}`} className="rounded-lg bg-white/80 px-3 py-2 text-xs dark:bg-white/[0.03]">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-medium text-gray-800 dark:text-gray-100">{override.routeId}</span>
-                      <span className="text-amber-600 dark:text-amber-300">{describeOperatorOverride(override)}</span>
+                      <span className="gateway-status-text is-warning">{describeOperatorOverride(override)}</span>
                     </div>
                     <div className="mt-1 text-gray-500 dark:text-gray-400">
                       原因：{override.reason?.trim() || '未填写'} · 更新时间：{formatDateTime(override.updatedAt)}
@@ -212,7 +212,7 @@ export default function GatewayDiagnosticsPanel({ initialPayload = null }: Gatew
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-medium text-gray-800 dark:text-gray-100">{route.name}</span>
                     <span className="text-gray-400 dark:text-gray-500">{route.id}</span>
-                    <span className={route.effectiveEnabled === false ? 'text-amber-600 dark:text-amber-300' : 'text-emerald-600 dark:text-emerald-300'}>
+                    <span className={route.effectiveEnabled === false ? 'gateway-status-text is-warning' : 'gateway-status-text is-ok'}>
                       {getEffectiveRouteStatusLabel(route.effectiveEnabled)}
                     </span>
                     <span className="text-gray-500 dark:text-gray-400">静态开关：{route.enabled ? '启用' : '停用'}</span>
@@ -229,7 +229,7 @@ export default function GatewayDiagnosticsPanel({ initialPayload = null }: Gatew
                   <div className="mt-2 text-gray-500 dark:text-gray-400">
                     <div>{describeOperatorOverride(route.operatorOverride)}</div>
                     {route.disabledReason?.trim() && (
-                      <div className="mt-1 text-amber-700 dark:text-amber-200">
+                      <div className="gateway-status-text is-warning mt-1">
                         静态停用原因：{route.disabledReason.trim()}
                       </div>
                     )}
@@ -237,7 +237,7 @@ export default function GatewayDiagnosticsPanel({ initialPayload = null }: Gatew
                       当前排除原因：
                       {route.exclusionReasons?.length ? (
                         route.exclusionReasons.map((reason) => (
-                          <span key={`${route.id}-${reason}`} className="ml-2 inline-block rounded-full bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700 dark:bg-amber-500/10 dark:text-amber-200">
+                          <span key={`${route.id}-${reason}`} className="gateway-status-pill is-warning ml-2 inline-block rounded-full px-2 py-0.5 text-[11px]">
                             {getExclusionReasonLabel(reason)}
                           </span>
                         ))
@@ -355,7 +355,7 @@ export default function GatewayDiagnosticsPanel({ initialPayload = null }: Gatew
                       {route.rank != null && <span>排序 #{route.rank}</span>}
                       {route.attemptIndex != null && <span>尝试 #{route.attemptIndex}</span>}
                       {route.exclusionReasons?.map((reason) => (
-                        <span key={`${route.routeId}-${reason}`} className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700 dark:bg-amber-500/10 dark:text-amber-200">
+                        <span key={`${route.routeId}-${reason}`} className="gateway-status-pill is-warning rounded-full px-2 py-0.5 text-[10px]">
                           {getExclusionReasonLabel(reason)}
                         </span>
                       ))}

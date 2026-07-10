@@ -177,7 +177,7 @@ export default function Select({ value, onChange, onReorder, options, disabled, 
       {isOpen && menuPosition && createPortal(
         <div
           ref={menuRef}
-          className={`studio-select-menu fixed overflow-hidden overflow-y-auto rounded-2xl border py-1.5 shadow-[0_18px_48px_rgba(31,23,56,0.16)] ring-1 ring-white/50 backdrop-blur-2xl custom-scrollbar ${
+          className={`studio-select-menu fixed overflow-hidden overflow-y-auto rounded-2xl border py-1.5 shadow-[0_18px_48px_rgba(17,17,17,0.12)] ring-1 ring-black/[0.04] custom-scrollbar ${
             placement === 'top' ? 'animate-dropdown-up' : 'animate-dropdown-down'
           }`}
           style={{
@@ -350,19 +350,19 @@ export default function Select({ value, onChange, onReorder, options, disabled, 
                 draggedValue === option.value
                   ? 'opacity-40 bg-white/50 dark:bg-white/[0.04]'
                   : option.variant === 'action'
-                  ? 'font-semibold text-[var(--studio-accent-deep)] hover:bg-white/60 dark:text-blue-400 dark:hover:bg-blue-500/10'
+                  ? 'font-semibold text-[var(--platform-accent-fill,#785cff)] hover:bg-[rgba(123,97,255,0.08)] dark:text-[var(--platform-accent-fill,#785cff)] dark:hover:bg-[rgba(123,97,255,0.12)]'
                   : option.variant === 'danger'
                   ? 'font-semibold text-red-500 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10'
                   : option.value === value
-                  ? 'bg-[rgba(123,97,255,0.13)] dark:bg-blue-500/10 text-[var(--studio-accent-deep)] dark:text-blue-400 font-medium'
+                  ? 'bg-[rgba(123,97,255,0.13)] dark:bg-[rgba(123,97,255,0.12)] text-[var(--platform-accent-fill,#785cff)] dark:text-[var(--platform-accent-fill,#785cff)] font-medium'
                   : 'text-gray-700 dark:text-gray-300 hover:bg-white/58 dark:hover:bg-white/[0.06]'
               }`}
             >
               {dragOverValue === option.value && dragDropPosition === 'before' && draggedValue !== option.value && (
-                <div className="absolute -top-[1px] left-0 right-0 h-[2px] bg-blue-500 rounded-full z-40 shadow-sm pointer-events-none" />
+                <div className="absolute -top-[1px] left-0 right-0 h-[2px] bg-[var(--platform-accent-fill,#785cff)] rounded-full z-40 shadow-sm pointer-events-none" />
               )}
               {dragOverValue === option.value && dragDropPosition === 'after' && draggedValue !== option.value && (
-                <div className="absolute -bottom-[1px] left-0 right-0 h-[2px] bg-blue-500 rounded-full z-40 shadow-sm pointer-events-none" />
+                <div className="absolute -bottom-[1px] left-0 right-0 h-[2px] bg-[var(--platform-accent-fill,#785cff)] rounded-full z-40 shadow-sm pointer-events-none" />
               )}
               <div className="flex min-w-0 flex-1 items-center gap-2 pr-2">
                 {option.draggable && (
@@ -422,7 +422,7 @@ export default function Select({ value, onChange, onReorder, options, disabled, 
       {touchDragPreview && createPortal(
         <div
           id="touch-drag-preview"
-          className="fixed pointer-events-none z-[110] flex items-center justify-between gap-2 rounded-xl bg-white/95 px-3 py-2 text-xs text-gray-700 shadow-xl ring-1 ring-black/5 backdrop-blur-xl dark:bg-gray-900/95 dark:text-gray-300 dark:ring-white/10"
+          className="fixed pointer-events-none z-[110] flex items-center justify-between gap-2 rounded-xl bg-white/95 px-3 py-2 text-xs text-gray-700 shadow-xl ring-1 ring-black/5 dark:bg-gray-900/95 dark:text-gray-300 dark:ring-white/10"
           style={{
             left: touchDragPreview.x - touchDragPreview.offsetX,
             top: touchDragPreview.y - touchDragPreview.offsetY,

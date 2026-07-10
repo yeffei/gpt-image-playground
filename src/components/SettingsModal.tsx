@@ -46,7 +46,7 @@ function SettingsSwitch({ checked, onClick, label }: { checked: boolean; onClick
     <button
       type="button"
       onClick={onClick}
-      className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${checked ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+      className={`settings-switch relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${checked ? 'is-on' : ''}`}
       role="switch"
       aria-checked={checked}
       aria-label={label}
@@ -125,18 +125,18 @@ export default function SettingsModal() {
 
   return createPortal(
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4" data-no-drag-select>
-      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm animate-overlay-in" onClick={handleClose} />
-      <div className="relative z-10 flex max-h-[84vh] w-full max-w-3xl flex-col overflow-hidden rounded-3xl border border-white/50 bg-white/95 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10">
+      <div className="platform-modal-overlay absolute inset-0 animate-overlay-in" onClick={handleClose} />
+      <div className="settings-modal-panel relative z-10 flex max-h-[84vh] w-full max-w-3xl flex-col overflow-hidden animate-modal-in">
         <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 dark:border-white/[0.08]">
           <h3 className="frontend-section-title flex items-center gap-2 text-gray-800 dark:text-gray-100">
-            <svg className="h-5 w-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="settings-title-icon h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
             设置
           </h3>
           <div className="flex items-center gap-3">
-            <span className="select-none rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-600 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-300">标准版</span>
+            <span className="settings-version-badge select-none rounded-full px-2.5 py-1 text-xs font-medium">标准版</span>
             <button
               type="button"
               onClick={handleClose}
@@ -154,11 +154,7 @@ export default function SettingsModal() {
               <button
                 type="button"
                 onClick={() => setActiveTab('general')}
-                className={`flex flex-shrink-0 items-center gap-2.5 whitespace-nowrap rounded-xl px-3 py-2.5 text-sm transition-colors ${
-                  activeTab === 'general'
-                    ? 'bg-white font-medium text-blue-600 shadow-sm dark:bg-white/[0.08] dark:text-blue-400'
-                    : 'text-gray-600 hover:bg-gray-100/80 dark:text-gray-400 dark:hover:bg-white/[0.04]'
-                }`}
+                className={`settings-tab-button flex flex-shrink-0 items-center gap-2.5 whitespace-nowrap rounded-xl px-3 py-2.5 text-sm transition-colors ${activeTab === 'general' ? 'is-active' : ''}`}
               >
                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6l4 2m6-2a10 10 0 11-20 0 10 10 0 0120 0z" />
@@ -168,11 +164,7 @@ export default function SettingsModal() {
               <button
                 type="button"
                 onClick={() => setActiveTab('data')}
-                className={`flex flex-shrink-0 items-center gap-2.5 whitespace-nowrap rounded-xl px-3 py-2.5 text-sm transition-colors ${
-                  activeTab === 'data'
-                    ? 'bg-white font-medium text-blue-600 shadow-sm dark:bg-white/[0.08] dark:text-blue-400'
-                    : 'text-gray-600 hover:bg-gray-100/80 dark:text-gray-400 dark:hover:bg-white/[0.04]'
-                }`}
+                className={`settings-tab-button flex flex-shrink-0 items-center gap-2.5 whitespace-nowrap rounded-xl px-3 py-2.5 text-sm transition-colors ${activeTab === 'data' ? 'is-active' : ''}`}
               >
                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
@@ -183,11 +175,7 @@ export default function SettingsModal() {
                 <button
                   type="button"
                   onClick={() => setActiveTab('about')}
-                  className={`flex flex-shrink-0 items-center gap-2.5 whitespace-nowrap rounded-xl px-3 py-2.5 text-sm transition-colors ${
-                    activeTab === 'about'
-                      ? 'bg-white font-medium text-blue-600 shadow-sm dark:bg-white/[0.08] dark:text-blue-400'
-                      : 'text-gray-600 hover:bg-gray-100/80 dark:text-gray-400 dark:hover:bg-white/[0.04]'
-                  }`}
+                  className={`settings-tab-button flex flex-shrink-0 items-center gap-2.5 whitespace-nowrap rounded-xl px-3 py-2.5 text-sm transition-colors ${activeTab === 'about' ? 'is-active' : ''}`}
                 >
                   <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -310,7 +298,7 @@ export default function SettingsModal() {
                     </p>
                   </div>
 
-                  <div className="rounded-2xl border border-blue-100 bg-blue-50/70 p-4 text-[13px] leading-relaxed text-blue-900/75 dark:border-blue-500/15 dark:bg-blue-500/10 dark:text-blue-100/80">
+                  <div className="settings-info-note rounded-2xl p-4 text-[13px] leading-relaxed">
                     备份仅覆盖当前浏览器里的本地偏好、缓存任务记录和生成图片；不包含账号、额度、充值码或后台模型线路。
                   </div>
 

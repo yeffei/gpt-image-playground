@@ -111,11 +111,11 @@ export function InspirationPublishPanel(props: {
   const toggleAdjustLabel = props.inspirationPanelOpen ? '收起手动调整' : '手动调整发布信息'
   const lastCheckedText = formatInspirationStatusCheckTime(props.inspirationLastCheckedAt)
   return (
-    <div className="overflow-hidden rounded-2xl border border-white/70 bg-white/78 p-3.5 text-xs shadow-[0_18px_40px_-24px_rgba(15,23,42,0.35)] backdrop-blur-xl ring-1 ring-black/[0.04] dark:border-white/[0.08] dark:bg-zinc-950/60 dark:ring-white/[0.06]">
+    <div className="inspiration-publish-panel overflow-hidden rounded-2xl p-3.5 text-xs">
       <div className="mb-3 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-amber-500/12 text-amber-700 dark:bg-amber-300/12 dark:text-amber-200">
+            <span className="inspiration-publish-icon flex h-7 w-7 items-center justify-center rounded-full">
               <LinkIcon className="h-3.5 w-3.5" />
             </span>
             <div className="min-w-0">
@@ -131,10 +131,10 @@ export function InspirationPublishPanel(props: {
         {props.inspirationStatusBadge ? (
           <span className={`mt-0.5 shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium ${
             props.inspirationStatusBadge.tone === 'emerald'
-              ? 'bg-emerald-500/12 text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-200'
-              : props.inspirationStatusBadge.tone === 'amber'
-              ? 'bg-amber-500/12 text-amber-700 dark:bg-amber-400/15 dark:text-amber-200'
-              : 'bg-slate-500/10 text-slate-700 dark:bg-white/[0.08] dark:text-gray-200'
+              ? 'detail-status-badge is-success'
+            : props.inspirationStatusBadge.tone === 'amber'
+              ? 'detail-status-badge is-warning'
+              : 'detail-status-badge'
           }`}>
             {props.inspirationStatusBadge.label}
           </span>
@@ -142,26 +142,26 @@ export function InspirationPublishPanel(props: {
       </div>
 
       {!props.hasServerOutput ? (
-        <div className="rounded-xl border border-slate-200/70 bg-white/65 px-3 py-2 text-slate-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-white/65">
+        <div className="inspiration-note px-3 py-2">
           仅服务端保存的新结果支持发布到灵感广场。
         </div>
       ) : props.loading ? (
-        <div className="rounded-xl border border-slate-200/70 bg-white/65 px-3 py-2 text-slate-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-white/65">
+        <div className="inspiration-note px-3 py-2">
           正在检查发布资格...
         </div>
       ) : props.currentInspirationPost && props.currentInspirationPost.status !== 'removed' ? (
         <div className="space-y-3">
-          <div className="rounded-xl border border-slate-200/70 bg-white/72 px-3 py-2 text-[11px] leading-5 text-slate-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-white/70">
+          <div className="inspiration-note px-3 py-2 text-[11px] leading-5">
             {currentStatusMessage}
           </div>
           {canRefreshStatus ? (
-            <div className="rounded-xl border border-amber-200/70 bg-amber-50/70 px-3 py-2 text-[11px] leading-5 text-amber-900/85 dark:border-amber-300/10 dark:bg-amber-300/[0.08] dark:text-amber-100/80">
-              <div className="font-medium text-amber-950/90 dark:text-amber-100">
+            <div className="inspiration-note is-warning px-3 py-2 text-[11px] leading-5">
+              <div className="font-medium">
                 {props.currentInspirationPost.status === 'ai_reviewing'
                   ? '系统会继续自动检查状态，出结果后这里会直接更新。'
                   : '当前还没进入公开展示，可以稍后刷新状态查看最新结果。'}
               </div>
-              <div className="mt-1 text-[10px] text-amber-900/75 dark:text-amber-100/75">
+              <div className="mt-1 text-[10px]">
                 {props.inspirationRefreshing
                   ? '正在刷新发布状态...'
                   : lastCheckedText
@@ -170,7 +170,7 @@ export function InspirationPublishPanel(props: {
               </div>
             </div>
           ) : props.currentInspirationPost.status === 'published' ? (
-            <div className="rounded-xl border border-emerald-200/70 bg-emerald-50/70 px-3 py-2 text-[11px] leading-5 text-emerald-900/85 dark:border-emerald-300/10 dark:bg-emerald-300/[0.08] dark:text-emerald-100/82">
+            <div className="inspiration-note is-success px-3 py-2 text-[11px] leading-5">
               已通过发布检查，可立即前往灵感广场查看展示效果。
             </div>
           ) : null}
@@ -180,7 +180,7 @@ export function InspirationPublishPanel(props: {
                 type="button"
                 onClick={props.onRefreshStatus}
                 disabled={props.inspirationBusy || props.inspirationRefreshing}
-                className="flex-1 rounded-xl bg-slate-950 px-3 py-2 font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.98] dark:bg-white dark:text-slate-950 dark:hover:bg-white/90"
+                className="detail-share-action is-primary flex-1 rounded-xl px-3 py-2 font-medium transition disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.98]"
               >
                 {props.inspirationRefreshing ? '刷新中...' : '刷新发布状态'}
               </button>
@@ -188,7 +188,7 @@ export function InspirationPublishPanel(props: {
               <button
                 type="button"
                 onClick={props.onOpenInspiration}
-                className="flex-1 rounded-xl bg-slate-950 px-3 py-2 font-medium text-white transition hover:bg-slate-800 active:scale-[0.98] dark:bg-white dark:text-slate-950 dark:hover:bg-white/90"
+                className="detail-share-action is-primary flex-1 rounded-xl px-3 py-2 font-medium transition active:scale-[0.98]"
               >
                 前往灵感广场查看
               </button>
@@ -197,7 +197,7 @@ export function InspirationPublishPanel(props: {
               type="button"
               onClick={props.onRevoke}
               disabled={props.inspirationBusy}
-              className="rounded-xl border border-slate-200/70 bg-white/78 px-3 py-2 font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.98] dark:border-white/10 dark:bg-white/[0.05] dark:text-white/68 dark:hover:bg-white/[0.08]"
+              className="detail-share-action is-secondary rounded-xl px-3 py-2 font-medium transition disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.98]"
             >
               {props.currentInspirationPost.status === 'published' ? '撤回公开' : '撤回记录'}
             </button>
@@ -206,23 +206,23 @@ export function InspirationPublishPanel(props: {
       ) : showPublishActions ? (
         <div className="space-y-3">
           {isRepublish ? (
-            <div className="rounded-xl border border-slate-200/70 bg-white/72 px-3 py-2 text-[11px] leading-5 text-slate-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-white/70">
+            <div className="inspiration-note px-3 py-2 text-[11px] leading-5">
               {currentStatusMessage}
             </div>
           ) : null}
-          <div className="rounded-xl border border-amber-200/70 bg-amber-50/70 px-3 py-2.5 text-[11px] leading-5 text-amber-900/85 dark:border-amber-300/10 dark:bg-amber-300/[0.08] dark:text-amber-100/80">
-            <div className="font-medium text-amber-950/90 dark:text-amber-100">
+          <div className="inspiration-note px-3 py-2.5 text-[11px] leading-5">
+            <div className="font-medium">
               默认会自动识别分类，并生成标题与简短说明，适合直接{isRepublish ? '重新' : ''}发布。
             </div>
-            <div className="mt-1 flex flex-wrap gap-1.5 text-[10px] text-amber-900/75 dark:text-amber-100/75">
-              <span className="rounded-full bg-white/65 px-2 py-0.5 dark:bg-white/[0.08]">
+            <div className="mt-1 flex flex-wrap gap-1.5 text-[10px]">
+              <span className="inspiration-mini-chip rounded-full px-2 py-0.5">
                 分类 · {props.suggestedCategory}
               </span>
-              <span className="rounded-full bg-white/65 px-2 py-0.5 dark:bg-white/[0.08]">
+              <span className="inspiration-mini-chip rounded-full px-2 py-0.5">
                 标题 · {props.suggestedTitle}
               </span>
             </div>
-            <div className="mt-1 line-clamp-2 text-[10px] text-amber-900/70 dark:text-amber-100/68">
+            <div className="mt-1 line-clamp-2 text-[10px]">
               说明预览：{props.suggestedCaption}
             </div>
           </div>
@@ -231,7 +231,7 @@ export function InspirationPublishPanel(props: {
               type="button"
               onClick={props.onQuickPublish}
               disabled={props.inspirationBusy}
-              className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2.5 font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.98] dark:bg-white dark:text-slate-950 dark:hover:bg-white/90"
+              className="detail-share-action is-primary flex w-full items-center justify-center gap-1.5 rounded-xl px-3 py-2.5 font-medium transition disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.98]"
             >
               <LinkIcon className="h-3.5 w-3.5" />
               {props.inspirationBusy ? '提交中...' : quickPublishLabel}
@@ -239,14 +239,14 @@ export function InspirationPublishPanel(props: {
             <button
               type="button"
               onClick={props.inspirationPanelOpen ? props.onCancelPanel : props.onOpenPanel}
-              className="w-full rounded-xl border border-slate-200/80 bg-white/78 px-3 py-2.5 font-medium text-slate-600 transition hover:bg-slate-50 active:scale-[0.98] dark:border-white/10 dark:bg-white/[0.05] dark:text-white/68 dark:hover:bg-white/[0.08]"
+              className="detail-share-action is-secondary w-full rounded-xl px-3 py-2.5 font-medium transition active:scale-[0.98]"
             >
               {toggleAdjustLabel}
             </button>
           </div>
           {props.inspirationPanelOpen ? (
-            <div className="space-y-3 rounded-[1.1rem] border border-slate-200/75 bg-white/68 p-3 dark:border-white/10 dark:bg-white/[0.04]">
-              <div className="text-[11px] leading-5 text-slate-600 dark:text-white/65">
+            <div className="inspiration-edit-panel space-y-3 rounded-[1.1rem] p-3">
+              <div className="text-[11px] leading-5">
                 仅在你想覆盖自动结果时填写下面内容；留空时仍会交给服务端自动生成。
               </div>
               <div className="flex flex-col gap-2">
@@ -254,13 +254,13 @@ export function InspirationPublishPanel(props: {
                   value={props.inspirationTitle}
                   onChange={(e) => props.onTitleChange(e.target.value)}
                   placeholder={`留空则自动生成标题，例如 ${props.suggestedTitle}`}
-                  className="w-full rounded-xl border border-slate-200/80 bg-white/82 px-3 py-2 text-xs text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-amber-300 dark:border-white/10 dark:bg-white/[0.04] dark:text-gray-100 dark:focus:border-amber-300/50"
+                  className="detail-share-input w-full rounded-xl border px-3 py-2 text-xs outline-none transition placeholder:text-slate-400"
                   maxLength={80}
                 />
                 <select
                   value={props.inspirationCategory}
                   onChange={(e) => props.onCategoryChange(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200/80 bg-white/82 px-3 py-2 text-xs text-slate-800 outline-none transition focus:border-amber-300 dark:border-white/10 dark:bg-white/[0.04] dark:text-gray-100 dark:focus:border-amber-300/50"
+                  className="detail-share-input w-full rounded-xl border px-3 py-2 text-xs outline-none transition"
                 >
                   <option value="">自动识别（推荐） · {props.suggestedCategory}</option>
                   {INSPIRATION_CATEGORY_OPTIONS.map((category) => (
@@ -271,7 +271,7 @@ export function InspirationPublishPanel(props: {
                   value={props.inspirationCaption}
                   onChange={(e) => props.onCaptionChange(e.target.value)}
                   placeholder={`留空则自动补全一句简短说明，例如 ${props.suggestedCaption}`}
-                  className="min-h-[88px] w-full rounded-xl border border-slate-200/80 bg-white/82 px-3 py-2 text-xs text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-amber-300 dark:border-white/10 dark:bg-white/[0.04] dark:text-gray-100 dark:focus:border-amber-300/50"
+                  className="detail-share-input min-h-[88px] w-full rounded-xl border px-3 py-2 text-xs outline-none transition placeholder:text-slate-400"
                   maxLength={240}
                 />
               </div>
@@ -279,7 +279,7 @@ export function InspirationPublishPanel(props: {
                 type="button"
                 onClick={props.onPublish}
                 disabled={props.inspirationBusy}
-                className="w-full rounded-[1.1rem] border border-slate-200/80 bg-white/88 px-3 py-2.5 font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.98] dark:border-white/10 dark:bg-white/[0.06] dark:text-white/78 dark:hover:bg-white/[0.09]"
+                className="detail-share-action is-secondary w-full rounded-[1.1rem] px-3 py-2.5 font-medium transition disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.98]"
               >
                 {props.inspirationBusy ? '提交中...' : '使用调整信息发布'}
               </button>
@@ -287,7 +287,7 @@ export function InspirationPublishPanel(props: {
           ) : null}
         </div>
       ) : (
-        <div className="rounded-xl border border-slate-200/70 bg-white/65 px-3 py-2 text-slate-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-white/65">
+        <div className="inspiration-note px-3 py-2">
           {props.inspirationEligibilityMessage || '当前作品暂不支持发布到灵感广场'}
         </div>
       )}
@@ -1070,13 +1070,13 @@ export default function DetailModal() {
   return (
     <div
       data-no-drag-select
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="detail-modal-backdrop fixed inset-0 z-50 flex items-center justify-center p-4"
       onClick={() => setDetailTaskId(null)}
     >
-      <div className="absolute inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-md animate-overlay-in" />
+      <div className="platform-modal-overlay absolute inset-0 animate-overlay-in" />
       <div
         ref={modalRef}
-        className="relative bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] max-w-4xl w-full max-h-[90vh] md:h-[90vh] overflow-hidden flex flex-col md:flex-row z-10 ring-1 ring-black/5 dark:ring-white/10 animate-modal-in"
+        className="detail-modal-panel relative max-w-4xl w-full max-h-[90vh] md:h-[90vh] overflow-hidden flex flex-col md:flex-row z-10 animate-modal-in"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex h-14 items-center justify-end px-4 md:hidden">
@@ -1090,7 +1090,7 @@ export default function DetailModal() {
         </div>
 
         {/* 左侧：图片 */}
-        <div className="md:w-1/2 w-full h-64 md:h-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center md:items-start flex-shrink-0 min-h-[16rem] md:pt-14 md:pb-4">
+        <div className="detail-modal-media md:w-1/2 w-full h-64 md:h-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center md:items-start flex-shrink-0 min-h-[16rem] md:pt-14 md:pb-4">
           {task.status === 'done' && outputLen > 0 && (
             <div className="flex h-full w-full flex-col px-3 pb-3 md:px-4 md:pb-4">
               <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden">
@@ -1103,7 +1103,7 @@ export default function DetailModal() {
                         downloadImageTooltip.handlers.onClick()
                         handleDownloadCurrentOutput(e)
                       }}
-                      className="flex items-center justify-center rounded bg-black/50 px-1.5 py-0.5 text-white backdrop-blur-sm transition hover:bg-black/70 focus:outline-none focus:ring-1 focus:ring-white/50"
+                      className="flex items-center justify-center rounded bg-black/50 px-1.5 py-0.5 text-white transition hover:bg-black/70 focus:outline-none focus:ring-1 focus:ring-white/50"
                       aria-label="下载图片"
                     >
                       <DownloadIcon className="h-4 w-4" />
@@ -1121,7 +1121,7 @@ export default function DetailModal() {
                           downloadAllTooltip.handlers.onClick()
                           handleDownloadAllOutputs(e)
                         }}
-                        className="flex items-center justify-center gap-0.5 rounded bg-black/50 pl-1.5 pr-2 py-0.5 text-white backdrop-blur-sm transition hover:bg-black/70 focus:outline-none focus:ring-1 focus:ring-white/50"
+                        className="flex items-center justify-center gap-0.5 rounded bg-black/50 pl-1.5 pr-2 py-0.5 text-white transition hover:bg-black/70 focus:outline-none focus:ring-1 focus:ring-white/50"
                         aria-label="下载全部"
                       >
                         <DownloadIcon className="h-4 w-4" />
@@ -1167,16 +1167,16 @@ export default function DetailModal() {
                 <div data-selectable-text className="absolute left-0 top-[1px] flex items-center gap-1.5">
                   {currentImageRatio && currentImageSize ? (
                     <>
-                      <span className="rounded bg-black/50 px-2 py-0.5 font-mono text-xs text-white backdrop-blur-sm">
+                      <span className="rounded bg-black/50 px-2 py-0.5 font-mono text-xs text-white">
                         {currentImageRatio}
                       </span>
-                      <span className="rounded bg-black/50 px-2 py-0.5 text-xs font-medium text-white/90 backdrop-blur-sm">
+                      <span className="rounded bg-black/50 px-2 py-0.5 text-xs font-medium text-white/90">
                         {currentImageSize}
                       </span>
                     </>
                   ) : (
                     formatDuration() && (
-                      <span className="flex items-center gap-1 rounded bg-black/50 px-2 py-0.5 font-mono text-xs text-white backdrop-blur-sm">
+                      <span className="flex items-center gap-1 rounded bg-black/50 px-2 py-0.5 font-mono text-xs text-white">
                         <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
@@ -1261,7 +1261,7 @@ export default function DetailModal() {
           )}
           {(task.status === 'running' || isFalReconnecting) && (
             <>
-              <div className="absolute left-4 top-4 flex items-center gap-1 bg-black/50 text-white text-xs px-2 py-0.5 rounded backdrop-blur-sm font-mono">
+              <div className="absolute left-4 top-4 flex items-center gap-1 bg-black/50 text-white text-xs px-2 py-0.5 rounded font-mono">
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
@@ -1279,13 +1279,13 @@ export default function DetailModal() {
                     />
                   ) : null}
                   {(!currentStreamPreviewSrc || !streamPreviewLoaded) && (
-                    <svg className="w-10 h-10 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <svg className="detail-spinner w-10 h-10 animate-spin" fill="none" viewBox="0 0 24 24">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                     </svg>
                   )}
                   {streamPreviewLoaded && (
-                    <span className="absolute top-4 right-4 flex items-center gap-1 rounded bg-blue-500 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-sm">
+                    <span className="detail-stream-badge absolute top-4 right-4 flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium">
                       流式预览
                     </span>
                   )}
@@ -1315,7 +1315,7 @@ export default function DetailModal() {
                 </>
               )}
               {task.status === 'running' && streamPreviewLen === 0 && (
-                <svg className="w-10 h-10 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                <svg className="detail-spinner w-10 h-10 animate-spin" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                 </svg>
@@ -1358,7 +1358,7 @@ export default function DetailModal() {
                       copyErrorTooltip.handlers.onClick()
                       handleCopyError()
                     }}
-                    className="inline-flex items-center justify-center rounded-full border border-red-200/80 bg-white/80 px-3 py-1.5 text-red-500 transition hover:bg-red-50 dark:border-red-400/20 dark:bg-white/[0.04] dark:hover:bg-red-500/10"
+                    className="detail-error-action is-danger inline-flex items-center justify-center rounded-full px-3 py-1.5 transition"
                     aria-label="复制完整报错"
                   >
                     <CopyIcon className="h-4 w-4" />
@@ -1376,7 +1376,7 @@ export default function DetailModal() {
                         dismissAllTooltips()
                         setShowRawResponseModal(true)
                       }}
-                      className="inline-flex items-center justify-center rounded-full border border-purple-200/80 bg-purple-50 px-3 py-1.5 text-purple-600 transition hover:bg-purple-100 dark:border-purple-500/20 dark:bg-purple-500/10 dark:text-purple-400 dark:hover:bg-purple-500/20"
+                      className="detail-error-action is-accent inline-flex items-center justify-center rounded-full px-3 py-1.5 transition"
                       aria-label="查看原始响应"
                     >
                       <CodeIcon className="h-4 w-4" />
@@ -1407,7 +1407,7 @@ export default function DetailModal() {
                           setShowRawUrlsModal(true)
                         }
                       }}
-                      className="inline-flex items-center justify-center rounded-full border border-green-200/80 bg-green-50 px-3 py-1.5 text-green-600 transition hover:bg-green-100 dark:border-green-500/20 dark:bg-green-500/10 dark:text-green-400 dark:hover:bg-green-500/20"
+                      className="detail-error-action is-accent inline-flex items-center justify-center rounded-full px-3 py-1.5 transition"
                       aria-label="复制图片链接"
                     >
                       <LinkIcon className="h-4 w-4" />
@@ -1426,7 +1426,7 @@ export default function DetailModal() {
                         downloadPartialImagesTooltip.handlers.onClick()
                         void handleDownloadPartialImages()
                       }}
-                      className="inline-flex items-center justify-center rounded-full border border-amber-200/80 bg-amber-50 px-3 py-1.5 text-amber-600 transition hover:bg-amber-100 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-400 dark:hover:bg-amber-500/20"
+                      className="detail-error-action is-warning inline-flex items-center justify-center rounded-full px-3 py-1.5 transition"
                       aria-label="下载中间步骤图"
                     >
                       <DownloadIcon className="h-4 w-4" />
@@ -1444,7 +1444,7 @@ export default function DetailModal() {
                       retryTooltip.handlers.onClick()
                       handleRetry()
                     }}
-                    className="inline-flex items-center justify-center rounded-full border border-blue-200/80 bg-white/80 px-3 py-1.5 text-blue-500 transition hover:bg-blue-50 dark:border-blue-400/20 dark:bg-white/[0.04] dark:hover:bg-blue-500/10"
+                    className="detail-error-action is-accent inline-flex items-center justify-center rounded-full px-3 py-1.5 transition"
                     aria-label="重试任务"
                   >
                     <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
@@ -1461,7 +1461,7 @@ export default function DetailModal() {
         </div>
 
         {/* 右侧：信息 */}
-        <div className="md:w-1/2 w-full md:h-full min-h-0 p-5 overflow-y-auto overscroll-contain flex flex-col" style={{ scrollbarGutter: 'stable' }}>
+        <div className="detail-modal-info md:w-1/2 w-full md:h-full min-h-0 p-5 overflow-y-auto overscroll-contain flex flex-col" style={{ scrollbarGutter: 'stable' }}>
           <button
             onClick={() => setDetailTaskId(null)}
             className="absolute top-3 right-3 hidden p-1 rounded-full hover:bg-gray-100 dark:hover:bg-white/[0.06] transition text-gray-400 z-10 md:block"
@@ -1471,335 +1471,51 @@ export default function DetailModal() {
           </button>
 
           <div data-selectable-text className="flex-1">
-            <div className="flex items-center gap-1.5 mb-2">
-              <h3 className="text-xs font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wider">
-                原始输入
-              </h3>
-              {task.prompt && !showPendingPrompt && (
-                <button
-                  onClick={handleCopyPrompt}
-                  className="p-1 rounded text-gray-400 hover:bg-gray-100 dark:text-gray-500 dark:hover:bg-white/[0.06] transition"
-                  title="复制提示词"
-                >
-                  <CopyIcon className="h-4 w-4" />
-                </button>
-              )}
-              {showPromptWarning && (
-                <span className="relative inline-flex">
-                  <button
-                    type="button"
-                    className="p-1 rounded text-amber-500 hover:bg-amber-50 dark:text-yellow-300 dark:hover:bg-yellow-500/10 transition"
-                    onClick={handleShowPromptWarning}
-                    aria-label="接口实际提示词与原输入不完全一致"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-                    </svg>
-                  </button>
-                </span>
-              )}
-            </div>
-            {showPendingPrompt ? (
-              <div className="mb-4 leading-relaxed">
-                <p className="text-sm text-gray-700 dark:text-gray-300">正在生成……</p>
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">输入内容将在响应完成时接收</p>
-              </div>
-            ) : (
-              <div className="mb-4">
-                <div className="relative">
-                  <p className={`text-sm text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-wrap ${
-                    shouldCollapsePrompt && !promptExpanded ? 'max-h-[7.25rem] overflow-hidden' : ''
-                  }`}>
-                    {task.prompt || '(无提示词)'}
-                  </p>
-                  {shouldCollapsePrompt && !promptExpanded && (
-                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-b from-white/0 to-white dark:to-gray-900" />
-                  )}
-                </div>
-                {shouldCollapsePrompt && (
-                  <button
-                    type="button"
-                    onClick={() => setPromptExpanded((current) => !current)}
-                    className="mt-2 text-xs font-medium text-blue-600 transition hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200"
-                  >
-                    {promptExpanded ? '收起' : '展开'}
-                  </button>
-                )}
-              </div>
-            )}
-            <h3 className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.18em] text-gray-400 dark:text-gray-500">
-              结果摘要
-            </h3>
-            <div className="mb-3 rounded-lg bg-gray-50 px-3 py-2 text-xs dark:bg-white/[0.03]">
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-                <div className="flex min-w-0 items-center justify-between gap-2">
-                  <span className="shrink-0 text-gray-400 dark:text-gray-500">状态</span>
-                  <span className="truncate font-medium text-gray-700 dark:text-gray-200">{resultStatusLabel}</span>
-                </div>
-                <div className="flex min-w-0 items-center justify-between gap-2">
-                  <span className="shrink-0 text-gray-400 dark:text-gray-500">结果</span>
-                  <span className="truncate font-medium text-gray-700 dark:text-gray-200">{publicResult.outputCount} / {publicResult.requestedOutputCount}</span>
-                </div>
-                <div className="flex min-w-0 items-center justify-between gap-2">
-                  <span className="shrink-0 text-gray-400 dark:text-gray-500">扣点</span>
-                  <span className="truncate font-medium text-gray-700 dark:text-gray-200">{chargeStatusLabel}</span>
-                </div>
-                <div className="flex min-w-0 items-center justify-between gap-2">
-                  <span className="shrink-0 text-gray-400 dark:text-gray-500">建议</span>
-                  <span className="truncate font-medium text-gray-700 dark:text-gray-200">{retryActionLabel}</span>
-                </div>
-              </div>
-            </div>
-            {showRevisedPrompt && currentRevisedPrompt && (
-              <div className="mb-4 rounded-xl bg-amber-50/70 px-3 py-2.5 text-amber-950 ring-1 ring-amber-100 dark:bg-amber-500/8 dark:text-amber-100 dark:ring-amber-500/15">
-                <div className="mb-1 flex items-center justify-between gap-3">
-                  <span className="text-[11px] font-medium text-amber-700 dark:text-amber-200">实际生成提示词</span>
-                  {shouldCollapseRevisedPrompt && (
-                    <button
-                      type="button"
-                      onClick={() => setRevisedPromptExpanded((current) => !current)}
-                      className="shrink-0 text-[11px] font-medium text-amber-700 transition hover:text-amber-900 dark:text-amber-200 dark:hover:text-amber-50"
-                    >
-                      {revisedPromptExpanded ? '收起' : '展开'}
-                    </button>
-                  )}
-                </div>
-                <p className="mb-2 text-[11px] leading-relaxed text-amber-700/90 dark:text-amber-100/80">
-                  若这一版和原始输入不同，成图可能会出现偏差。
-                </p>
-                <div className="relative">
-                  <p className={`text-xs leading-relaxed whitespace-pre-wrap ${
-                    shouldCollapseRevisedPrompt && !revisedPromptExpanded ? 'max-h-[4.7rem] overflow-hidden' : ''
-                  }`}>
-                    {currentRevisedPrompt}
-                  </p>
-                  {shouldCollapseRevisedPrompt && !revisedPromptExpanded && (
-                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-b from-yellow-50/0 to-yellow-50 dark:to-[#28220b]" />
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* 参考图 */}
-            {showReferenceSection && (
-              <div className="mb-4">
-                <div className="flex items-center gap-1.5 mb-2">
-                  <h3 className="text-xs font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wider">
-                    参考图
-                  </h3>
-                  {allInputImageIds.length > 0 && (
-                    <button
-                      onClick={handleCopyInputImage}
-                      className="p-1 rounded text-gray-400 hover:bg-gray-100 dark:text-gray-500 dark:hover:bg-white/[0.06] transition"
-                      title="复制参考图"
-                    >
-                      <CopyIcon className="h-4 w-4" />
-                    </button>
-                  )}
-                </div>
-                {allInputImageIds.length > 0 ? (
-                  <>
-                    <div className="flex gap-2 flex-wrap">
-                      {allInputImageIds.map((imgId) => {
-                        const isMaskTarget = imgId === maskTargetId
-                        const displaySrc = (isMaskTarget && maskPreviewSrc) ? maskPreviewSrc : (imageSrcs[imgId] || '')
-                        return (
-                          <div key={imgId} className="relative group inline-block">
-                            <div
-                              className={`relative w-16 h-16 rounded-lg overflow-hidden border cursor-pointer hover:opacity-80 transition ${
-                                isMaskTarget ? 'border-blue-500 border-2 shadow-sm' : 'border-gray-200 dark:border-white/[0.08]'
-                              }`}
-                              onClick={() => setLightboxImageId(imgId, allInputImageIds)}
-                            >
-                              {displaySrc && (
-                                <img
-                                  src={displaySrc}
-                                  data-image-id={imgId}
-                                  className="w-full h-full object-cover"
-                                  alt=""
-                                />
-                              )}
-                              {isMaskTarget && (
-                                <span className="absolute left-1 top-1 rounded bg-blue-500/90 px-1.5 py-0.5 text-[8px] leading-none text-white font-bold tracking-wider backdrop-blur-sm z-10 pointer-events-none">
-                                  MASK
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                    {isAgentEditTool && (
-                      <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                        由模型自主选择，可能包含其他图片
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div className="text-xs text-gray-500 dark:text-gray-400">
-                    由模型自主选择
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* 参数与技术 */}
-            <h3 className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.18em] text-gray-400 dark:text-gray-500">
-              参数与技术
-            </h3>
-            <div className="mb-3 rounded-lg bg-gray-50 px-3 py-2 text-xs dark:bg-white/[0.03]">
-              {showSourceInfo && (
-                <div className="mb-2 flex min-w-0 items-center gap-2 pb-1">
-                  <span className="shrink-0 text-gray-400 dark:text-gray-500">来源</span>
-                  <span className="min-w-0 truncate font-medium text-gray-700 dark:text-gray-200">
-                    {taskProviderName}<span className="font-normal text-gray-400 dark:text-gray-500"> · {taskProfileName}{taskModel ? ` · ${taskModel}` : ''}</span>
-                  </span>
-                </div>
-              )}
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-                <div className="flex min-w-0 items-center justify-between gap-2">
-                  <span className="shrink-0 text-gray-400 dark:text-gray-500">尺寸</span>
-                  <DetailParamValue task={task} paramKey="size" className="truncate font-medium" actualParams={currentActualParams} />
-                </div>
-                <div className="flex min-w-0 items-center justify-between gap-2">
-                  <span className="shrink-0 text-gray-400 dark:text-gray-500">质量</span>
-                  <DetailParamValue task={task} paramKey="quality" className="truncate font-medium" actualParams={currentActualParams} />
-                </div>
-                <div className="flex min-w-0 items-center justify-between gap-2">
-                  <span className="shrink-0 text-gray-400 dark:text-gray-500">格式</span>
-                  <DetailParamValue task={task} paramKey="output_format" className="truncate font-medium" actualParams={currentActualParams} />
-                </div>
-                <div className="flex min-w-0 items-center justify-between gap-2">
-                  <span className="shrink-0 text-gray-400 dark:text-gray-500">审核</span>
-                  <span className="truncate font-medium text-gray-700 dark:text-gray-300">{moderationLabel}</span>
-                </div>
-                {!isAgentTask && (
-                  <>
-                    <div className="flex min-w-0 items-center justify-between gap-2">
-                      <span className="shrink-0 text-gray-400 dark:text-gray-500">数量</span>
-                      <DetailParamValue task={task} paramKey="n" className="truncate font-medium" />
-                    </div>
-                    {deliveryPlan && deliveryStrategyLabel && (
-                      <div className="flex min-w-0 items-center justify-between gap-2">
-                        <span className="shrink-0 text-gray-400 dark:text-gray-500">处理方式</span>
-                        <span className="truncate font-medium text-gray-700 dark:text-gray-200">{deliveryStrategyLabel}</span>
-                      </div>
-                    )}
-                    {formatDuration() && (
-                      <div className="flex min-w-0 items-center justify-between gap-2">
-                        <span className="shrink-0 text-gray-400 dark:text-gray-500">耗时</span>
-                        <span className="truncate font-medium text-gray-700 dark:text-gray-200">{formatDuration()}</span>
-                      </div>
-                    )}
-                  </>
-                )}
-                {task.params.output_compression != null && (
-                  <div className="flex min-w-0 items-center justify-between gap-2">
-                    <span className="shrink-0 text-gray-400 dark:text-gray-500">压缩率</span>
-                    <DetailParamValue task={task} paramKey="output_compression" className="truncate font-medium" actualParams={currentActualParams} />
-                  </div>
-                )}
-              </div>
-              {outputResolutionWarning && (
-                <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-relaxed text-amber-800 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-200">
-                  <div className="font-medium">实际输出低于请求分辨率</div>
-                  <div className="mt-0.5">{outputResolutionWarning.message}</div>
-                </div>
-              )}
-              {hasGatewayContext && (
-                <div className="mt-2 rounded-lg border border-gray-200/80 bg-white/70 px-2.5 py-2 dark:border-white/[0.08] dark:bg-white/[0.02]">
-                  <div className="mb-1 text-[11px] font-medium text-gray-500 dark:text-gray-400">技术上下文</div>
-                  <div className="space-y-1">
-                    {publicResult.requestId && (
-                      <div className="flex min-w-0 items-center justify-between gap-2">
-                        <span className="shrink-0 text-gray-400 dark:text-gray-500">请求编号</span>
-                        <span
-                          className="min-w-0 flex-1 truncate text-right font-mono font-medium text-gray-700 dark:text-gray-200"
-                          title={publicResult.requestId}
-                        >
-                          {compactRequestId}
-                        </span>
-                      </div>
-                    )}
-                    {task.routeId && (
-                      <div className="flex min-w-0 items-center justify-between gap-2">
-                        <span className="shrink-0 text-gray-400 dark:text-gray-500">线路标识</span>
-                        <span className="min-w-0 flex-1 truncate text-right font-mono font-medium text-gray-700 dark:text-gray-200" title={task.routeId}>
-                          {task.routeId}
-                        </span>
-                      </div>
-                    )}
-                    {task.upstreamModel && (
-                      <div className="flex min-w-0 items-center justify-between gap-2">
-                        <span className="shrink-0 text-gray-400 dark:text-gray-500">上游模型</span>
-                        <span className="min-w-0 flex-1 truncate text-right font-medium text-gray-700 dark:text-gray-200" title={task.upstreamModel}>
-                          {task.upstreamModel}
-                        </span>
-                      </div>
-                    )}
-                    {gatewayAttemptCount > 0 && (
-                      <div className="flex min-w-0 items-center justify-between gap-2">
-                        <span className="shrink-0 text-gray-400 dark:text-gray-500">尝试次数</span>
-                        <span className="truncate font-medium text-gray-700 dark:text-gray-200">{gatewayAttemptCount}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-              <div className="mt-2 border-t border-gray-200/70 pt-2 space-y-1 dark:border-white/[0.07]">
-              <div className="flex min-w-0 items-center justify-between gap-2">
-                <span className="shrink-0 text-gray-400 dark:text-gray-500">创建时间</span>
-                <span className="truncate font-medium text-gray-700 dark:text-gray-200">{formatTime(task.createdAt)}</span>
-              </div>
-
-              </div>
-            </div>
-
             {task.status === 'done' && outputLen > 0 && (
               <>
-              <div className={`mb-3 text-xs ${activeShare || sharePanelOpen || !currentServerOutput?.outputId || shareLoading ? 'rounded-xl border border-sky-100 bg-sky-50/70 p-3 dark:border-sky-400/15 dark:bg-sky-400/10' : ''}`}>
+              <div className={`mb-3 text-xs ${activeShare || sharePanelOpen || !currentServerOutput?.outputId || shareLoading ? 'detail-share-panel rounded-xl p-3' : ''}`}>
                 {activeShare ? (
                   <div className="mb-2 flex justify-end">
-                    <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-200">
+                    <span className="detail-status-badge is-success shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium">
                       已创建
                     </span>
                   </div>
                 ) : null}
 
                 {!currentServerOutput?.outputId ? (
-                  <div className="text-sky-800/70 dark:text-sky-100/70">
+                  <div className="detail-share-muted">
                     仅服务端保存的新结果支持受控分享。
                   </div>
                 ) : shareLoading ? (
-                  <div className="text-sky-800/70 dark:text-sky-100/70">
+                  <div className="detail-share-muted">
                     正在读取分享记录...
                   </div>
                 ) : activeShare ? (
                   <div className="space-y-2">
                     {shareReviewBadge ? (
                       <div className="flex items-center justify-between gap-2 text-[11px]">
-                        <span className={`shrink-0 rounded-full px-2 py-0.5 font-medium ${
+                          <span className={`detail-status-badge shrink-0 rounded-full px-2 py-0.5 font-medium ${
                           shareReviewBadge.tone === 'red'
-                            ? 'bg-red-100 text-red-700 dark:bg-red-400/15 dark:text-red-200'
+                            ? 'is-danger'
                             : shareReviewBadge.tone === 'amber'
-                            ? 'bg-amber-100 text-amber-700 dark:bg-amber-400/15 dark:text-amber-200'
-                            : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-200'
+                            ? 'is-warning'
+                            : 'is-success'
                         }`}>
                           {shareReviewBadge.label}
                         </span>
                         {activeShare.reviewSummary ? (
-                          <span className="truncate text-sky-800/75 dark:text-sky-100/70">{activeShare.reviewSummary}</span>
+                          <span className="detail-share-muted truncate">{activeShare.reviewSummary}</span>
                         ) : null}
                       </div>
                     ) : null}
-                    <div className="truncate rounded-lg bg-white/80 px-2 py-1.5 font-mono text-[11px] text-sky-900 ring-1 ring-sky-100 dark:bg-black/20 dark:text-sky-100 dark:ring-white/10">
+                    <div className="detail-share-url truncate rounded-lg px-2 py-1.5 font-mono text-[11px]">
                       {getAbsoluteShareUrl(activeShare)}
                     </div>
                     <div className="flex gap-2">
                       <button
                         type="button"
                         onClick={() => handleCopyShare(activeShare)}
-                        className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-white px-2 py-1.5 font-medium text-sky-700 transition hover:bg-sky-100 dark:bg-white/[0.08] dark:text-sky-100 dark:hover:bg-white/[0.12]"
+                        className="detail-share-action is-secondary flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 font-medium transition"
                       >
                         <CopyIcon className="h-3.5 w-3.5" />
                         复制链接
@@ -1808,7 +1524,7 @@ export default function DetailModal() {
                         type="button"
                         onClick={handleRevokeShare}
                         disabled={shareBusy}
-                        className="rounded-lg bg-white px-2 py-1.5 font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white/[0.08] dark:text-red-300 dark:hover:bg-red-400/10"
+                        className="detail-share-action is-danger rounded-lg px-2 py-1.5 font-medium transition disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         撤销
                       </button>
@@ -1816,7 +1532,7 @@ export default function DetailModal() {
                   </div>
                 ) : sharePanelOpen ? (
                   <div className="space-y-2">
-                    <div className="rounded-lg bg-white/70 px-2 py-1.5 text-[11px] text-sky-800/80 ring-1 ring-sky-100 dark:bg-black/15 dark:text-sky-100/75 dark:ring-white/10">
+                    <div className="detail-share-note rounded-lg px-2 py-1.5 text-[11px]">
                       分享前会自动做一次轻审核：明显违规内容会被拦截，边界内容只做标记，不影响正常生成。
                     </div>
                     <div className="flex flex-col gap-2 sm:flex-row">
@@ -1824,14 +1540,14 @@ export default function DetailModal() {
                         value={shareAccessCode}
                         onChange={(e) => setShareAccessCode(e.target.value)}
                         placeholder="访问码，可留空"
-                        className="w-full min-w-0 rounded-lg border border-sky-100 bg-white px-2 py-1.5 text-xs text-gray-800 outline-none transition placeholder:text-gray-400 focus:border-sky-300 dark:border-white/10 dark:bg-black/20 dark:text-gray-100 dark:focus:border-sky-300/50 sm:flex-[1.35]"
+                        className="detail-share-input w-full min-w-0 rounded-lg border px-2 py-1.5 text-xs outline-none transition placeholder:text-gray-400 sm:flex-[1.35]"
                         maxLength={64}
                       />
                       <input
                         value={shareExpiresAt}
                         onChange={(e) => setShareExpiresAt(e.target.value)}
                         type="datetime-local"
-                        className="w-full min-w-0 rounded-lg border border-sky-100 bg-white px-2 py-1.5 text-xs text-gray-800 outline-none transition focus:border-sky-300 dark:border-white/10 dark:bg-black/20 dark:text-gray-100 dark:focus:border-sky-300/50 sm:flex-1"
+                        className="detail-share-input w-full min-w-0 rounded-lg border px-2 py-1.5 text-xs outline-none transition sm:flex-1"
                       />
                     </div>
                     <div className="flex gap-2">
@@ -1839,7 +1555,7 @@ export default function DetailModal() {
                         type="button"
                         onClick={handleCreateShare}
                         disabled={shareBusy}
-                        className="flex-1 rounded-lg bg-sky-600 px-2 py-1.5 font-medium text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-sky-400 dark:text-sky-950 dark:hover:bg-sky-300"
+                        className="detail-share-action is-primary flex-1 rounded-lg px-2 py-1.5 font-medium transition disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {shareBusy ? '创建中...' : '创建并复制'}
                       </button>
@@ -1849,7 +1565,7 @@ export default function DetailModal() {
                           setSharePanelOpen(false)
                           setShareError('')
                         }}
-                        className="rounded-lg bg-white px-2 py-1.5 font-medium text-sky-700 transition hover:bg-sky-100 dark:bg-white/[0.08] dark:text-sky-100 dark:hover:bg-white/[0.12]"
+                        className="detail-share-action is-secondary rounded-lg px-2 py-1.5 font-medium transition"
                       >
                         取消
                       </button>
@@ -1859,7 +1575,7 @@ export default function DetailModal() {
                   <button
                     type="button"
                     onClick={() => setSharePanelOpen(true)}
-                    className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-sky-100 bg-white/80 px-2 py-1.5 font-medium text-sky-700 transition hover:bg-sky-100 dark:border-white/[0.08] dark:bg-white/[0.05] dark:text-sky-100 dark:hover:bg-white/[0.12]"
+                    className="detail-share-action is-secondary flex w-full items-center justify-center gap-1.5 rounded-lg border px-2 py-1.5 font-medium transition"
                   >
                     <LinkIcon className="h-3.5 w-3.5" />
                     创建分享链接
@@ -1869,13 +1585,148 @@ export default function DetailModal() {
               </div>
               </>
             )}
+
+            <div className="space-y-3">
+              <div className="grid gap-2 sm:grid-cols-2">
+                <article className="detail-modal-card rounded-2xl px-3.5 py-3">
+                  <span className="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-400">结果状态</span>
+                  <div className="mt-1 flex items-center gap-2">
+                    <strong className="text-base text-[#201b18]">{resultStatusLabel}</strong>
+                    <span className={`detail-status-badge rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                      publicResult.status === 'succeeded'
+                        ? 'is-success'
+                        : publicResult.status === 'running'
+                        ? 'is-warning'
+                        : 'is-danger'
+                    }`}>
+                      {chargeStatusLabel}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">
+                    {task.status === 'done'
+                      ? `当前输出 ${(currentActualParams?.size ?? currentImageSize) || task.params.size || '未记录'}`
+                      : retryActionLabel}
+                  </p>
+                </article>
+
+                <article className="detail-modal-card rounded-2xl px-3.5 py-3">
+                  <span className="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-400">时间与规格</span>
+                  <div className="mt-1 flex flex-wrap gap-2 text-[13px] text-[#201b18]">
+                    <strong>{formatDuration() || '--:--'}</strong>
+                    <span>{currentImageRatio || '比例未记录'}</span>
+                    <span>{(currentActualParams?.size ?? currentImageSize) || task.params.size || '尺寸未记录'}</span>
+                  </div>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">
+                    创建于 {formatTime(task.createdAt) || '未记录'}
+                  </p>
+                </article>
+              </div>
+
+              <section className="detail-modal-card rounded-2xl px-4 py-3.5">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <span className="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-400">主提示词</span>
+                    <h3 className="mt-1 text-sm font-semibold text-[#201b18]">本次生成输入</h3>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleCopyPrompt()}
+                    className="detail-footer-action is-accent inline-flex items-center justify-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium"
+                  >
+                    <CopyIcon className="h-3.5 w-3.5" />
+                    复制
+                  </button>
+                </div>
+                <p className={`mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-slate-700 ${!promptExpanded && shouldCollapsePrompt ? 'line-clamp-6' : ''}`}>
+                  {task.prompt.trim() || '未记录主提示词。'}
+                </p>
+                {shouldCollapsePrompt ? (
+                  <button
+                    type="button"
+                    onClick={() => setPromptExpanded((value) => !value)}
+                    className="mt-2 text-xs font-medium text-[#785cff] transition hover:text-[#5f46dd]"
+                  >
+                    {promptExpanded ? '收起提示词' : '展开提示词'}
+                  </button>
+                ) : null}
+              </section>
+
+              {showRevisedPrompt ? (
+                <section className="detail-modal-card detail-modal-card--revised rounded-2xl px-4 py-3.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-semibold text-[#201b18]">实际送往接口的提示词</h3>
+                    </div>
+                    {showPromptWarning ? (
+                      <button
+                        type="button"
+                        onClick={handleShowPromptWarning}
+                        className="detail-share-action inline-flex items-center justify-center rounded-full px-3 py-1.5 text-xs font-medium"
+                      >
+                        为什么会改写
+                      </button>
+                    ) : null}
+                  </div>
+                  <p className={`mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-slate-700 ${!revisedPromptExpanded && shouldCollapseRevisedPrompt ? 'line-clamp-5' : ''}`}>
+                    {currentRevisedPrompt}
+                  </p>
+                  {shouldCollapseRevisedPrompt ? (
+                    <button
+                      type="button"
+                      onClick={() => setRevisedPromptExpanded((value) => !value)}
+                      className="mt-2 text-xs font-medium text-[#785cff] transition hover:text-[#5f46dd]"
+                    >
+                      {revisedPromptExpanded ? '收起改写提示词' : '展开改写提示词'}
+                    </button>
+                  ) : null}
+                </section>
+              ) : null}
+
+              {task.negativePrompt?.trim() ? (
+                <section className="detail-modal-card rounded-2xl px-4 py-3.5">
+                  <span className="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-400">负面提示</span>
+                  <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-slate-700">
+                    {task.negativePrompt.trim()}
+                  </p>
+                </section>
+              ) : null}
+
+              <section className="detail-modal-card rounded-2xl px-4 py-3.5">
+                <span className="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-400">参数与来源</span>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <span className="rounded-full border border-[rgba(148,163,184,0.16)] bg-white px-2.5 py-1 text-xs text-slate-600">
+                    质量 {currentActualParams?.quality ?? task.params.quality ?? 'auto'}
+                  </span>
+                  <span className="rounded-full border border-[rgba(148,163,184,0.16)] bg-white px-2.5 py-1 text-xs text-slate-600">
+                    格式 {(currentActualParams?.output_format ?? task.params.output_format ?? 'png').toUpperCase()}
+                  </span>
+                  <span className="rounded-full border border-[rgba(148,163,184,0.16)] bg-white px-2.5 py-1 text-xs text-slate-600">
+                    审核 {moderationLabel}
+                  </span>
+                  <span className="rounded-full border border-[rgba(148,163,184,0.16)] bg-white px-2.5 py-1 text-xs text-slate-600">
+                    数量 {task.requestedOutputCount ?? task.params.n ?? outputLen}
+                  </span>
+                </div>
+                {showSourceInfo || hasGatewayContext || deliveryPlan ? (
+                  <div className="mt-3 space-y-1.5 text-xs leading-5 text-slate-500">
+                    {showSourceInfo ? <div>来源：{taskProviderName} · {taskProfileName}{taskModel ? ` · ${taskModel}` : ''}</div> : null}
+                    {deliveryPlan ? <div>交付：{deliveryPlan.deliveryLabel} · {deliveryStrategyLabel}</div> : null}
+                    {outputResolutionWarning ? <div>{outputResolutionWarning.message}</div> : null}
+                    {compactRequestId ? <div>请求号：{compactRequestId}</div> : null}
+                    {task.routeId ? <div>线路：{task.routeId}{task.upstreamModel ? ` · ${task.upstreamModel}` : ''}</div> : null}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-xs leading-5 text-slate-500">当前记录没有额外的线路或服务端来源信息。</p>
+                )}
+              </section>
+            </div>
           </div>
 
           {/* 操作按钮 */}
-          <div className="grid grid-cols-4 sm:flex gap-2 pt-4 border-t border-gray-100 dark:border-white/[0.08]">
+          <div className="detail-footer-actions grid grid-cols-4 sm:flex gap-2 pt-4">
             <button
               onClick={handleReuse}
-              className="col-span-2 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-500/20 transition text-sm font-medium whitespace-nowrap"
+              className="detail-footer-action is-accent col-span-2 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl transition text-sm font-medium whitespace-nowrap"
             >
               <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
@@ -1885,14 +1736,14 @@ export default function DetailModal() {
             <button
               onClick={handleEdit}
               disabled={!outputLen}
-              className="col-span-2 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-green-50 dark:bg-green-500/10 text-green-600 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition text-sm font-medium whitespace-nowrap"
+              className="detail-footer-action is-accent col-span-2 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl disabled:opacity-40 disabled:cursor-not-allowed transition text-sm font-medium whitespace-nowrap"
             >
               <EditIcon className="w-4 h-4 flex-shrink-0" />
               编辑输出
             </button>
             <button
               onClick={handleDelete}
-              className="col-span-3 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-500/20 transition text-sm font-medium whitespace-nowrap"
+              className="detail-footer-action is-danger col-span-3 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl transition text-sm font-medium whitespace-nowrap"
             >
               {task.status === 'running' || task.libraryState !== 'trashed' ? (
                 <TrashIcon className="w-4 h-4 flex-shrink-0" />
@@ -1903,11 +1754,7 @@ export default function DetailModal() {
             </button>
             <button
               onClick={handleToggleFavorite}
-              className={`col-span-1 sm:flex-none sm:w-11 w-full flex items-center justify-center rounded-xl transition ${
-                task.isFavorite
-                  ? 'bg-yellow-50 text-yellow-500 hover:bg-yellow-100 dark:bg-yellow-500/10 dark:hover:bg-yellow-500/20'
-                  : 'bg-gray-50 text-gray-400 hover:bg-yellow-50 hover:text-yellow-500 dark:bg-white/[0.04] dark:hover:bg-yellow-500/10'
-              }`}
+              className={`detail-footer-action is-icon col-span-1 sm:flex-none sm:w-11 w-full flex items-center justify-center rounded-xl transition ${task.isFavorite ? 'is-active' : ''}`}
               title={task.isFavorite ? '取消收藏' : '收藏记录'}
             >
               <svg className="w-5 h-5" fill={task.isFavorite ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
@@ -1920,7 +1767,7 @@ export default function DetailModal() {
 
       {showRawUrlsModal && rawImageUrls.length > 0 && (
         <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm sm:p-6"
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 sm:p-6"
           onPointerDown={(e) => {
             rawUrlsBackdropPointerDownRef.current = e.target === e.currentTarget
           }}
@@ -2000,7 +1847,7 @@ export default function DetailModal() {
 
       {showRawResponseModal && task?.rawResponsePayload && (
         <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm sm:p-6"
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 sm:p-6"
           onPointerDown={(e) => {
             rawResponseBackdropPointerDownRef.current = e.target === e.currentTarget
           }}

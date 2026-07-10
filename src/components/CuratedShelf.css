@@ -7,23 +7,15 @@
   padding: 12px 14px 14px;
   border: 1px solid var(--line);
   border-radius: 20px;
-  background:
-    radial-gradient(circle at 12% 0%, rgba(123, 97, 255, 0.05), transparent 28%),
-    linear-gradient(145deg, rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0.22)) !important;
-  box-shadow: 0 18px 42px rgba(54, 38, 94, 0.08), var(--inset) !important;
-  backdrop-filter: blur(22px) saturate(1.2) !important;
-  -webkit-backdrop-filter: blur(22px) saturate(1.2) !important;
+  background: var(--platform-surface, #fff) !important;
+  box-shadow: var(--platform-shadow, 0 2px 12px rgba(17, 17, 17, 0.035)), var(--platform-inset, inset 0 1px 0 rgba(255, 255, 255, 0.9)) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
   overflow: hidden;
 }
 
 .curated-shelf-shell::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(circle at 16% 0%, rgba(123, 97, 255, 0.08), transparent 24%),
-    radial-gradient(circle at 100% 12%, rgba(125, 211, 252, 0.08), transparent 22%);
-  pointer-events: none;
+  display: none;
 }
 
 .curated-shelf-heading {
@@ -245,7 +237,7 @@
 .curated-card-action.primary {
   min-height: 28px;
   border-color: rgba(255, 255, 255, 0.58);
-  background: linear-gradient(135deg, var(--primary), #a78bfa 58%, var(--aqua));
+  background: var(--platform-accent-fill, #785cff);
   color: white;
   box-shadow: 0 12px 28px rgba(123, 97, 255, 0.18), var(--inset);
   padding: 0 10px;
@@ -360,6 +352,132 @@
   }
 }
 
+/* Commercial workspace pass: curated shelf follows the same flat creative surface. */
+.curated-shelf-shell {
+  border-color: var(--platform-line, rgba(17, 17, 17, 0.06)) !important;
+  background: var(--platform-surface, #fff) !important;
+  box-shadow: var(--platform-shadow, 0 2px 12px rgba(17, 17, 17, 0.035)), var(--platform-inset, inset 0 1px 0 rgba(255, 255, 255, 0.9)) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.curated-shelf-shell::before {
+  display: none;
+}
+
+.curated-shelf-title,
+.curated-card-title,
+.curated-shelf-empty-title {
+  color: var(--platform-ink, #111);
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.curated-shelf-subtitle,
+.curated-shelf-copy,
+.curated-shelf-empty-copy {
+  color: var(--platform-muted, rgba(17, 17, 17, 0.52));
+}
+
+.curated-card {
+  border-color: var(--platform-line, rgba(17, 17, 17, 0.06));
+  background: var(--platform-surface, #fff);
+  box-shadow: var(--platform-shadow, 0 2px 12px rgba(17, 17, 17, 0.035)), var(--platform-inset, inset 0 1px 0 rgba(255, 255, 255, 0.9));
+}
+
+.curated-card:hover {
+  border-color: var(--platform-line-strong, rgba(17, 17, 17, 0.13));
+  box-shadow: var(--platform-shadow, 0 2px 12px rgba(17, 17, 17, 0.035)), var(--platform-inset, inset 0 1px 0 rgba(255, 255, 255, 0.9));
+}
+
+.curated-card-placeholder,
+.curated-card-media {
+  background: var(--platform-control, #f3f2ef);
+}
+
+.curated-card-chip,
+.curated-card-action,
+.curated-shelf-view-all,
+.curated-card-action.primary {
+  border-color: var(--platform-line-strong, rgba(17, 17, 17, 0.13));
+  background: var(--platform-control, #f3f2ef);
+  color: var(--platform-ink, #111);
+  box-shadow: none;
+  font-family: var(--font-ui-sans);
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.curated-card-action.primary {
+  border-color: var(--platform-accent-fill, #785cff);
+  background: var(--platform-accent-fill, #785cff);
+  color: #fff;
+  box-shadow: 0 10px 22px rgba(123, 97, 255, 0.16);
+}
+
+.curated-card-favorite {
+  border-color: var(--platform-line, rgba(17, 17, 17, 0.06));
+  background: var(--platform-surface, #fff);
+  color: var(--platform-muted, rgba(17, 17, 17, 0.52));
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.curated-card-favorite.is-active {
+  color: var(--platform-accent-deep, #5f49df);
+}
+
+/* Final platform polish: curated content should feel like a case shelf inside the platform. */
+.curated-shelf-shell,
+.prototype-stage .curated-shelf-shell {
+  border-color: var(--platform-line, rgba(17, 17, 17, 0.06)) !important;
+  border-radius: var(--platform-radius-lg, 18px) !important;
+  background: var(--platform-surface, #fff) !important;
+  box-shadow: var(--platform-shadow, 0 2px 12px rgba(17, 17, 17, 0.035)), var(--platform-inset, inset 0 1px 0 rgba(255, 255, 255, 0.9)) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.curated-shelf-shell::before {
+  display: none !important;
+}
+
+.curated-card,
+.prototype-stage .curated-card,
+.curated-shelf-empty {
+  border-color: var(--platform-line, rgba(17, 17, 17, 0.06)) !important;
+  border-radius: var(--platform-radius-md, 14px) !important;
+  background: var(--platform-surface, #fff) !important;
+  box-shadow: var(--platform-shadow, 0 2px 12px rgba(17, 17, 17, 0.035)), var(--platform-inset, inset 0 1px 0 rgba(255, 255, 255, 0.9)) !important;
+}
+
+.curated-card:hover,
+.prototype-stage .curated-card:hover {
+  transform: translateY(-1px) !important;
+  box-shadow: var(--platform-shadow-strong, 0 16px 42px rgba(17, 17, 17, 0.075)), var(--platform-inset, inset 0 1px 0 rgba(255, 255, 255, 0.9)) !important;
+}
+
+.curated-card-chip,
+.curated-card-action,
+.curated-shelf-view-all,
+.curated-card-favorite {
+  border-color: var(--platform-line-strong, rgba(17, 17, 17, 0.13)) !important;
+  background: var(--platform-control, #f3f2ef) !important;
+  color: var(--platform-ink, #111) !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.curated-card-action.primary,
+.curated-card-action.primary:hover {
+  border-color: var(--platform-accent-fill, #785cff) !important;
+  background: var(--platform-accent-fill, #785cff) !important;
+  color: #fff !important;
+  box-shadow: 0 14px 30px rgba(123, 97, 255, 0.18) !important;
+}
+
 @media (max-width: 980px) {
   .curated-shelf-grid.is-filmstrip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -389,5 +507,136 @@
 @media (max-width: 560px) {
   .curated-shelf-grid.is-filmstrip {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Screenshot correction: tighter, quieter topic shelf. */
+.curated-shelf-shell,
+.prototype-stage .curated-shelf-shell {
+  padding: 14px 16px 16px !important;
+}
+
+.curated-shelf-heading {
+  align-items: end !important;
+}
+
+.curated-shelf-grid,
+.curated-shelf-grid.is-filmstrip {
+  gap: 12px !important;
+}
+
+.curated-card,
+.prototype-stage .curated-card {
+  grid-template-rows: 82px auto !important;
+  border-radius: 16px !important;
+}
+
+.curated-card-media {
+  min-height: 82px !important;
+}
+
+.curated-card-body {
+  gap: 8px !important;
+  padding: 12px !important;
+}
+
+.curated-card-title {
+  font-size: 14px !important;
+  line-height: 1.25 !important;
+  letter-spacing: 0 !important;
+}
+
+.curated-card-chip {
+  min-height: 24px !important;
+  border-radius: 10px !important;
+  background: var(--platform-bg-elevated, #fafaf7) !important;
+}
+
+/* Workbench final pass: compact filmstrip cards without empty whitespace. */
+.curated-shelf-grid.is-filmstrip {
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  gap: 12px !important;
+}
+
+.curated-shelf-grid.is-filmstrip .curated-card,
+.prototype-stage .curated-shelf-grid.is-filmstrip .curated-card {
+  display: grid !important;
+  grid-template-columns: minmax(112px, 38%) minmax(0, 1fr) !important;
+  grid-template-rows: minmax(118px, auto) !important;
+  min-height: 128px !important;
+  border-radius: 18px !important;
+  overflow: hidden !important;
+}
+
+.curated-shelf-grid.is-filmstrip .curated-card-media {
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 118px !important;
+  aspect-ratio: auto !important;
+  border-right: 1px solid var(--platform-line, rgba(17, 17, 17, 0.06)) !important;
+  border-bottom: 0 !important;
+}
+
+.curated-shelf-grid.is-filmstrip .curated-card-image,
+.curated-shelf-grid.is-filmstrip .curated-card-placeholder {
+  height: 100% !important;
+  object-fit: cover !important;
+}
+
+.curated-shelf-grid.is-filmstrip .curated-card-body {
+  display: grid !important;
+  grid-template-rows: auto minmax(0, 1fr) !important;
+  align-content: stretch !important;
+  gap: 10px !important;
+  min-width: 0 !important;
+  padding: 14px !important;
+}
+
+.curated-shelf-grid.is-filmstrip .curated-card-headline {
+  align-items: start !important;
+}
+
+.curated-shelf-grid.is-filmstrip .curated-card-chip {
+  max-width: calc(100% - 34px) !important;
+  min-height: 26px !important;
+  border-radius: 12px !important;
+  font-size: 11px !important;
+}
+
+.curated-shelf-grid.is-filmstrip .curated-card-favorite {
+  width: 30px !important;
+  height: 30px !important;
+  border-radius: 12px !important;
+}
+
+.curated-shelf-grid.is-filmstrip .curated-card-main-row {
+  align-items: end !important;
+  min-height: 0 !important;
+}
+
+.curated-shelf-grid.is-filmstrip .curated-card-title {
+  min-height: 0 !important;
+  font-size: 13px !important;
+  line-height: 1.32 !important;
+  -webkit-line-clamp: 3 !important;
+}
+
+.curated-shelf-grid.is-filmstrip .curated-card-action.primary {
+  min-height: 38px !important;
+  border-radius: 16px !important;
+  padding: 0 16px !important;
+  font-size: 14px !important;
+  font-weight: 560 !important;
+}
+
+@media (max-width: 980px) {
+  .curated-shelf-grid.is-filmstrip {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (max-width: 560px) {
+  .curated-shelf-grid.is-filmstrip {
+    grid-template-columns: minmax(0, 1fr) !important;
   }
 }

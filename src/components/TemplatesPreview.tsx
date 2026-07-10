@@ -104,7 +104,7 @@ export default function TemplatesPreview() {
   return (
     <main className="min-h-screen bg-[#ece7df] text-slate-900">
       <div className="mx-auto flex min-h-screen max-w-[1600px] flex-col px-4 pb-8 pt-24 sm:px-6 lg:px-8">
-        <section className="rounded-[2rem] border border-black/5 bg-[rgba(255,252,248,0.84)] p-5 shadow-[0_30px_80px_rgba(70,54,33,0.08)] backdrop-blur-xl sm:p-6">
+        <section className="rounded-[2rem] border border-black/5 bg-[rgba(255,252,248,0.94)] p-5 shadow-[0_30px_80px_rgba(70,54,33,0.08)] sm:p-6">
           <div className="flex flex-col gap-6 xl:flex-row">
             <div className="min-w-0 flex-1">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -252,10 +252,10 @@ export default function TemplatesPreview() {
                       <div className="relative h-[210px] overflow-hidden" style={{ background: item.image }}>
                         <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.22),transparent_40%),linear-gradient(180deg,transparent_10%,rgba(10,10,10,0.26)_100%)]" />
                         <div className="absolute inset-x-4 bottom-4 flex items-end justify-between">
-                          <div className="max-w-[72%] rounded-full bg-black/22 px-3 py-1 text-[11px] font-semibold tracking-[0.18em] text-white/90 backdrop-blur-sm">
+                          <div className="max-w-[72%] rounded-full bg-black/22 px-3 py-1 text-[11px] font-semibold tracking-[0.18em] text-white/90">
                             {item.category}
                           </div>
-                          <div className="rounded-full bg-white/16 px-3 py-1 text-[11px] font-semibold text-white/88 backdrop-blur-sm">
+                          <div className="rounded-full bg-white/16 px-3 py-1 text-[11px] font-semibold text-white/88">
                             {item.ratio}
                           </div>
                         </div>

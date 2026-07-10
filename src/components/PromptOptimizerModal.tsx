@@ -24,9 +24,9 @@ export default function PromptOptimizerModal({ result, onClose, onApply, onCopy 
 
   return (
     <div data-no-drag-select className="fixed inset-0 z-[115] flex items-center justify-center p-4" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/22 backdrop-blur-md animate-overlay-in" />
+      <div className="platform-modal-overlay absolute inset-0 animate-overlay-in" />
       <div
-        className="relative z-10 flex w-full max-w-2xl flex-col overflow-hidden rounded-3xl border border-white/50 bg-white/95 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10"
+        className="prompt-optimizer-panel relative z-10 flex w-full max-w-2xl flex-col overflow-hidden animate-modal-in"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="border-b border-gray-200/70 px-5 py-4 dark:border-white/[0.08]">
@@ -50,13 +50,13 @@ export default function PromptOptimizerModal({ result, onClose, onApply, onCopy 
         </div>
 
         <div className="max-h-[70vh] space-y-4 overflow-y-auto px-5 py-5 custom-scrollbar">
-          <section className="rounded-2xl border border-cyan-100 bg-cyan-50/70 p-3.5 dark:border-cyan-500/20 dark:bg-cyan-500/10">
-            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-cyan-700/80 dark:text-cyan-200/80">使用说明</div>
+          <section className="prompt-optimizer-note rounded-2xl border p-3.5">
+            <div className="prompt-optimizer-label text-[11px] font-medium">使用说明</div>
             <div className="mt-2 grid gap-1.5 text-[13px] leading-relaxed text-slate-600 dark:text-gray-300">
               <p>只整理主提示词和负面提示词，不判断请求是否可提交。</p>
               {result.explanation.map((line) => (
                 <p key={line} className="flex gap-2">
-                  <span className="mt-[0.65em] h-1 w-1 shrink-0 rounded-full bg-cyan-500/70" />
+                  <span className="prompt-optimizer-dot mt-[0.65em] h-1 w-1 shrink-0 rounded-full" />
                   <span>{line}</span>
                 </p>
               ))}
@@ -114,7 +114,7 @@ export default function PromptOptimizerModal({ result, onClose, onApply, onCopy 
           <button
             type="button"
             onClick={onApply}
-            className="flex-1 rounded-xl bg-blue-500 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-600"
+            className="prompt-optimizer-primary flex-1 rounded-xl px-4 py-2.5 text-sm font-medium transition"
           >
             应用优化结果
           </button>

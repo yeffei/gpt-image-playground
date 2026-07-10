@@ -78,7 +78,7 @@
   border: 1px solid var(--line);
   border-radius: 28px;
   background:
-    radial-gradient(circle at top right, rgba(14, 165, 233, 0.08), transparent 28%),
+    radial-gradient(circle at top right, rgba(123, 97, 255, 0.08), transparent 28%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(246, 248, 252, 0.94));
   box-shadow: var(--shadow), var(--inset);
 }
@@ -144,10 +144,10 @@
 }
 
 .library-tab-chip.is-active {
-  border-color: rgba(37, 99, 235, 0.18);
-  background: linear-gradient(135deg, rgba(37, 99, 235, 0.92), rgba(8, 145, 178, 0.92));
+  border-color: rgba(123, 97, 255, 0.24);
+  background: var(--platform-accent-fill, #785cff);
   color: #fff;
-  box-shadow: 0 16px 36px rgba(37, 99, 235, 0.18);
+  box-shadow: 0 16px 36px rgba(123, 97, 255, 0.18);
 }
 
 .library-results-head {
@@ -202,11 +202,11 @@
 .library-view-primary {
   min-height: 36px;
   padding: 0 14px;
-  border: 1px solid rgba(37, 99, 235, 0.18);
+  border: 1px solid var(--platform-accent-fill, #785cff);
   border-radius: 14px;
-  background: linear-gradient(135deg, #2563eb, #0891b2);
+  background: var(--platform-accent-fill, #785cff);
   color: #fff;
-  box-shadow: 0 16px 40px rgba(37, 99, 235, 0.2);
+  box-shadow: 0 16px 40px rgba(123, 97, 255, 0.18);
   font-size: 12px;
   font-weight: 780;
   transition: background 180ms ease, border-color 180ms ease, color 180ms ease, transform 180ms ease, box-shadow 180ms ease;
@@ -374,4 +374,190 @@
   height: 28px;
   min-width: 28px;
   min-height: 28px;
+}
+
+/* Commercial workspace pass: library uses neutral surfaces and sparse violet states. */
+.library-results-shell,
+.library-access-card {
+  border-color: var(--platform-line, rgba(17, 17, 17, 0.06));
+  background: var(--platform-surface, #fff);
+  box-shadow: var(--platform-shadow, 0 2px 12px rgba(17, 17, 17, 0.035)), var(--platform-inset, inset 0 1px 0 rgba(255, 255, 255, 0.9));
+}
+
+.library-view-title,
+.library-access-card h2 {
+  color: var(--platform-ink, #111);
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.library-view-subtitle,
+.library-view-inline-note,
+.library-account-scope,
+.library-access-card p {
+  color: var(--platform-muted, rgba(17, 17, 17, 0.52));
+}
+
+.library-view-count-badge {
+  border-color: rgba(123, 97, 255, 0.2);
+  background: var(--platform-accent-soft, rgba(123, 97, 255, 0.12));
+  color: var(--platform-accent-deep, #5f49df);
+  font-weight: 600;
+}
+
+.library-tab-chip,
+.library-view-primary {
+  font-family: var(--font-ui-sans);
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.library-tab-chip {
+  border-color: var(--platform-line-strong, rgba(17, 17, 17, 0.13));
+  background: var(--platform-control, #f3f2ef);
+  color: var(--platform-ink, #111);
+  box-shadow: none;
+}
+
+.library-tab-chip.is-active {
+  border-color: rgba(123, 97, 255, 0.28);
+  background: var(--platform-accent-soft, rgba(123, 97, 255, 0.12));
+  color: var(--platform-accent-deep, #5f49df);
+  box-shadow: none;
+}
+
+.library-view-primary {
+  border-color: var(--platform-accent-fill, #785cff);
+  background: var(--platform-accent-fill, #785cff);
+  color: #fff;
+  box-shadow: 0 14px 30px rgba(123, 97, 255, 0.18);
+}
+
+.library-tab-chip:hover,
+.library-view-primary:hover {
+  transform: none;
+}
+
+/* Final platform polish: asset library should read as an operations surface, not a blue glass gallery. */
+.library-view-shell {
+  color: var(--platform-ink, #111);
+}
+
+.library-results-shell,
+.library-access-card {
+  border-radius: var(--platform-radius-lg, 18px) !important;
+}
+
+.library-view-count-badge,
+.library-results-head .studio-filterbar-compact .studio-search-input,
+.library-results-head .studio-filterbar-compact .studio-filter-select,
+.library-results-head .studio-filterbar-compact .studio-favorite-toggle {
+  border-color: var(--platform-line-strong, rgba(17, 17, 17, 0.13)) !important;
+  background: var(--platform-control, #f3f2ef) !important;
+  color: var(--platform-ink, #111) !important;
+  box-shadow: none !important;
+}
+
+.library-tab-chip.is-active,
+.library-view-count-badge {
+  border-color: rgba(123, 97, 255, 0.24) !important;
+  background: var(--platform-accent-soft, rgba(123, 97, 255, 0.12)) !important;
+  color: var(--platform-accent-deep, #5f49df) !important;
+}
+
+.task-grid-library .prototype-result-card,
+.task-grid-library .prototype-result-card .prototype-result-summary,
+.task-grid-library .task-image-preview-button {
+  border-color: var(--platform-line, rgba(17, 17, 17, 0.06)) !important;
+  background: var(--platform-surface, #fff) !important;
+  box-shadow: var(--platform-shadow, 0 2px 12px rgba(17, 17, 17, 0.035)), var(--platform-inset, inset 0 1px 0 rgba(255, 255, 255, 0.9)) !important;
+}
+
+.task-grid-library .prototype-result-card .task-mini-action {
+  border-color: var(--platform-line-strong, rgba(17, 17, 17, 0.13)) !important;
+  background: var(--platform-control, #f3f2ef) !important;
+  color: var(--platform-ink, #111) !important;
+  box-shadow: none !important;
+}
+
+/* Screenshot correction: make the library toolbar feel like a compact operations bar. */
+.library-results-head .studio-filterbar-compact {
+  align-items: center !important;
+  gap: 10px !important;
+  padding: 0 !important;
+}
+
+.library-results-head .studio-filterbar-compact .library-tab-row,
+.library-results-head .studio-filterbar-compact .studio-filter-actions {
+  align-items: center !important;
+}
+
+.library-results-head .studio-filterbar-compact .studio-search-input,
+.library-results-head .studio-filterbar-compact .studio-filter-select,
+.library-results-head .studio-filterbar-compact .studio-favorite-toggle,
+.library-tab-chip {
+  min-height: 38px !important;
+  height: 38px !important;
+  border-radius: 14px !important;
+  background: var(--platform-control, #f3f2ef) !important;
+  color: var(--platform-ink, #111) !important;
+  box-shadow: none !important;
+}
+
+.library-results-head .studio-filterbar-compact .studio-search-input {
+  background: var(--platform-surface, #fff) !important;
+}
+
+.library-results-head .studio-filterbar-compact .studio-filter-select,
+.library-results-head .studio-filterbar-compact .studio-favorite-toggle {
+  min-width: 112px !important;
+}
+
+.library-tab-chip.is-active {
+  border-color: rgba(123, 97, 255, 0.28) !important;
+  background: var(--platform-accent-soft, rgba(123, 97, 255, 0.12)) !important;
+  color: var(--platform-accent-deep, #5f49df) !important;
+}
+
+/* Final reference button style: match the newer light segmented controls. */
+.library-tab-chip,
+.library-results-head .studio-filterbar-compact .studio-filter-select,
+.library-results-head .studio-filterbar-compact .studio-favorite-toggle {
+  min-height: 42px !important;
+  height: 42px !important;
+  border: 1px solid rgba(17, 17, 17, 0.1) !important;
+  border-radius: 20px !important;
+  background: #f7f6f3 !important;
+  color: var(--platform-ink, #111) !important;
+  box-shadow: none !important;
+  font-size: 15px !important;
+  font-weight: 520 !important;
+  letter-spacing: 0 !important;
+}
+
+.library-tab-chip {
+  padding-inline: 18px !important;
+}
+
+.library-results-head .studio-filterbar-compact .studio-filter-select,
+.library-results-head .studio-filterbar-compact .studio-favorite-toggle {
+  padding-inline: 16px !important;
+}
+
+.library-tab-chip.is-active,
+.library-results-head .studio-filterbar-compact .studio-favorite-toggle.is-active {
+  border-color: rgba(123, 97, 255, 0.34) !important;
+  background: rgba(123, 97, 255, 0.12) !important;
+  color: var(--platform-accent-fill, #785cff) !important;
+  font-weight: 540 !important;
+}
+
+.library-tab-chip:hover,
+.library-results-head .studio-filterbar-compact .studio-filter-select:hover,
+.library-results-head .studio-filterbar-compact .studio-favorite-toggle:hover {
+  border-color: rgba(123, 97, 255, 0.28) !important;
+  background: rgba(123, 97, 255, 0.08) !important;
+  color: var(--platform-accent-fill, #785cff) !important;
+  transform: none !important;
 }
