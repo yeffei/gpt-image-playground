@@ -2617,6 +2617,8 @@ function AdminGatewayBindingDetailView(props: { detail: Record<string, unknown>;
     healthStatus: getValueByPath(binding, 'healthStatus') ?? getValueByPath(routeRecord ?? {}, 'healthStatus'),
     healthState: getValueByPath(binding, 'healthState') ?? getValueByPath(routeRecord ?? {}, 'healthState'),
     restoresAt: getValueByPath(binding, 'restoresAt') ?? getValueByPath(routeRecord ?? {}, 'restoresAt') ?? getValueByPath(routeRecord ?? {}, 'diagnostics.restoresAt'),
+    recoveryProbeWindowStartedAt: getValueByPath(binding, 'recoveryProbeWindowStartedAt') ?? '-',
+    recoveryProbeBudgetResetAt: getValueByPath(binding, 'recoveryProbeBudgetResetAt') ?? '-',
   }
   const bindingLabel = props.selectedId || `${formatCellValue(getDetailMetricValue(bindingView, 'modelDisplayName'))} / ${formatCellValue(getDetailMetricValue(bindingView, 'routeName'))}`
 
@@ -6471,7 +6473,7 @@ function AdminDataModule(props: { section: Exclude<AdminSectionKey, 'dashboard'>
   const inspirationSummaryCards = useMemo(() => props.section === 'inspiration' ? getInspirationSummaryCards(summary) : [], [props.section, summary])
   const agentWorkflowSummaryCards = useMemo(() => props.section === 'agentWorkflow' ? getAgentWorkflowSummaryCards(summary) : [], [props.section, summary])
   const agentAttentionQueues = useMemo(() => props.section === 'agentWorkflow' ? getAgentAttentionQueues(summary) : [], [props.section, summary])
-  const shouldShowDetailPanel = props.section !== 'gateway'
+  const shouldShowDetailPanel = props.section !== 'gateway' || gatewaySubsection !== 'strategy'
 
   const detailPanel = (
     <section className={isContentModule ? 'admin-detail-panel admin-content-detail-panel' : `admin-panel admin-detail-panel${useInlineWorkbench ? ' admin-inline-detail-panel' : ''}`}>

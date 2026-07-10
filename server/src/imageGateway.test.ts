@@ -297,6 +297,32 @@ describe('server image gateway model capability normalization', () => {
       recovery_probe_count: 2,
     } as any, now)).toBe(0)
   })
+
+  it('uses configured recovery probe budget windows and per-route limits', () => {
+    const settings = {
+      budgetWindowHours: 12,
+      maxProbesPerRouteWindow: 1,
+      maxProbesPerTrigger: 1,
+      observingSuccessThreshold: 3,
+      observingProbeDelayMinutes: 30,
+    }
+    const now = new Date('2026-07-10T06:00:00.000Z')
+
+    expect(getRecoveryProbeBudgetResetAt({
+      recovery_probe_window_started_at: '2026-07-10T00:00:00.000Z',
+      recovery_probe_count: 1,
+    } as any, now, settings)).toBe(new Date('2026-07-10T12:00:00.000Z').getTime())
+
+    expect(getRecoveryProbeBudgetResetAt({
+      recovery_probe_window_started_at: '2026-07-10T00:00:00.000Z',
+      recovery_probe_count: 0,
+    } as any, now, settings)).toBe(0)
+
+    expect(getRecoveryProbeBudgetResetAt({
+      recovery_probe_window_started_at: '2026-07-10T00:00:00.000Z',
+      recovery_probe_count: 1,
+    } as any, new Date('2026-07-10T12:00:01.000Z'), settings)).toBe(0)
+  })
 })
 
 describe('server image gateway delivery plan finalization', () => {
