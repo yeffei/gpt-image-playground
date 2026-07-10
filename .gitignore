@@ -1,5 +1,8 @@
 node_modules/
 dist/
+test-results/
+tmp/
+web-dev.log
 .env
 .env.local
 .env.*.local
