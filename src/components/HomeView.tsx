@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
-import type { CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './HomeView.css'
 import { useStore } from '../store'
 import type { InspirationHomePostCard } from '../types'
@@ -23,8 +22,6 @@ const HOMEPAGE_CATEGORY_ORDER = [
   '角色设定',
   '人像摄影',
 ]
-
-const HERO_CATEGORIES = new Set(['空间氛围', '品牌广告', '产品静物', 'UI / 社媒视觉', '信息图解', '海报插画'])
 
 const HOMEPAGE_SOFT_BLOCK_TERMS = [
   '比基尼',
@@ -172,42 +169,42 @@ const FALLBACK_VISUALS: VisualItem[] = [
 
 const CREATIVE_PATHS = [
   {
-    title: '写一句画面',
-    copy: '先进入工作台，继续调尺寸、模型和参考图。',
+    title: '自由创作',
+    copy: '从一句画面开始，在工作台继续调整模型、尺寸与参考图。',
     action: '进入工作台',
     view: 'workbench' as const,
   },
   {
-    title: '套用模板',
+    title: '官方模板',
     copy: '从官方配方选择构图、镜头、风格和用途。',
     action: '浏览模板',
     view: 'promptLibrary' as const,
   },
   {
-    title: '参考作品',
-    copy: '从灵感广场判断画面密度、色调和表达方式。',
-    action: '查看灵感',
-    view: 'inspiration' as const,
-  },
-  {
-    title: '拆成流程',
-    copy: '适合批量素材、多轮目标和复杂任务。',
+    title: '智能创作流',
+    copy: '把复杂目标拆成步骤，适合批量素材与多轮任务。',
     action: '进入创作流',
     view: 'agentWorkflow' as const,
   },
 ]
 
 const CREATIVE_TOPICS = [
-  { label: '海报插画', image: '/prompt-library-source/apimart-poster-koi-nebula.thumb.webp' },
-  { label: '人像摄影', image: '/prompt-library-source/apimart-portrait-35mm-airy.thumb.webp' },
-  { label: '产品静物', image: '/prompt-library-source/freestylefly-product.thumb.webp' },
-  { label: '空间氛围', image: '/prompt-library-source/freestylefly-architecture.thumb.webp' },
-  { label: '品牌广告', image: '/prompt-library-source/freestylefly-brand.thumb.webp' },
-  { label: 'UI / 社媒视觉', image: '/prompt-library-source/freestylefly-ui.thumb.webp' },
-  { label: '信息图解', image: '/prompt-library-source/apimart-infographic-atlas-card.thumb.webp' },
+  '海报插画',
+  '人像摄影',
+  '产品静物',
+  '空间氛围',
+  '品牌广告',
+  'UI / 社媒视觉',
+  '信息图解',
 ]
 
-type HomeViewTarget = (typeof CREATIVE_PATHS)[number]['view'] | 'plan'
+const LENS_ACTIONS: Array<{ mode: 'composition' | 'campaign' | 'variation'; label: string }> = [
+  { mode: 'composition', label: '沿用构图' },
+  { mode: 'campaign', label: '改成广告' },
+  { mode: 'variation', label: '换个场景' },
+]
+
+type HomeViewTarget = (typeof CREATIVE_PATHS)[number]['view'] | 'inspiration' | 'plan'
 
 function mapPostToVisual(item: InspirationHomePostCard | null): VisualItem | null {
   if (!item) return null
@@ -247,10 +244,6 @@ function getRecipeTags(category: string) {
   return ['光线', '构图', '风格']
 }
 
-function getLensRank(category: string, lensCategory: string) {
-  return category === lensCategory ? -1 : categoryRank(category)
-}
-
 function uniqueVisuals(items: Array<VisualItem | null>) {
   const seen = new Set<string>()
   const seenTitleCategory = new Set<string>()
@@ -272,6 +265,12 @@ function visualKey(item: VisualItem) {
   return item.id || item.image
 }
 
+function getFallbackLead(category: string) {
+  return FALLBACK_VISUALS.find((item) => item.category === category && normalizeVisualText(item.title) !== normalizeVisualText(item.category))
+    ?? FALLBACK_VISUALS.find((item) => item.category === category)
+    ?? FALLBACK_VISUALS[0]
+}
+
 function curateHomepageVisuals(items: VisualItem[]) {
   const suitable = items.filter(isHomepageSuitable)
   return [...suitable].sort((a, b) => {
@@ -279,6 +278,16 @@ function curateHomepageVisuals(items: VisualItem[]) {
     if (categoryDelta !== 0) return categoryDelta
     return a.title.localeCompare(b.title, 'zh-Hans-CN')
   })
+}
+
+function buildVisualPool(items: VisualItem[], lensCategory: string) {
+  const curatedInspiration = curateHomepageVisuals(items)
+  return uniqueVisuals([
+    ...curatedInspiration.filter((item) => item.category === lensCategory),
+    ...FALLBACK_VISUALS.filter((item) => item.category === lensCategory),
+    ...curatedInspiration.filter((item) => item.category !== lensCategory),
+    ...FALLBACK_VISUALS.filter((item) => item.category !== lensCategory),
+  ])
 }
 
 function buildLensPrompt(visual: VisualItem | undefined, lens: (typeof PROMPT_LENSES)[number], mode: 'composition' | 'campaign' | 'variation') {
@@ -298,11 +307,13 @@ export default function HomeView() {
   const [activeLensId, setActiveLensId] = useState(PROMPT_LENSES[0].id)
   const [inspirationItems, setInspirationItems] = useState<VisualItem[]>([])
   const [inspirationLoading, setInspirationLoading] = useState(true)
-  const account = useStore((s) => s.account)
+  const [selectedVisualKey, setSelectedVisualKey] = useState(() => {
+    return visualKey(getFallbackLead(PROMPT_LENSES[0].category))
+  })
+  const promptRef = useRef<HTMLTextAreaElement>(null)
   const setGalleryView = useStore((s) => s.setGalleryView)
   const setPrompt = useStore((s) => s.setPrompt)
   const setPromptLibraryTab = useStore((s) => s.setPromptLibraryTab)
-  const openAuthView = useStore((s) => s.openAuthView)
   const activeLens = PROMPT_LENSES.find((item) => item.id === activeLensId) ?? PROMPT_LENSES[0]
 
   useEffect(() => {
@@ -329,39 +340,22 @@ export default function HomeView() {
     }
   }, [])
 
-  const visualItems = useMemo(() => {
-    const curatedInspiration = curateHomepageVisuals(inspirationItems)
-    const sortedInspiration = [...curatedInspiration].sort((a, b) => {
-      const categoryDelta = getLensRank(a.category, activeLens.category) - getLensRank(b.category, activeLens.category)
-      if (categoryDelta !== 0) return categoryDelta
-      return a.title.localeCompare(b.title, 'zh-Hans-CN')
-    })
-    const sortedFallbacks = [...FALLBACK_VISUALS].sort((a, b) => {
-      const categoryDelta = getLensRank(a.category, activeLens.category) - getLensRank(b.category, activeLens.category)
-      if (categoryDelta !== 0) return categoryDelta
-      return a.title.localeCompare(b.title, 'zh-Hans-CN')
-    })
-    const merged = uniqueVisuals([...sortedInspiration, ...sortedFallbacks])
-    return merged.slice(0, 12)
-  }, [activeLens.category, inspirationItems])
-
+  const visualItems = useMemo(
+    () => buildVisualPool(inspirationItems, activeLens.category).slice(0, 12),
+    [activeLens.category, inspirationItems],
+  )
+  const selectedVisual = visualItems.find((item) => visualKey(item) === selectedVisualKey)
   const heroVisuals = uniqueVisuals([
-    ...visualItems.filter((item) => item.source === 'inspiration' && HERO_CATEGORIES.has(item.category)),
-    ...visualItems.filter((item) => item.source === 'fallback'),
+    selectedVisual ?? null,
+    ...FALLBACK_VISUALS.filter((item) => item.category === activeLens.category),
+    ...FALLBACK_VISUALS.filter((item) => item.category !== activeLens.category),
     ...visualItems,
-  ]).slice(0, 6)
-  const featuredInspiration = visualItems.filter((item) => item.source === 'inspiration').slice(0, 6)
-  const heroKeys = new Set(heroVisuals.map(visualKey))
-  const featuredVisuals = uniqueVisuals([
-    ...featuredInspiration.filter((item) => !heroKeys.has(visualKey(item))),
-    ...visualItems.filter((item) => !heroKeys.has(visualKey(item))),
-    ...featuredInspiration,
-    ...visualItems,
-  ]).slice(0, 6)
+  ]).slice(0, 5)
   const leadVisual = heroVisuals[0]
-  const heroStyle = leadVisual
-    ? ({ '--home-hero-image': `url("${leadVisual.image}")` } as CSSProperties)
-    : undefined
+  const featuredVisuals = useMemo(
+    () => uniqueVisuals([...curateHomepageVisuals(inspirationItems), ...FALLBACK_VISUALS]).slice(0, 5),
+    [inspirationItems],
+  )
 
   const goTo = (view: HomeViewTarget) => {
     if (view === 'promptLibrary') {
@@ -377,9 +371,9 @@ export default function HomeView() {
       window.dispatchEvent(new PopStateEvent('popstate'))
       return
     }
-    setPromptLibraryTab('official')
-    setGalleryView('promptLibrary')
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    const matchingLens = PROMPT_LENSES.find((lens) => lens.category === item.category) ?? activeLens
+    setPrompt(buildLensPrompt(item, matchingLens, 'composition'))
+    goTo('workbench')
   }
 
   const openTopic = (category: string) => {
@@ -395,23 +389,41 @@ export default function HomeView() {
     goTo('workbench')
   }
 
+  const focusPrompt = () => {
+    window.requestAnimationFrame(() => promptRef.current?.focus())
+  }
+
   const useSuggestion = (prompt: string) => {
     setDraftPrompt(prompt)
     setPrompt(prompt)
+    focusPrompt()
   }
 
   const useLeadDirection = (mode: 'composition' | 'campaign' | 'variation') => {
     const prompt = buildLensPrompt(leadVisual, activeLens, mode)
     setDraftPrompt(prompt)
     setPrompt(prompt)
+    focusPrompt()
+  }
+
+  const selectLens = (lens: (typeof PROMPT_LENSES)[number]) => {
+    const nextPool = buildVisualPool(inspirationItems, lens.category)
+    const preferredFallback = getFallbackLead(lens.category)
+    const nextVisual = nextPool.find((item) => visualKey(item) === visualKey(preferredFallback))
+      ?? nextPool.find((item) => item.source === 'inspiration' && item.category === lens.category)
+      ?? nextPool[0]
+    setActiveLensId(lens.id)
+    if (nextVisual) setSelectedVisualKey(visualKey(nextVisual))
   }
 
   return (
     <section className="home-shell home-landing" aria-label="首页">
-      <section className="home-hero" aria-label="创作入口" style={heroStyle}>
+      <section className="home-hero" aria-label="创作入口">
         <div className="home-hero-copy">
-          <span className="home-kicker">SST image studio</span>
-          <h1>从灵感开始生成</h1>
+          <div className="home-title-block">
+            <span className="home-kicker">SST visual director</span>
+            <h1><span>从一句想法，</span><span>进入画面</span></h1>
+          </div>
 
           <div className="home-lens-row" aria-label="创作镜头">
             {PROMPT_LENSES.map((lens) => (
@@ -420,7 +432,7 @@ export default function HomeView() {
                 type="button"
                 className={lens.id === activeLens.id ? 'active' : ''}
                 aria-pressed={lens.id === activeLens.id}
-                onClick={() => setActiveLensId(lens.id)}
+                onClick={() => selectLens(lens)}
               >
                 {lens.label}
               </button>
@@ -428,7 +440,13 @@ export default function HomeView() {
           </div>
 
           <div className="home-prompt-card">
+            <div className="home-prompt-label">
+              <label htmlFor="home-prompt">描述画面</label>
+              {leadVisual ? <span title={leadVisual.title}>参考 · {leadVisual.title}</span> : null}
+            </div>
             <textarea
+              ref={promptRef}
+              id="home-prompt"
               value={draftPrompt}
               onChange={(event) => setDraftPrompt(event.target.value)}
               placeholder={activeLens.placeholder}
@@ -445,90 +463,119 @@ export default function HomeView() {
           </div>
 
           <div className="home-suggestion-row" aria-label="示例提示词">
-            {activeLens.suggestions.map((prompt) => (
+            {activeLens.suggestions.slice(0, 2).map((prompt) => (
               <button key={prompt} type="button" onClick={() => useSuggestion(prompt)}>
+                <span>试试</span>
                 {prompt}
               </button>
             ))}
           </div>
         </div>
 
-        <div className="home-visual-board" aria-label="灵感作品">
-          {heroVisuals.map((item, index) => (
-            <button
-              key={`${item.source}-${item.id || item.image}`}
-              type="button"
-              className={`home-visual-tile tile-${index + 1}`}
-              onClick={() => openVisual(item)}
-            >
-              <img src={item.image} alt={item.title} loading={index < 3 ? 'eager' : 'lazy'} />
-              <span>
-                <small>{item.category}</small>
-                <strong>{item.title}</strong>
-                <em>
-                  {getRecipeTags(item.category).map((tag) => (
-                    <i key={tag}>{tag}</i>
-                  ))}
-                </em>
-              </span>
-            </button>
-          ))}
-          {inspirationLoading ? <div className="home-visual-loading">载入灵感作品</div> : null}
-          {leadVisual ? (
-            <div className="home-curation-panel" aria-label="主视觉创作方向">
-              <div>
-                <small>{leadVisual.category}</small>
-                <strong>{leadVisual.title}</strong>
-                <span>
-                  {getRecipeTags(leadVisual.category).map((tag) => (
-                    <i key={tag}>{tag}</i>
-                  ))}
-                </span>
-              </div>
-              <button type="button" onClick={() => useLeadDirection('composition')}>沿用构图</button>
-              <button type="button" onClick={() => useLeadDirection('campaign')}>改成广告</button>
-              <button type="button" onClick={() => useLeadDirection('variation')}>换个场景</button>
-            </div>
-          ) : null}
+        <div className="home-stage" aria-label="视觉放映厅">
+          <div className="home-stage-visual">
+            {leadVisual ? <img src={leadVisual.image} alt={leadVisual.title} loading="eager" /> : null}
+            <div className="home-stage-frame" aria-hidden="true" />
+            <span className="home-stage-index">01 / {activeLens.label}</span>
+            {inspirationLoading ? <span className="home-stage-sync" aria-live="polite">同步灵感中</span> : null}
+            {leadVisual ? (
+              <>
+                <button type="button" className="home-stage-open" onClick={() => openVisual(leadVisual)}>
+                  {leadVisual.source === 'inspiration' ? '查看作品' : '以此创作'}
+                </button>
+                <div className="home-stage-info">
+                  <div>
+                    <small>{leadVisual.category}</small>
+                    <strong>{leadVisual.title}</strong>
+                    <span>
+                      {getRecipeTags(leadVisual.category).map((tag) => (
+                        <i key={tag}>{tag}</i>
+                      ))}
+                    </span>
+                  </div>
+                  <section aria-label="主视觉操作">
+                    {LENS_ACTIONS.map((action) => (
+                      <button key={action.mode} type="button" onClick={() => useLeadDirection(action.mode)}>
+                        {action.label}
+                      </button>
+                    ))}
+                  </section>
+                </div>
+              </>
+            ) : null}
+          </div>
+
+          <div className="home-contact-sheet" aria-label="导演选片">
+            {heroVisuals.slice(0, 4).map((item, index) => {
+              const selected = leadVisual ? visualKey(item) === visualKey(leadVisual) : false
+              return (
+                <button
+                  key={`${item.source}-${item.id || item.image}`}
+                  type="button"
+                  className={selected ? 'active' : ''}
+                  aria-label={`选择方向 ${index + 1}：${item.title}`}
+                  aria-pressed={selected}
+                  onClick={() => setSelectedVisualKey(visualKey(item))}
+                >
+                  <img src={item.image} alt="" loading={index === 0 ? 'eager' : 'lazy'} />
+                  <span>{String(index + 1).padStart(2, '0')}</span>
+                  <strong>{item.title}</strong>
+                </button>
+              )
+            })}
+          </div>
         </div>
       </section>
 
-      <section className="home-topic-strip" aria-label="创作类型">
-        {CREATIVE_TOPICS.map((item) => (
-          <button key={item.label} type="button" className="home-topic-chip" onClick={() => openTopic(item.label)}>
-            <img src={item.image} alt={item.label} loading="lazy" />
-            <span>{item.label}</span>
-          </button>
-        ))}
-      </section>
-
-      <section className="home-paths" aria-label="创作方式">
-        {CREATIVE_PATHS.map((item, index) => (
-          <article key={item.view} className="home-path-card">
-            <span>{String(index + 1).padStart(2, '0')}</span>
-            <h2>{item.title}</h2>
-            <p>{item.copy}</p>
-            <button type="button" onClick={() => goTo(item.view)}>
-              {item.action}
-            </button>
-          </article>
-        ))}
+      <section className="home-path-section" aria-label="创作方式">
+        <div className="home-section-head">
+          <div>
+            <span className="home-kicker">Creative routes</span>
+            <h2>选择你的起点</h2>
+          </div>
+        </div>
+        <div className="home-paths">
+          {CREATIVE_PATHS.map((item, index) => (
+            <article key={item.view} className={`home-path-card ${index === 0 ? 'is-featured' : ''}`}>
+              <span>{String(index + 1).padStart(2, '0')}</span>
+              <div>
+                <h3>{item.title}</h3>
+                <p>{item.copy}</p>
+              </div>
+              <button type="button" onClick={() => goTo(item.view)}>
+                {item.action}<span aria-hidden="true">↗</span>
+              </button>
+            </article>
+          ))}
+        </div>
       </section>
 
       <section className="home-inspiration-section" aria-label="灵感广场精选">
-        <div className="home-section-head">
+        <div className="home-section-head home-inspiration-head">
           <div>
-            <span className="home-kicker">inspiration</span>
-            <h2>灵感广场作品</h2>
+            <span className="home-kicker">Selected works</span>
+            <h2>精选作品</h2>
           </div>
+          <nav className="home-topic-nav" aria-label="灵感分类">
+            {CREATIVE_TOPICS.map((topic) => (
+              <button key={topic} type="button" onClick={() => openTopic(topic)}>
+                {topic}
+              </button>
+            ))}
+          </nav>
           <button type="button" className="home-secondary-button" onClick={() => goTo('inspiration')}>
             进入灵感广场
           </button>
         </div>
 
         <div className="home-featured-grid">
-          {featuredVisuals.map((item) => (
-            <button key={`${item.source}-${item.id || item.image}-featured`} type="button" className="home-featured-card" onClick={() => openVisual(item)}>
+          {featuredVisuals.map((item, index) => (
+            <button
+              key={`${item.source}-${item.id || item.image}-featured`}
+              type="button"
+              className={`home-featured-card card-${index + 1}`}
+              onClick={() => openVisual(item)}
+            >
               <img src={item.image} alt={item.title} loading="lazy" />
               <span>
                 <small>{item.category}</small>
@@ -538,27 +585,11 @@ export default function HomeView() {
                     <i key={tag}>{tag}</i>
                   ))}
                 </em>
+                <b>{item.source === 'inspiration' ? '查看作品' : '以此创作'}</b>
               </span>
             </button>
           ))}
         </div>
-      </section>
-
-      <section className="home-account-strip" aria-label="账号入口">
-        <div>
-          <span className="home-kicker">account</span>
-          <strong>{account.isLoggedIn ? account.displayName || account.email || '已登录账号' : '访客模式'}</strong>
-          <small>{account.isLoggedIn ? `${account.balance} 点可用额度` : '可先试填提示词，登录后提交生成。'}</small>
-        </div>
-        {account.isLoggedIn ? (
-          <button type="button" className="home-secondary-button" onClick={() => goTo('plan')}>
-            计划与额度
-          </button>
-        ) : (
-          <button type="button" className="home-secondary-button" onClick={() => openAuthView({ mode: 'login', redirectTo: 'workbench' })}>
-            登录 / 注册
-          </button>
-        )}
       </section>
     </section>
   )
