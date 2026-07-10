@@ -5,6 +5,7 @@ import Header from './components/Header'
 import InputBar from './components/InputBar'
 import ConfirmDialog from './components/ConfirmDialog'
 import Toast from './components/Toast'
+import HomeView from './components/HomeView'
 import { LazyModalFallback, LazyViewFallback } from './components/LazyLoadFallback'
 import { useGlobalClickSuppression } from './lib/clickSuppression'
 import type { ImageContextMenuInfo } from './components/ImageContextMenu'
@@ -30,7 +31,6 @@ type PrototypeNavSection = {
 }
 
 const PlanAndBillingView = lazy(() => import('./components/PlanAndBillingView'))
-const HomeView = lazy(() => import('./components/HomeView'))
 const AgentWorkflowView = lazy(() => import('./components/AgentWorkflowView'))
 const AuthView = lazy(() => import('./components/AuthView'))
 const LibraryView = lazy(() => import('./components/LibraryView'))

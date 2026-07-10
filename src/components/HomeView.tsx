@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import type { CSSProperties } from 'react'
 import './HomeView.css'
 import { useStore } from '../store'
 import type { InspirationHomePostCard } from '../types'
@@ -34,6 +35,64 @@ const HOMEPAGE_SOFT_BLOCK_TERMS = [
   '裸',
   '暴露',
   '少女',
+]
+
+const PROMPT_LENSES = [
+  {
+    id: 'brand',
+    label: '商业广告',
+    category: '品牌广告',
+    placeholder: '描述一个商业广告画面，例如：新锐护肤品牌春季主视觉，玻璃浴室、晨光、水滴、克制高级感',
+    suggestions: [
+      '新锐护肤品牌春季主视觉，玻璃浴室、晨光、水滴、克制高级感',
+      '咖啡品牌新品广告，街角小店、暖光、纸杯、真实生活感',
+      '科技配件发布海报，金属材质、微距布光、干净背景',
+    ],
+  },
+  {
+    id: 'space',
+    label: '空间摄影',
+    category: '空间氛围',
+    placeholder: '描述一个空间，例如：安静酒店卧室，木质、亚麻、侧窗自然光、杂志摄影质感',
+    suggestions: [
+      '安静酒店卧室，木质、亚麻、侧窗自然光、杂志摄影质感',
+      '独立咖啡店室内摄影，暖光、木桌、街角窗景、生活方式杂志',
+      '混凝土美术馆中庭，天窗自然光、留白、建筑摄影',
+    ],
+  },
+  {
+    id: 'product',
+    label: '产品静物',
+    category: '产品静物',
+    placeholder: '描述一个产品静物，例如：透明香水瓶，湿润石材台面，柔和反光，广告级布光',
+    suggestions: [
+      '透明香水瓶，湿润石材台面，柔和反光，广告级布光',
+      '机械键盘键帽微距，深色背景、边缘高光、材质细节',
+      '耳机产品静物，雾面金属、低饱和色、极简构图',
+    ],
+  },
+  {
+    id: 'ui',
+    label: '社媒视觉',
+    category: 'UI / 社媒视觉',
+    placeholder: '描述一个社媒或界面视觉，例如：新品发布长图，深色界面、模块化信息、科技品牌气质',
+    suggestions: [
+      '新品发布长图，深色界面、模块化信息、科技品牌气质',
+      '移动应用启动页，玻璃质感、清晰层级、冷静高级',
+      '社媒运营海报，信息模块清楚、强标题、品牌色克制',
+    ],
+  },
+  {
+    id: 'poster',
+    label: '概念海报',
+    category: '海报插画',
+    placeholder: '描述一张概念海报，例如：深空主题电影海报，巨大星云、孤独人物剪影、强标题留白',
+    suggestions: [
+      '深空主题电影海报，巨大星云、孤独人物剪影、强标题留白',
+      '城市文化节主视觉，桥梁、夜色、层叠字体、电影感',
+      '东方水墨概念海报，黑白留白、金色点缀、现代排版',
+    ],
+  },
 ]
 
 const FALLBACK_VISUALS: VisualItem[] = [
@@ -73,12 +132,42 @@ const FALLBACK_VISUALS: VisualItem[] = [
     image: '/prompt-library-source/apimart-infographic-atlas-card.thumb.webp',
     source: 'fallback',
   },
-]
-
-const PROMPT_SUGGESTIONS = [
-  '高端护肤品牌海报，清晨浴室自然光，水滴、玻璃、极简构图',
-  '独立咖啡店空间摄影，暖光、木质、安静街角、真实生活感',
-  '科技产品主视觉，金属材质、微距布光、干净背景、广告级质感',
+  {
+    title: '护肤晨间静物',
+    category: '产品静物',
+    image: '/prompt-library-source/wuyoscar/skincare-morning-routine-tray.thumb.webp',
+    source: 'fallback',
+  },
+  {
+    title: '香氛夜间仪式',
+    category: '品牌广告',
+    image: '/prompt-library-source/wuyoscar/fragrance-evening-ritual-vanity.thumb.webp',
+    source: 'fallback',
+  },
+  {
+    title: '混凝土美术馆',
+    category: '空间氛围',
+    image: '/prompt-library-source/wuyoscar/brutalist-concrete-museum-atrium.thumb.webp',
+    source: 'fallback',
+  },
+  {
+    title: '移动游戏界面',
+    category: 'UI / 社媒视觉',
+    image: '/prompt-library-source/wuyoscar/mobile-moba-arena-hud.thumb.webp',
+    source: 'fallback',
+  },
+  {
+    title: '景区导览地图',
+    category: '信息图解',
+    image: '/prompt-library-source/wuyoscar/huashan-5a-scenic-wayfinding-map.thumb.webp',
+    source: 'fallback',
+  },
+  {
+    title: '品牌系统展示',
+    category: '品牌广告',
+    image: '/prompt-library-source/wuyoscar/playful-brand-kit-mochi-metro.thumb.webp',
+    source: 'fallback',
+  },
 ]
 
 const CREATIVE_PATHS = [
@@ -137,6 +226,7 @@ function normalizeVisualText(value: string) {
 }
 
 function isHomepageSuitable(item: VisualItem) {
+  if (item.category === '人像摄影') return false
   const text = normalizeVisualText(`${item.title}${item.category}`)
   return !HOMEPAGE_SOFT_BLOCK_TERMS.some((term) => text.includes(term))
 }
@@ -144,6 +234,21 @@ function isHomepageSuitable(item: VisualItem) {
 function categoryRank(category: string) {
   const index = HOMEPAGE_CATEGORY_ORDER.indexOf(category)
   return index === -1 ? HOMEPAGE_CATEGORY_ORDER.length : index
+}
+
+function getRecipeTags(category: string) {
+  if (category === '空间氛围') return ['自然光', '留白', '材质']
+  if (category === '品牌广告') return ['主视觉', '品牌感', '高光']
+  if (category === '产品静物') return ['微距', '反射', '质感']
+  if (category === 'UI / 社媒视觉') return ['模块', '层级', '信息']
+  if (category === '信息图解') return ['结构', '图解', '清晰']
+  if (category === '海报插画') return ['构图', '叙事', '标题']
+  if (category === '角色设定') return ['轮廓', '服装', '设定']
+  return ['光线', '构图', '风格']
+}
+
+function getLensRank(category: string, lensCategory: string) {
+  return category === lensCategory ? -1 : categoryRank(category)
 }
 
 function uniqueVisuals(items: Array<VisualItem | null>) {
@@ -163,6 +268,10 @@ function uniqueVisuals(items: Array<VisualItem | null>) {
   return result
 }
 
+function visualKey(item: VisualItem) {
+  return item.id || item.image
+}
+
 function curateHomepageVisuals(items: VisualItem[]) {
   const suitable = items.filter(isHomepageSuitable)
   return [...suitable].sort((a, b) => {
@@ -172,8 +281,21 @@ function curateHomepageVisuals(items: VisualItem[]) {
   })
 }
 
+function buildLensPrompt(visual: VisualItem | undefined, lens: (typeof PROMPT_LENSES)[number], mode: 'composition' | 'campaign' | 'variation') {
+  const title = visual?.title || lens.label
+  const recipe = getRecipeTags(visual?.category || lens.category).join('、')
+  if (mode === 'composition') {
+    return `参考「${title}」的构图与${recipe}，生成一张${lens.label}画面，保持高级、克制、真实的视觉质感。`
+  }
+  if (mode === 'campaign') {
+    return `将「${title}」的视觉气质改写成品牌发布主视觉，突出主体、材质、光线和可用于商业传播的画面完成度。`
+  }
+  return `基于「${title}」延展一张不同场景的${lens.label}，保留核心光线和色调，加入新的主体与空间关系。`
+}
+
 export default function HomeView() {
   const [draftPrompt, setDraftPrompt] = useState('')
+  const [activeLensId, setActiveLensId] = useState(PROMPT_LENSES[0].id)
   const [inspirationItems, setInspirationItems] = useState<VisualItem[]>([])
   const [inspirationLoading, setInspirationLoading] = useState(true)
   const account = useStore((s) => s.account)
@@ -181,6 +303,7 @@ export default function HomeView() {
   const setPrompt = useStore((s) => s.setPrompt)
   const setPromptLibraryTab = useStore((s) => s.setPromptLibraryTab)
   const openAuthView = useStore((s) => s.openAuthView)
+  const activeLens = PROMPT_LENSES.find((item) => item.id === activeLensId) ?? PROMPT_LENSES[0]
 
   useEffect(() => {
     let cancelled = false
@@ -208,9 +331,19 @@ export default function HomeView() {
 
   const visualItems = useMemo(() => {
     const curatedInspiration = curateHomepageVisuals(inspirationItems)
-    const merged = uniqueVisuals([...curatedInspiration, ...FALLBACK_VISUALS])
-    return merged.slice(0, 8)
-  }, [inspirationItems])
+    const sortedInspiration = [...curatedInspiration].sort((a, b) => {
+      const categoryDelta = getLensRank(a.category, activeLens.category) - getLensRank(b.category, activeLens.category)
+      if (categoryDelta !== 0) return categoryDelta
+      return a.title.localeCompare(b.title, 'zh-Hans-CN')
+    })
+    const sortedFallbacks = [...FALLBACK_VISUALS].sort((a, b) => {
+      const categoryDelta = getLensRank(a.category, activeLens.category) - getLensRank(b.category, activeLens.category)
+      if (categoryDelta !== 0) return categoryDelta
+      return a.title.localeCompare(b.title, 'zh-Hans-CN')
+    })
+    const merged = uniqueVisuals([...sortedInspiration, ...sortedFallbacks])
+    return merged.slice(0, 12)
+  }, [activeLens.category, inspirationItems])
 
   const heroVisuals = uniqueVisuals([
     ...visualItems.filter((item) => item.source === 'inspiration' && HERO_CATEGORIES.has(item.category)),
@@ -218,7 +351,17 @@ export default function HomeView() {
     ...visualItems,
   ]).slice(0, 6)
   const featuredInspiration = visualItems.filter((item) => item.source === 'inspiration').slice(0, 6)
-  const featuredVisuals = uniqueVisuals([...featuredInspiration, ...visualItems]).slice(0, 6)
+  const heroKeys = new Set(heroVisuals.map(visualKey))
+  const featuredVisuals = uniqueVisuals([
+    ...featuredInspiration.filter((item) => !heroKeys.has(visualKey(item))),
+    ...visualItems.filter((item) => !heroKeys.has(visualKey(item))),
+    ...featuredInspiration,
+    ...visualItems,
+  ]).slice(0, 6)
+  const leadVisual = heroVisuals[0]
+  const heroStyle = leadVisual
+    ? ({ '--home-hero-image': `url("${leadVisual.image}")` } as CSSProperties)
+    : undefined
 
   const goTo = (view: HomeViewTarget) => {
     if (view === 'promptLibrary') {
@@ -257,19 +400,38 @@ export default function HomeView() {
     setPrompt(prompt)
   }
 
+  const useLeadDirection = (mode: 'composition' | 'campaign' | 'variation') => {
+    const prompt = buildLensPrompt(leadVisual, activeLens, mode)
+    setDraftPrompt(prompt)
+    setPrompt(prompt)
+  }
+
   return (
     <section className="home-shell home-landing" aria-label="首页">
-      <section className="home-hero" aria-label="创作入口">
+      <section className="home-hero" aria-label="创作入口" style={heroStyle}>
         <div className="home-hero-copy">
           <span className="home-kicker">SST image studio</span>
           <h1>从灵感开始生成</h1>
-          <p>先看真实作品的构图、材质和光线，再把想法写进工作台。</p>
+
+          <div className="home-lens-row" aria-label="创作镜头">
+            {PROMPT_LENSES.map((lens) => (
+              <button
+                key={lens.id}
+                type="button"
+                className={lens.id === activeLens.id ? 'active' : ''}
+                aria-pressed={lens.id === activeLens.id}
+                onClick={() => setActiveLensId(lens.id)}
+              >
+                {lens.label}
+              </button>
+            ))}
+          </div>
 
           <div className="home-prompt-card">
             <textarea
               value={draftPrompt}
               onChange={(event) => setDraftPrompt(event.target.value)}
-              placeholder="描述你想生成的图片，例如：一张高端护肤品海报，清晨浴室自然光，水滴、玻璃、极简构图"
+              placeholder={activeLens.placeholder}
               rows={4}
             />
             <div className="home-prompt-actions">
@@ -283,7 +445,7 @@ export default function HomeView() {
           </div>
 
           <div className="home-suggestion-row" aria-label="示例提示词">
-            {PROMPT_SUGGESTIONS.map((prompt) => (
+            {activeLens.suggestions.map((prompt) => (
               <button key={prompt} type="button" onClick={() => useSuggestion(prompt)}>
                 {prompt}
               </button>
@@ -303,10 +465,31 @@ export default function HomeView() {
               <span>
                 <small>{item.category}</small>
                 <strong>{item.title}</strong>
+                <em>
+                  {getRecipeTags(item.category).map((tag) => (
+                    <i key={tag}>{tag}</i>
+                  ))}
+                </em>
               </span>
             </button>
           ))}
           {inspirationLoading ? <div className="home-visual-loading">载入灵感作品</div> : null}
+          {leadVisual ? (
+            <div className="home-curation-panel" aria-label="主视觉创作方向">
+              <div>
+                <small>{leadVisual.category}</small>
+                <strong>{leadVisual.title}</strong>
+                <span>
+                  {getRecipeTags(leadVisual.category).map((tag) => (
+                    <i key={tag}>{tag}</i>
+                  ))}
+                </span>
+              </div>
+              <button type="button" onClick={() => useLeadDirection('composition')}>沿用构图</button>
+              <button type="button" onClick={() => useLeadDirection('campaign')}>改成广告</button>
+              <button type="button" onClick={() => useLeadDirection('variation')}>换个场景</button>
+            </div>
+          ) : null}
         </div>
       </section>
 
@@ -350,6 +533,11 @@ export default function HomeView() {
               <span>
                 <small>{item.category}</small>
                 <strong>{item.title}</strong>
+                <em>
+                  {getRecipeTags(item.category).map((tag) => (
+                    <i key={tag}>{tag}</i>
+                  ))}
+                </em>
               </span>
             </button>
           ))}

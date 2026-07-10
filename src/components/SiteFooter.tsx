@@ -7,6 +7,7 @@ type SiteFooterProps = {
 }
 
 function getCurrentViewLabel(view: SiteFooterProps['currentView']) {
+  if (view === 'home') return '首页'
   if (view === 'library') return '作品库'
   if (view === 'agentWorkflow') return '智能创作流'
   if (view === 'inspiration') return '灵感广场'
